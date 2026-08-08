@@ -130,6 +130,22 @@ def build_context(d):
     elif d.get("dryness_raw"):
         L.append("Camera surface-brightness per cell (uncalibrated; higher=drier): "
                  + ", ".join(f"{k}={v}" for k, v in sorted(d["dryness_raw"].items())))
+    pm = d.get("probe_moisture") or {}
+    if pm:
+        L.append("Soil-probe moisture % per tray (direct sensor, more reliable than "
+                 "the camera estimate; 100=just watered, lower=drier): "
+                 + ", ".join(f"{k}={v}" for k, v in sorted(pm.items())))
+    pl = d.get("planting") or {}
+    if pl:
+        L.append("Planting map (what is sown where; use this instead of guessing "
+                 "species where a cell is listed):")
+        for tray, rows in pl.items():
+            L.append(f"  {tray}: " + "; ".join(rows))
+    stf = d.get("soil_temp_f") or {}
+    if stf:
+        L.append("Soil temperature F: "
+                 + ", ".join(f"{k}={v}" for k, v in sorted(stf.items()))
+                 + " (seedlings germinate best roughly 65-75F at the root zone)")
     gr = d.get("growth") or {}
     if gr:
         L.append("Canopy index % per cell (relative, understated under magenta light): "

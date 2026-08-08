@@ -57,6 +57,14 @@ the watering controls, and the daily AI plant-health report.*
 | Light PWM | 18 | 12 | Hardware PWM, 1 kHz, to the light MOSFET gate |
 | Pump | 24 | 18 | To the pump MOSFET gate (needs a separate 5 V brick + common ground) |
 | Float | 23 | 16 | Internal pull-up; other leg to GND. Disabled until wired (`FLOAT_ENABLED` in `sensors.py`) |
+| I2C SDA | 2 | 3 | To ADS1115 SDA (soil moisture ADC) |
+| I2C SCL | 3 | 5 | To ADS1115 SCL |
+
+The ADS1115 runs off 3.3 V (pin 1) and GND (pin 9), with ADDR to GND for
+address 0x48. Two capacitive soil probes go on A0 (tray 1) and A1 (tray 2),
+powered from the same 3.3 V rail so their output can't exceed the ADC supply.
+Enable I2C with `raspi-config` (or `dtparam=i2c_arm=on`) and confirm the board
+shows up: `i2cdetect -y 1` should list `48`.
 
 Enable hardware PWM on GPIO18 by adding to `/boot/firmware/config.txt`:
 
@@ -86,7 +94,8 @@ git clone <your-repo-url> ~/growlight
 cd ~/growlight
 python3 -m venv venv
 ./venv/bin/pip install flask astral rpi-hardware-pwm gpiozero werkzeug
-sudo apt install -y python3-lgpio ffmpeg
+./venv/bin/pip install adafruit-circuitpython-ads1x15   # soil moisture ADC
+sudo apt install -y python3-lgpio ffmpeg i2c-tools
 ```
 
 `gpiozero` needs the `lgpio` backend. The pip build of `lgpio` is fragile on the
@@ -150,6 +159,7 @@ editable from the dashboard Settings panel; the rest are edited in the file.
 | `capture_interval_min` | 30 | Minutes between frames |
 | `capture_brightness` | 100 | Brightness held during each photo |
 | `roi` | "" | Crop as `x,y,w,h` fractions, blank = full frame |
+| `cam_width` / `cam_height` | 2304 / 1296 | Capture resolution at full field of view. The Module 3 sensor is 4608x2592, but a full 12MP capture runs the Pi Zero 2 W out of memory, so the default is the 2304x1296 binned mode (same view, ~3MP). Keep the sensor's 16:9 aspect or the frame gets cropped. Raise to 4608x2592 only on a Pi with more RAM |
 | `sample_interval_min` | 5 | Sensor logging interval |
 | `auto_water` | false | Master switch for automatic watering (keep off until calibrated) |
 | `pump_max_seconds` | 20 | Cap on a single dose |
@@ -163,6 +173,8 @@ editable from the dashboard Settings panel; the rest are edited in the file.
 | `ai_report_hour` / `ai_report_minute` | 8:00 | When the daily report runs |
 | `ai_notify` | true | Push the report summary |
 | `ai_notes` | (grow description) | Context handed to the AI; list what you planted here to sharpen species guesses |
+| `probe_cal` | {} | Per-tray ADC wet/dry anchors for the soil probes, set from the dashboard |
+| `probe_names` | Tray 1 / Tray 2 | Labels for the two probes (A0 = tray 1, A1 = tray 2) |
 
 ### Secrets (all gitignored)
 
@@ -261,10 +273,16 @@ Read endpoints are open; mutating ones require a session when a password is set.
 | GET | `/video` | Rendered MP4 |
 | GET | `/api/float` | Fast float read |
 | GET | `/api/report` | Latest AI report + generating flag |
+| GET | `/api/series_all` | Every sensor's history in one call (feeds the chart grid) |
 | POST | `/api/settings` | Update light/capture settings |
 | POST | `/api/grid`, `/api/detect_grid` | Cell grid |
 | POST | `/api/dryness_cal` | Capture a wet/dry moisture anchor |
+| POST | `/api/probe_cal` | Capture a tray probe's wet/dry anchor |
+| POST | `/api/probe_tempcomp` | Estimate/apply a probe's temperature-drift coefficient |
+| POST | `/api/light` | Manual light hold (auto/on/off) + manual brightness |
+| POST | `/api/trays` | Save the planting map (what's sown in each cell) |
 | POST | `/api/render` | Render the timelapse MP4 |
+| POST | `/api/capture` | Take a photo now |
 | POST | `/api/pump` | Timed dose or fill-to-float |
 | POST | `/api/ai_settings`, `/api/report` | AI report config / generate now |
 | POST | `/api/login`, `/api/logout` | Auth |
@@ -290,4 +308,36 @@ setup.sh, test_ramp.py
 Runtime files (`config.json`, `growlight.db`, `timelapse/`, `.secret`,
 `.anthropic_key`, `.discord_webhook`, `ai_report.json`) are gitignored.
 
+---
 
+## Troubleshooting
+
+- **Timelapse MP4 plays but is black.** A pixel-format/colour issue, not a corrupt
+  file. The render forces limited-range `yuv420p`, a mod-16 height, and explicit
+  BT.601 colour tags precisely so hardware decoders (VLC's especially) don't draw
+  black. If an old file is black, just re-render. To check a file:
+  `ffprobe -v error -select_streams v:0 -show_entries stream=pix_fmt,color_range,color_space ...`.
+- **Discord returns HTTP 403.** Discord's Cloudflare blocks the default
+  `Python-urllib` user agent; `discord_alert.py` sends a real `User-Agent`, which
+  fixes it.
+- **`lgpio` won't pip-install.** Use the apt package `python3-lgpio` and enable
+  system site packages in the venv (see Install).
+- **A new AI report fires on every reboot.** The Pi Zero 2 W has no RTC, so at
+  boot the clock is wrong until NTP corrects it. The report scheduler waits for
+  the clock to sync (via `/run/systemd/timesync/synchronized`) before deciding
+  anything, so it won't mistake the post-NTP time jump for the scheduled time. If
+  you don't use systemd-timesyncd, add `After=time-sync.target` to the service
+  unit and enable `systemd-time-wait-sync` so the service starts only once the
+  clock is set.
+- **Pump does nothing.** Check the separate 5 V supply and common ground, and that
+  `gpiozero` loaded (the log prints if the GPIO backend is unavailable).
+- **Photo looks zoomed in / cropped after a camera swap.** The capture resolution
+  must match the sensor's native aspect ratio, or libcamera crops into the middle
+  of the sensor. Set `cam_width`/`cam_height` to a 16:9 size for Module 3 (default
+  2304x1296) or 2592x1944 for Module 1. After changing the frame, re-do the cell
+  grid, since the old corners no longer line up.
+- **"Capture failed" while the live preview works.** The preview runs at a lower
+  resolution than a full capture. If Take photo fails but Align previews fine, the
+  capture resolution is too large for available memory, which happens on the Pi
+  Zero 2 W (512MB) at the sensor's full 4608x2592. Lower `cam_width`/`cam_height`
+  to 2304x1296; the preview proves that size works on the hardware.

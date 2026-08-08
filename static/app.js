@@ -116,6 +116,9 @@ function phaseOf(){
 function render(){
   if(!S)return;
   document.getElementById('pct').textContent=Math.round(S.brightness)+'%';
+  {const ph=document.querySelector('.aphase');
+   if(ph)ph.style.setProperty('--lum',(S.brightness/100).toFixed(2));}
+  showLightMode(S.light_override, S.manual_bright);
   document.getElementById('bulb').style.setProperty('--glow',S.brightness/100);
   const[p,n,stage]=phaseOf();
   document.getElementById('phase').textContent=p;
@@ -134,21 +137,182 @@ function render(){
   draw();
 }
 
-function renderPhoto(j){
-  const card=document.getElementById('photocard');
-  if(!j.photo_count){card.style.display='none';return;}
+let lightMode='auto', dragging=false;
+function showLightMode(mode, bright){
+  mode = mode || 'auto';
+  lightMode = mode;
+  document.querySelectorAll('.lcbtn').forEach(b=>
+    b.classList.toggle('on', b.dataset.mode===mode));
+  const info=document.getElementById('lightinfo');
+  if(info)info.textContent = (mode==='on'||mode==='off')
+    ? 'holding '+mode+' - schedule paused' : '';
+  const wrap=document.getElementById('lcslider');
+  const rng=document.getElementById('lcrange');
+  const val=document.getElementById('lcval');
+  if(!wrap||!rng)return;
+  const live = mode==='on';
+  wrap.classList.toggle('dim', !live);
+  rng.disabled = !live;
+  if(bright!=null && !dragging){      // never move the thumb under the user
+    rng.value=bright;
+    if(val)val.textContent=bright+'%';
+  }
+}
+async function setLight(mode, brightness, quiet){
+  const info=document.getElementById('lightinfo');
+  if(info && !quiet)info.textContent='...';
+  const body={};
+  if(mode!=null)body.mode=mode;
+  if(brightness!=null)body.brightness=brightness;
+  try{
+    const r=await fetch('/api/light',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const j=await r.json().catch(()=>({}));
+    if(r.ok&&j.ok){
+      if(quiet){lightMode=j.mode;}          // mid-drag: don't touch the slider
+      else {showLightMode(j.mode, j.brightness);refresh();}
+    }
+    else if(info)info.textContent = r.status===401?'log in to control the light'
+                      :('failed: '+(j.error||('HTTP '+r.status)));
+  }catch(e){if(info && !quiet)info.textContent='request failed';}
+}
+// While dragging, push the level at ~8/sec so the light tracks the slider
+// instead of waiting for release. Trailing call guarantees the final value.
+let dragTimer=null, dragPending=null;
+function pushBrightness(v){
+  dragPending=v;
+  if(dragTimer)return;
+  dragTimer=setTimeout(()=>{
+    dragTimer=null;
+    const val=dragPending; dragPending=null;
+    if(val!=null)setLight(null, val, true);
+  }, 120);
+}
+function agoStr(d){
+  const m=Math.max(0,Math.round((Date.now()-d)/60000));
+  if(m<60)return m+' min ago';
+  const h=Math.floor(m/60);
+  if(h<48)return h+'h '+(m%60)+'m ago';
+  return Math.floor(h/24)+' days ago';
+}
+function renderPhoto(j){  const card=document.getElementById('photocard');
+  const img=document.getElementById('photo');
+  camHealth=j.camera||null;
+  {const warn=document.getElementById('camwarn');
+   if(warn){
+    let msg='', cls='';
+    if(camHealth&&camHealth.fails>0){
+      const ago=camHealth.last_ok?agoStr(new Date(camHealth.last_ok)):'never';
+      msg=`\u26a0 Camera not responding \u00b7 ${camHealth.fails} failed attempt${camHealth.fails>1?'s':''}`
+        +` \u00b7 last good photo ${ago}`
+        +(camHealth.last_err?`<br><span class="camerr">${camHealth.last_err}</span>`:'');
+      cls='camwarn err';
+    } else if(capOn&&j.latest_photo_time){
+      const ageMin=(Date.now()-new Date(j.latest_photo_time))/60000;
+      const inDay=j.on&&j.off&&Date.now()>=+new Date(j.on)&&Date.now()<=+new Date(j.off);
+      if(inDay&&ageMin>2*capMin){
+        msg=`\u23f1 No new photo in ${agoStr(new Date(j.latest_photo_time)).replace(' ago','')} `
+          +`(expected every ${capMin} min)`;
+        cls='camwarn amber';
+      }
+    }
+    warn.className=cls||'camwarn'; warn.innerHTML=msg;
+    warn.style.display=msg?'':'none';
+    if(img)img.classList.toggle('camdead', !!(camHealth&&camHealth.fails>0));
+  }}
+  if(aligning){card.style.display='';return;}   // live preview owns the image
+  if(!j.photo_count){
+    img.style.display='none';
+    document.getElementById('photoinfo').textContent='No photos yet.';
+    card.style.display=canEdit?'':'none';   // keep visible so Take photo is reachable
+    return;
+  }
+  img.style.display='';
   card.style.display='';
-  document.getElementById('photo').src='/photo/latest?'+ (j.latest_photo_time||Date.now());
+  img.src='/photo/latest?'+ (j.latest_photo_time||Date.now());
   const when=j.latest_photo_time?new Date(j.latest_photo_time):null;
   document.getElementById('photoinfo').textContent=
     (when?`Taken ${when.toLocaleString()}`:'')+` \u00b7 ${j.photo_count} photos so far`;
+}
+async function capturePhoto(){
+  const btn=document.getElementById('capturebtn');
+  const info=document.getElementById('captureinfo');
+  if(!btn||btn.disabled)return;
+  btn.disabled=true;
+  if(info)info.textContent='Capturing\u2026 (~5s)';
+  try{
+    const r=await fetch('/api/capture',{method:'POST'});
+    const j=await r.json();
+    if(j.ok){
+      if(info)info.textContent='Saved.';
+      await refresh();                       // pulls the new photo + count
+      setTimeout(()=>{if(info)info.textContent='';},2500);
+    }else{
+      if(info)info.textContent=j.error||('HTTP '+r.status);
+    }
+  }catch(e){
+    if(info)info.textContent='Request failed.';
+  }finally{
+    btn.disabled=false;
+  }
+}
+let aligning=false, alignTimer=null;
+function drawGuides(){
+  const svg=document.getElementById('guidesvg');
+  if(!svg)return;
+  const el=document.querySelector('[name=roi]');
+  const m=((el&&el.value)||'').trim().split(',').map(s=>parseFloat(s));
+  let roi='';
+  if(m.length===4 && m.every(n=>!isNaN(n)&&n>=0&&n<=1)){
+    roi=`<rect x="${m[0]*1000}" y="${m[1]*1000}" width="${m[2]*1000}" height="${m[3]*1000}" `
+       +`fill="none" stroke="#ffd54a" stroke-width="3" stroke-dasharray="12 9" vector-effect="non-scaling-stroke"/>`;
+  }
+  svg.innerHTML=
+    '<line x1="333" y1="0" x2="333" y2="1000"/><line x1="667" y1="0" x2="667" y2="1000"/>'+
+    '<line x1="0" y1="333" x2="1000" y2="333"/><line x1="0" y1="667" x2="1000" y2="667"/>'+
+    '<line x1="500" y1="468" x2="500" y2="532"/><line x1="468" y1="500" x2="532" y2="500"/>'+
+    roi;
+}
+async function alignTick(){
+  if(!aligning)return;
+  try{
+    const r=await fetch('/api/preview',{method:'POST'});
+    const j=await r.json();
+    if(j.ok){
+      const img=document.getElementById('photo');
+      img.style.display='';
+      img.src='/preview.jpg?'+j.ts;     // busy/error: keep the last frame
+    }
+  }catch(e){}
+  if(aligning)alignTimer=setTimeout(alignTick,1200);
+}
+function startAlign(){
+  if(aligning)return;
+  aligning=true;
+  const btn=document.getElementById('alignbtn');
+  if(btn){btn.textContent='\u23F9 Stop align';btn.classList.add('on');}
+  document.getElementById('gridsvg').style.display='none';   // hide grid while aiming
+  const g=document.getElementById('guidesvg');if(g)g.style.display='';
+  drawGuides();
+  document.getElementById('photocard').style.display='';
+  document.getElementById('photoinfo').textContent='Live preview \u00b7 move the camera; the frame updates';
+  alignTick();
+}
+function stopAlign(){
+  aligning=false;
+  if(alignTimer){clearTimeout(alignTimer);alignTimer=null;}
+  const btn=document.getElementById('alignbtn');
+  if(btn){btn.textContent='\uD83C\uDFAF Align';btn.classList.remove('on');}
+  const g=document.getElementById('guidesvg');if(g)g.style.display='none';
+  refresh();   // restore the normal snapshot and grid overlay
 }
 
 function fillForm(cfg){
   const f=document.getElementById('cfgform');
   for(const k of ['latitude','longitude','timezone','max_bright','ramp_min',
                   'sunrise_offset_min','sunset_offset_min',
-                  'capture_interval_min','capture_brightness','roi'])
+                  'capture_interval_min','capture_brightness','roi',
+                  'soil_temp_high_f'])
     if(f.elements[k] && document.activeElement!==f.elements[k])
       f.elements[k].value=cfg[k];
   if(document.activeElement!==f.elements['capture_enabled'])
@@ -296,7 +460,19 @@ function initAuth(){
 
 // ---------------- sensors: readout, chart, overlay ----------------
 let sensorData={};
+let sampleMin=5, capMin=30, capOn=false, camHealth=null;
 let dryCal={};                 // per-cell {wet,dry} brightness anchors
+let probeCal={}, probeNames={}, probeDefaultCal=null;   // per-tray anchors, labels, fallback
+function probePct(c, v){
+  if(!c || c.wet==null || c.dry==null || (c.dry-c.wet)<0.05) return null;
+  return Math.max(0, Math.min(100, 100*(c.dry-v)/(c.dry-c.wet)));
+}
+function probeMoisture(t, v){
+  const p=probePct(probeCal[t], v);
+  if(p!=null) return {pct:p, approx:false};
+  const d=probePct(probeDefaultCal, v);
+  return d==null ? null : {pct:d, approx:true};
+}
 const DRY_SPAN_DEFAULT=15;     // provisional wet->dry brightness span pre-calibration
 function camMoisture(cell, b){
   const c=dryCal[cell];
@@ -305,7 +481,7 @@ function camMoisture(cell, b){
   if(dry<=wet) return null;
   return Math.max(0, Math.min(100, 100*(dry-b)/(dry-wet)));
 }
-let chartSensor=null, chartHours=168;
+let chartHours=168;
 
 function c2f(c){return c*9/5+32;}
 // key -> {group, label, value, unit}
@@ -313,6 +489,7 @@ function sensorMeta(key, val){
   if(key==='temp:air')   return {group:'Environment', label:'Air',      value:c2f(val).toFixed(1), unit:'\u00b0F'};
   if(key==='humidity')   return {group:'Environment', label:'Humidity', value:val.toFixed(0),       unit:'%'};
   if(key==='lux')        return {group:'Environment', label:'Light',    value:Math.round(val).toLocaleString(), unit:'lx'};
+  if(key==='temp:soil')  return {group:'Soil temp',   label:'Soil',     value:c2f(val).toFixed(1), unit:'\u00b0F'};
   if(key.startsWith('temp:soil_'))
                          return {group:'Soil temp',   label:'Probe '+key.split('_')[1], value:c2f(val).toFixed(1), unit:'\u00b0F'};
   if(key.startsWith('moisture:')){
@@ -330,6 +507,15 @@ function sensorMeta(key, val){
     const nm=(grid&&grid.names&&grid.names[cell])?grid.names[cell]:cell;
     return {group:'Growth', label:nm, value:val.toFixed(1), unit:'%'};
   }
+  if(key.startsWith('probe:')){
+    const t=key.slice(6);
+    const nm=probeNames[t]||('Tray '+t);
+    const m=probeMoisture(t, val);
+    if(m) return {group:'Moisture (probe)', label:nm,
+                  value:(m.approx?'~':'')+m.pct.toFixed(0), unit:'%',
+                  title:val.toFixed(3)+'V'+(m.approx?' - estimated, not yet calibrated':'')};
+    return {group:'Moisture (probe)', label:nm, value:val.toFixed(3), unit:'V'};
+  }
   if(key.startsWith('dry:')){
     const cell=key.slice(4);
     const nm=(grid&&grid.names&&grid.names[cell])?grid.names[cell]:cell;
@@ -343,6 +529,21 @@ function sensorMeta(key, val){
 function renderSensors(j){
   sensorData=j.sensors||{};
   dryCal=(j.settings&&j.settings.dryness_cal)||{};
+  probeCal=(j.settings&&j.settings.probe_cal)||{};
+  probeNames=(j.settings&&j.settings.probe_names)||{};
+  if(j.probe_default_cal)probeDefaultCal=j.probe_default_cal;
+  if(j.settings&&j.settings.soil_temp_high_f!=null)
+    soilTempHigh=+j.settings.soil_temp_high_f;
+  if(j.settings){
+    sampleMin=+j.settings.sample_interval_min||5;
+    capMin=+j.settings.capture_interval_min||30;
+    capOn=!!j.settings.capture_enabled;
+  }
+  // charts drawn before this status arrived lacked calibration context
+  // (probe %, thresholds); re-render them once from the cached series
+  if(!window._chartCtxSynced && Object.keys(seriesData).length){
+    window._chartCtxSynced=true; renderChartGrid();
+  }
   const card=document.getElementById('sensorcard');
   const keys=Object.keys(sensorData);
   card.style.display=keys.length?'':'none';
@@ -354,116 +555,203 @@ function renderSensors(j){
     const v=sensorData[k].value;
     const missing = v==null || (typeof v==='number'&&isNaN(v));
     const m=sensorMeta(k, missing?0:v);
+    m.key0=k;
     if(missing)m.value='-';                    // no reading -> dash
     (groups[m.group]=groups[m.group]||[]).push(m);
   }
-  const order=['Environment','Soil temp','Moisture','Moisture (cam)','Growth','Dryness','Other'];
+  const order=['Environment','Soil temp','Moisture','Moisture (probe)','Moisture (cam)','Growth','Dryness','Other'];
   let h='';
   for(const g of order){
     if(!groups[g])continue;
     h+=`<div class="sgroup"><h3>${g}</h3>`;
-    for(const m of groups[g])
-      h+=`<span class="schip">${m.label} <b>${m.value}</b><span class="u">${m.unit}</span></span>`;
+    for(const m of groups[g]){
+      {const ts=sensorData[m.key0]&&sensorData[m.key0].ts;
+       const lim=(m.key0&&(m.key0.startsWith('dry:')||m.key0.startsWith('growth:')))?3*capMin:3*sampleMin;
+       const isStale=ts&&(Date.now()/1000-ts)>lim*60;
+       if(isStale){m.stale=true;m.title=(m.title?m.title+' \u00b7 ':'')
+         +'last reading '+agoStr(new Date(ts*1000));}}
+      {const fill=(m.unit==='%'&&!isNaN(parseFloat(m.value)))
+          ?` style="--fill:${Math.max(0,Math.min(100,parseFloat(m.value)))}%" data-fill`:'' ;
+       h+=`<span class="schip${m.stale?' stale':''}"${fill}${m.title?` title="${m.title}"`:''}>${m.label} <b>${m.value}</b><span class="u">${m.unit}</span></span>`;}
+    }
     h+='</div>';
   }
   document.getElementById('sreadout').innerHTML=h;
   const dc=document.getElementById('drycal');
   if(dc)dc.style.display = keys.some(k=>k.startsWith('dry:')) ? '' : 'none';
-  // chart sensor dropdown (preserve selection); raw float not chart-worthy
-  const sel=document.getElementById('chartsensor');
-  const ckeys=keys.filter(k=>k!=='float:tray').sort();
-  const want=ckeys.join(',');
-  if(sel.dataset.keys!==want){
-    sel.dataset.keys=want;
-    const cur=sel.value;
-    sel.innerHTML=ckeys.map(k=>{const m=sensorMeta(k,0);
-      return `<option value="${k}">${m.group}: ${m.label}</option>`;}).join('');
-    if(ckeys.includes(cur))sel.value=cur;
-    else if(ckeys.length){chartSensor=ckeys.find(k=>k.startsWith('dry:'))||ckeys.find(k=>k.startsWith('moisture:'))||ckeys[0];sel.value=chartSensor;loadChart();}
-  }
+  const pcctl=document.getElementById('probecal');
+  if(pcctl)pcctl.style.display = keys.some(k=>k.startsWith('probe:')) ? '' : 'none';
+  const ptc=document.getElementById('probetc');
+  if(ptc)ptc.style.display = (keys.some(k=>k.startsWith('probe:'))
+                              && keys.some(k=>k.startsWith('temp:soil'))) ? '' : 'none';
+  // collapse the whole calibration section if nothing in it applies
+  {const cw=document.querySelector('.calwrap');
+   if(cw)cw.style.display=[dc,pcctl,ptc].some(el=>el&&el.style.display!=='none')?'':'none';}
   if(grid)drawGrid();   // refresh per-cell overlay
 }
-async function loadChart(){
-  if(!chartSensor)return;
-  const info=document.getElementById('chartinfo');info.textContent='loading...';
-  try{
-    const r=await fetch(`/api/series?sensor=${encodeURIComponent(chartSensor)}&hours=${chartHours}`);
-    const j=await r.json();drawChart(j.points||[]);info.textContent='';
-  }catch(e){info.textContent='chart unavailable';}
-}
-let chartPlot=null;
-function chartUnit(){
-  const s=chartSensor||'';
+// ---- chart grid: every sensor visible at once, grouped by section ----
+const CHART_SECTIONS=[
+  {id:'env',    title:'Environment',      match:k=>k.startsWith('temp:')||k==='humidity'||k==='lux'},
+  {id:'probe',  title:'Soil moisture (probes)', match:k=>k.startsWith('probe:')},
+  {id:'cam',    title:'Camera moisture',  match:k=>k.startsWith('dry:')||k.startsWith('moisture:')},
+  {id:'growth', title:'Growth',           match:k=>k.startsWith('growth:')},
+  {id:'other',  title:'Other',            match:k=>true},
+];
+let seriesData={}, chartPlots={}, soilTempHigh=90;
+function chartUnitFor(s){
   if(s.startsWith('temp:'))return '\u00b0F';
   if(s.startsWith('humidity')||s.startsWith('moisture:')||s.startsWith('growth:'))return '%';
+  if(s.startsWith('probe:')){const t=s.slice(6);
+    return (probeCal[t]&&probeCal[t].wet!=null)||probeDefaultCal?'%':'V';}
   if(s.startsWith('dry:')){const c=dryCal[s.slice(4)];return (c&&c.wet!=null)?'%':'';}
   if(s.startsWith('lux'))return 'lx';
   return '';
 }
-function drawChart(pts){
-  const svg=document.getElementById('histchart'),W=720,H=240,P=40;
-  const toF=chartSensor&&chartSensor.startsWith('temp:');
-  // camera dryness charts as moisture % when that cell is calibrated
-  const camCell=(chartSensor&&chartSensor.startsWith('dry:'))?chartSensor.slice(4):null;
-  const isCam=camCell&&dryCal[camCell]&&dryCal[camCell].wet!=null;
-  const conv=v=>toF?c2f(v):(isCam?camMoisture(camCell,v):v);
-  const data=pts.map(([t,v])=>[t, conv(v)]).filter(d=>d[1]!=null);
-  if(data.length<2){svg.innerHTML=`<text x="${W/2}" y="${H/2}" text-anchor="middle" fill="#7a8a72" font-size="15">Not enough data yet</text>`;chartPlot=null;return;}
-  const xs=data.map(d=>d[0]),ys=data.map(d=>d[1]);
-  const x0=Math.min(...xs),x1=Math.max(...xs);
-  let y0=Math.min(...ys),y1=Math.max(...ys);if(y0===y1){y0-=1;y1+=1;}
-  const padY=(y1-y0)*0.08; y0-=padY; y1+=padY;
+function convertFor(s){
+  if(s.startsWith('temp:'))return v=>c2f(v);
+  if(s.startsWith('probe:')){const t=s.slice(6);
+    return v=>{const m=probeMoisture(t,v);return m==null?v:m.pct;};}
+  if(s.startsWith('dry:')){const cell=s.slice(4);
+    const cal=dryCal[cell];
+    if(cal&&cal.wet!=null)return v=>camMoisture(cell,v);
+  }
+  return v=>v;
+}
+let lastChartLoad=0;
+async function loadChart(){
+  lastChartLoad=Date.now();
+  const info=document.getElementById('chartinfo');
+  if(info)info.textContent='loading\u2026';
+  try{
+    const r=await fetch(`/api/series_all?hours=${chartHours}`);
+    const j=await r.json();
+    seriesData=j.series||{};
+    if(info)info.textContent='';
+    renderChartGrid();
+  }catch(e){if(info)info.textContent='charts unavailable';}
+}
+function renderChartGrid(){
+  const grid=document.getElementById('chartgrid');
+  if(!grid)return;
+  const keys=Object.keys(seriesData).filter(k=>k!=='float:tray').sort();
+  if(!keys.length){grid.innerHTML='<p class="rmuted">No sensor history yet.</p>';return;}
+  const used=new Set();
+  let h='';
+  for(const sec of CHART_SECTIONS){
+    const mine=keys.filter(k=>!used.has(k)&&sec.match(k));
+    if(!mine.length)continue;
+    mine.forEach(k=>used.add(k));
+    h+=`<div class="csection"><h3>${sec.title}</h3><div class="cgrid">`;
+    for(const k of mine){
+      const m=sensorMeta(k,0);
+      h+=`<div class="ccard">
+            <div class="chead"><span>${m.label}<span class="cunit">${chartUnitFor(k)}</span></span>
+              <span class="cstats" id="cs-${cssId(k)}">&mdash;</span></div>
+            <svg class="cmini" id="cv-${cssId(k)}" viewBox="0 0 320 110"
+                 preserveAspectRatio="none" role="img" aria-label="${m.label} history"></svg>
+          </div>`;
+    }
+    h+='</div></div>';
+  }
+  grid.innerHTML=h;
+  chartPlots={};
+  for(const k of keys)drawMini(k);
+}
+function cssId(k){return k.replace(/[^a-zA-Z0-9]/g,'_');}
+function drawMini(key){
+  const svg=document.getElementById('cv-'+cssId(key));
+  const stat=document.getElementById('cs-'+cssId(key));
+  if(!svg)return;
+  const W=320,H=110,P=6,B=16;         // B: bottom room for time labels
+  const conv=convertFor(key), unit=chartUnitFor(key);
+  const data=(seriesData[key]||[]).map(([t,v])=>[t,conv(v)])
+                                  .filter(d=>d[1]!=null&&!isNaN(d[1]));
+  if(data.length<2){
+    svg.innerHTML=`<text x="${W/2}" y="${H/2}" text-anchor="middle" fill="#7a8a72" font-size="11">not enough data</text>`;
+    if(stat)stat.innerHTML='&mdash;';return;
+  }
+  const xs=data.map(d=>d[0]), ys=data.map(d=>d[1]);
+  const x0=Math.min(...xs), x1=Math.max(...xs);
+  let y0=Math.min(...ys), y1=Math.max(...ys);
+  const pct=unit==='%';
+  // warning line on soil temp charts (chile germination upper limit)
+  const hiLine=(key.startsWith('temp:soil')&&soilTempHigh>0)?soilTempHigh:null;
+  if(hiLine!=null){y0=Math.min(y0,hiLine);y1=Math.max(y1,hiLine);}  // keep it on-chart
+  if(pct){y0=Math.min(y0,0);y1=Math.max(y1,100);}   // % charts on a fixed scale
+  if(y0===y1){y0-=1;y1+=1;}
+  const pad=(y1-y0)*0.08; if(!pct){y0-=pad;y1+=pad;}
   const sx=t=>P+(t-x0)/((x1-x0)||1)*(W-2*P);
-  const sy=v=>H-P-(v-y0)/((y1-y0)||1)*(H-2*P);
+  const sy=v=>H-B-(v-y0)/((y1-y0)||1)*(H-B-P);
+  let h='';
+  for(let i=0;i<=2;i++){const yy=P+(H-B-P)*i/2;
+    h+=`<line x1="${P}" y1="${yy}" x2="${W-P}" y2="${yy}" stroke="#e6f0de" stroke-width="1"/>`;}
+  const line=data.map(d=>`${sx(d[0]).toFixed(1)},${sy(d[1]).toFixed(1)}`).join(' ');
+  const area=`${P},${H-B} ${line} ${W-P},${H-B}`;
+  h+=`<polygon points="${area}" fill="rgba(74,124,89,0.10)"/>`;
+  h+=`<polyline fill="none" stroke="#4a7c59" stroke-width="1.8" points="${line}"
+        pathLength="1" class="cline" vector-effect="non-scaling-stroke"/>`;
+  if(hiLine!=null){
+    const hy=sy(hiLine);
+    if(hy>=P&&hy<=H-B){
+      h+=`<rect x="${P}" y="${P}" width="${W-2*P}" height="${Math.max(0,hy-P).toFixed(1)}"
+            fill="rgba(181,50,47,0.07)"/>`;
+      h+=`<line x1="${P}" y1="${hy.toFixed(1)}" x2="${W-P}" y2="${hy.toFixed(1)}"
+            stroke="#b5322f" stroke-width="1.2" stroke-dasharray="5 4"
+            vector-effect="non-scaling-stroke"/>`;
+      h+=`<text x="${W-P-2}" y="${(hy-3).toFixed(1)}" text-anchor="end" font-size="9"
+            fill="#b5322f">too warm ${soilTempHigh}\u00b0F</text>`;
+    }
+  }
   const fmtT=t=>{const d=new Date(t*1000);
     return chartHours<=24?d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})
                          :d.toLocaleDateString([],{month:'numeric',day:'numeric'});};
-  const unit=chartUnit(), dec=(unit==='%')?0:1;
-  let h='';
-  // horizontal gridlines + y labels (5)
-  for(let i=0;i<=4;i++){
-    const v=y0+(y1-y0)*i/4, yy=sy(v);
-    h+=`<line x1="${P}" y1="${yy.toFixed(1)}" x2="${W-P}" y2="${yy.toFixed(1)}" stroke="#e6f0de"/>`;
-    h+=`<text x="${P-7}" y="${(yy+4).toFixed(1)}" text-anchor="end" font-size="12" fill="#7a8a72">${v.toFixed(dec)}${unit}</text>`;
-  }
-  // x ticks + labels (4)
-  for(let i=0;i<=3;i++){
-    const t=x0+(x1-x0)*i/3, xx=sx(t);
-    h+=`<line x1="${xx.toFixed(1)}" y1="${H-P}" x2="${xx.toFixed(1)}" y2="${H-P+4}" stroke="#cdddc0"/>`;
-    const a=i===0?'start':(i===3?'end':'middle');
-    h+=`<text x="${xx.toFixed(1)}" y="${H-P+18}" text-anchor="${a}" font-size="12" fill="#7a8a72">${fmtT(t)}</text>`;
-  }
-  h+=`<line x1="${P}" y1="${H-P}" x2="${W-P}" y2="${H-P}" stroke="#cdddc0"/>`;
-  h+=`<line x1="${P}" y1="${P}" x2="${P}" y2="${H-P}" stroke="#cdddc0"/>`;
-  const line=data.map(d=>`${sx(d[0]).toFixed(1)},${sy(d[1]).toFixed(1)}`).join(' ');
-  h+=`<polyline fill="none" stroke="#4a7c59" stroke-width="2.5" points="${line}"/>`;
-  // hover marker (hidden until mousemove)
-  h+=`<line id="hvl" y1="${P}" y2="${H-P}" stroke="#4a7c59" stroke-width="1" stroke-dasharray="3 3" style="display:none"/>`;
-  h+=`<circle id="hdot" r="4" fill="#2e7d32" stroke="#fff" stroke-width="1.5" style="display:none"/>`;
+  h+=`<text x="${P}" y="${H-4}" font-size="9" fill="#7a8a72">${fmtT(x0)}</text>`;
+  h+=`<text x="${W-P}" y="${H-4}" font-size="9" fill="#7a8a72" text-anchor="end">${fmtT(x1)}</text>`;
+  h+=`<line class="hvl" y1="${P}" y2="${H-B}" stroke="#4a7c59" stroke-width="1"
+        stroke-dasharray="3 3" style="display:none"/>`;
+  h+=`<circle class="hdot" r="3" fill="#2e7d32" stroke="#fff" stroke-width="1.2" style="display:none"/>`;
   svg.innerHTML=h;
-  chartPlot={unit,dec,
+  const dec=(unit==='%')?0:(unit==='lx'?0:1);
+  const cur=ys[ys.length-1], lo=Math.min(...ys), hi=Math.max(...ys);
+  const over=hiLine!=null&&cur>hiLine;
+  const lim=(key.startsWith('dry:')||key.startsWith('growth:'))?3*capMin:3*sampleMin;
+  const lastTs=xs[xs.length-1];
+  const isStale=(Date.now()/1000-lastTs)>lim*60;
+  svg.classList.toggle('cstale', isStale);
+  if(stat)stat.innerHTML=`<b${over?' class="hot"':''}>${cur.toFixed(dec)}</b>`
+    +` \u00b7 lo ${lo.toFixed(dec)} \u00b7 hi ${hi.toFixed(dec)}`
+    +(isStale?` <span class="stalebadge" title="last point ${agoStr(new Date(lastTs*1000))}">stale</span>`:'');
+  chartPlots[key]={unit,dec,
     pts:data.map(d=>({x:sx(d[0]),y:sy(d[1]),v:d[1],t:d[0]})),
     fmt:t=>new Date(t*1000).toLocaleString([],{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})};
 }
 function chartMove(e){
-  if(!chartPlot)return;
-  const svg=document.getElementById('histchart'), ctm=svg.getScreenCTM&&svg.getScreenCTM();
+  const svg=e.target.closest('svg.cmini');
+  if(!svg)return;
+  const key=Object.keys(chartPlots).find(k=>'cv-'+cssId(k)===svg.id);
+  const plot=key&&chartPlots[key];
+  if(!plot)return;
+  const ctm=svg.getScreenCTM&&svg.getScreenCTM();
   if(!ctm)return;
   const sp=svg.createSVGPoint(); sp.x=e.clientX; sp.y=e.clientY;
   const loc=sp.matrixTransform(ctm.inverse());
   let best=null,bd=1e9;
-  for(const p of chartPlot.pts){const d=Math.abs(p.x-loc.x);if(d<bd){bd=d;best=p;}}
+  for(const pt of plot.pts){const d=Math.abs(pt.x-loc.x);if(d<bd){bd=d;best=pt;}}
   if(!best)return;
-  const vl=document.getElementById('hvl'),dot=document.getElementById('hdot'),tip=document.getElementById('charttip');
+  const vl=svg.querySelector('.hvl'),dot=svg.querySelector('.hdot');
+  const tip=document.getElementById('charttip');
   if(vl){vl.setAttribute('x1',best.x);vl.setAttribute('x2',best.x);vl.style.display='';}
   if(dot){dot.setAttribute('cx',best.x);dot.setAttribute('cy',best.y);dot.style.display='';}
   if(tip){
-    tip.textContent=`${best.v.toFixed(chartPlot.dec)}${chartPlot.unit} \u00b7 ${chartPlot.fmt(best.t)}`;
+    tip.textContent=`${best.v.toFixed(plot.dec)}${plot.unit} \u00b7 ${plot.fmt(best.t)}`;
     tip.style.display='';tip.style.left=(e.clientX+12)+'px';tip.style.top=(e.clientY-32)+'px';
   }
 }
 function chartLeave(){
-  ['hvl','hdot','charttip'].forEach(id=>{const el=document.getElementById(id);if(el)el.style.display='none';});
+  document.querySelectorAll('svg.cmini .hvl, svg.cmini .hdot')
+    .forEach(el=>el.style.display='none');
+  const tip=document.getElementById('charttip');
+  if(tip)tip.style.display='none';
 }
 function floatLabel(v){
   return v===null ? 'no sensor' : (v>=1 ? 'not full' : 'full');
@@ -505,6 +793,131 @@ async function calibrate(point){
                           :('failed: '+(j.error||('HTTP '+r.status)));
   }catch(e){info.textContent='calibration failed';}
 }
+async function calibrateProbe(tray, point){
+  const info=document.getElementById('probecalinfo');if(info)info.textContent='sampling\u2026 (~2s)';
+  try{
+    const r=await fetch('/api/probe_cal',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({tray,point})});
+    const j=await r.json().catch(()=>({}));
+    if(r.ok&&j.ok){
+      if(info)info.textContent=`Tray ${tray} ${point} = ${j.volts}V`
+        + (j.noisy?` (noisy, spread ${j.spread}V)`:'');
+      refresh();
+    }
+    else if(info)info.textContent = r.status===401?'log in to calibrate'
+                        :('failed: '+(j.error||('HTTP '+r.status)));
+  }catch(e){if(info)info.textContent='calibration failed';}
+}
+async function checkTempComp(tray, apply){
+  const info=document.getElementById('probetcinfo');
+  if(info)info.textContent='analyzing\u2026';
+  try{
+    const r=await fetch('/api/probe_tempcomp',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({tray, hours:72, apply:!!apply})});
+    const j=await r.json().catch(()=>({}));
+    if(!info)return;
+    if(r.status===401){info.textContent='log in first';return;}
+    if(!j.ok){info.textContent=j.error||('HTTP '+r.status);return;}
+    if(j.applied){info.textContent=`Tray ${tray}: applied ${j.coeff} V/F`;refresh();return;}
+    const strong=Math.abs(j.r)>0.7 && j.span>=5;
+    info.innerHTML=`Tray ${tray}: ${j.coeff} V/F (r=${j.r}, ${j.span}\u00b0F span, n=${j.n})`
+      + (j.warning?` \u2013 ${j.warning}`:'')
+      + (strong?` <a href="#" id="tcapply${tray}">apply</a>`:'');
+    const a=document.getElementById('tcapply'+tray);
+    if(a)a.addEventListener('click',e=>{e.preventDefault();checkTempComp(tray,true);});
+  }catch(e){if(info)info.textContent='request failed';}
+}
+// ---- planting map: two trays, editable seed / equipment / sow date ----
+let trays={}, trayDirty={}, trayTimer=null;
+function daysSince(iso){
+  if(!iso)return null;
+  const d=new Date(iso+'T00:00:00'), now=new Date();
+  if(isNaN(d))return null;
+  return Math.floor((new Date(now.getFullYear(),now.getMonth(),now.getDate())-d)/86400000);
+}
+function renderTrays(j){
+  const t=(j.settings&&j.settings.trays)||{};
+  const sig=JSON.stringify(t);
+  const wrap=document.getElementById('trayswrap');
+  if(!wrap)return;
+  // don't clobber what's being typed
+  if(wrap.dataset.sig===sig && wrap.children.length)return;
+  if(document.activeElement && document.activeElement.closest('#trayswrap'))return;
+  wrap.dataset.sig=sig;
+  trays=JSON.parse(sig);
+  let h='';
+  for(const id of Object.keys(trays).sort()){
+    const tr=trays[id]||{}, cells=tr.cells||{};
+    const rows=tr.rows||3, cols=tr.cols||4;
+    const filled=Object.keys(cells).length;
+    h+=`<div class="tray"><div class="tray-head"><b>${tr.label||('Tray '+id)}</b>`
+      +`<span class="tsum">${filled} of ${rows*cols} cells filled</span></div>`
+      +`<div class="tgrid" style="grid-template-columns:repeat(${cols},1fr)">`;
+    for(let r=1;r<=rows;r++){
+      for(let c=0;c<cols;c++){
+        const cid=colL(c)+r, v=cells[cid]||{};
+        const age=daysSince(v.planted);
+        h+=`<div class="tcell${(v.seed||v.equipment||v.planted)?' filled':''}" data-tray="${id}" data-cell="${cid}">
+              <span class="tid">${cid}<span class="tage">${age==null?'':(age+'d')}</span></span>
+              <input class="tseed"  type="text" placeholder="seed"      value="${esc(v.seed||'')}">
+              <input class="tequip" type="text" placeholder="equipment" value="${esc(v.equipment||'')}">
+              <input class="tdate"  type="date" value="${esc(v.planted||'')}">
+            </div>`;
+      }
+    }
+    h+='</div></div>';
+  }
+  wrap.innerHTML=h;
+}
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;')
+  .replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function collectTray(id){
+  const cells={};
+  document.querySelectorAll(`#trayswrap .tcell[data-tray="${id}"]`).forEach(el=>{
+    const seed=el.querySelector('.tseed').value.trim();
+    const equipment=el.querySelector('.tequip').value.trim();
+    const planted=el.querySelector('.tdate').value;
+    if(seed||equipment||planted)cells[el.dataset.cell]={seed,equipment,planted};
+  });
+  return cells;
+}
+async function saveTray(id){
+  const info=document.getElementById('trayinfo');
+  try{
+    const r=await fetch('/api/trays',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({tray:id, cells:collectTray(id)})});
+    const j=await r.json().catch(()=>({}));
+    if(r.status===401){if(info)info.textContent='log in to edit the map';return;}
+    if(info)info.textContent = (r.ok&&j.ok)?`saved (${j.count} cells)`
+                                          :('save failed: '+(j.error||r.status));
+    if(r.ok&&j.ok){
+      const wrap=document.getElementById('trayswrap');
+      if(wrap)wrap.dataset.sig='';            // let the next refresh re-render ages
+      setTimeout(()=>{if(info&&/saved/.test(info.textContent))info.textContent='';},2500);
+    }
+  }catch(e){if(info)info.textContent='save failed';}
+}
+function initTrays(){
+  const wrap=document.getElementById('trayswrap');
+  if(!wrap)return;
+  const queue=e=>{
+    const cell=e.target.closest('.tcell');
+    if(!cell)return;
+    cell.classList.toggle('filled', !!collectTray(cell.dataset.tray)[cell.dataset.cell]);
+    trayDirty[cell.dataset.tray]=true;
+    const info=document.getElementById('trayinfo');
+    if(info)info.textContent='saving\u2026';
+    clearTimeout(trayTimer);
+    trayTimer=setTimeout(()=>{                 // debounce: save after typing stops
+      const ids=Object.keys(trayDirty); trayDirty={};
+      ids.forEach(saveTray);
+    },800);
+  };
+  wrap.addEventListener('input',queue);
+  wrap.addEventListener('change',queue);
+}
 function initSensors(){
   const fb=document.getElementById('fillbtn');
   if(fb)fb.addEventListener('click',async()=>{
@@ -533,10 +946,15 @@ function initSensors(){
   if(cw)cw.addEventListener('click',()=>calibrate('wet'));
   const cd=document.getElementById('caldry');
   if(cd)cd.addEventListener('click',()=>calibrate('dry'));
-  const hc=document.getElementById('histchart');
-  if(hc){hc.addEventListener('mousemove',chartMove);hc.addEventListener('mouseleave',chartLeave);}
-  document.getElementById('chartsensor').addEventListener('change',e=>{
-    chartSensor=e.target.value;loadChart();});
+  const pmap={probewet1:['1','wet'],probedry1:['1','dry'],probewet2:['2','wet'],probedry2:['2','dry']};
+  for(const id in pmap){const b=document.getElementById(id);
+    if(b)b.addEventListener('click',()=>calibrateProbe(pmap[id][0],pmap[id][1]));}
+  {const t1=document.getElementById('tc1');if(t1)t1.addEventListener('click',()=>checkTempComp('1'));
+   const t2=document.getElementById('tc2');if(t2)t2.addEventListener('click',()=>checkTempComp('2'));}
+  const hc=document.getElementById('chartgrid');
+  if(hc){hc.addEventListener('mousemove',chartMove);
+         hc.addEventListener('mouseleave',chartLeave);}
+  loadChart();                       // initial draw; range buttons reload
   document.querySelectorAll('#ranges button').forEach(b=>{
     b.addEventListener('click',()=>{
       chartHours=+b.dataset.h;
@@ -649,6 +1067,8 @@ function initGridSvg(){
   document.getElementById('gridshow').addEventListener('change',e=>{
     grid.show=e.target.checked;drawGrid();saveGrid();});
   document.getElementById('detectbtn').addEventListener('click',detectGrid);
+  {const cb=document.getElementById('capturebtn');if(cb)cb.addEventListener('click',capturePhoto);}
+  {const ab=document.getElementById('alignbtn');if(ab)ab.addEventListener('click',()=>aligning?stopAlign():startAlign());}
   const upd=()=>{if(!gridEditable()){syncGridControls();return;}
     grid.rows=Math.max(1,Math.min(12,+document.getElementById('gridrows').value||4));
     grid.cols=Math.max(1,Math.min(12,+document.getElementById('gridcols').value||4));
@@ -705,6 +1125,8 @@ async function refresh(){
     requestAnimationFrame(fitReportHeight);
     handleGrid(j);
     renderSensors(j);
+    renderTrays(j);
+    if(Date.now()-lastChartLoad>120000)loadChart();   // history every ~2 min
     renderWater(j);
     render();
   }catch(e){document.getElementById('phase').textContent='Controller unreachable';}
@@ -720,6 +1142,8 @@ document.getElementById('cfgform').addEventListener('submit',async ev=>{
     body[k]=parseFloat(f.elements[k].value);
   body.timezone=f.elements['timezone'].value.trim();
   body.roi=f.elements['roi'].value.trim();
+  if(f.elements['soil_temp_high_f'])
+    body.soil_temp_high_f=parseInt(f.elements['soil_temp_high_f'].value||0,10);
   body.capture_enabled=f.elements['capture_enabled'].checked;
   msg.textContent='Planting...';msg.className='';
   try{
@@ -846,7 +1270,34 @@ function initReport(){
 setInterval(refresh,15000);
 setInterval(render,60000);
 setInterval(pollFloat,1500);
-[initAuth, initSensors, initGridSvg, initReport].forEach(fn=>{
-  try{ fn(); }catch(e){ console.error(fn.name+' init failed:', e); }
+function initLight(){
+  document.querySelectorAll('.lcbtn').forEach(b=>
+    b.addEventListener('click',()=>setLight(b.dataset.mode)));
+  const rng=document.getElementById('lcrange');
+  const val=document.getElementById('lcval');
+  if(!rng)return;
+  const startDrag=()=>{dragging=true;};
+  const endDrag=()=>{
+    if(!dragging)return;
+    dragging=false;
+    if(dragTimer){clearTimeout(dragTimer);dragTimer=null;}
+    dragPending=null;
+    setLight(null, +rng.value);        // final value, with UI sync
+  };
+  rng.addEventListener('pointerdown',startDrag);
+  rng.addEventListener('keydown',startDrag);
+  rng.addEventListener('input',()=>{
+    if(val)val.textContent=rng.value+'%';   // label tracks instantly
+    if(dragging)pushBrightness(+rng.value); // light tracks, throttled
+  });
+  rng.addEventListener('pointerup',endDrag);
+  rng.addEventListener('pointercancel',endDrag);
+  rng.addEventListener('keyup',endDrag);
+  rng.addEventListener('blur',endDrag);
+  rng.addEventListener('change',()=>{        // click-to-jump, no drag involved
+    if(!dragging)setLight(null, +rng.value);
+  });
+}
+[initAuth, initSensors, initGridSvg, initReport, initLight, initTrays].forEach(fn=>{  try{ fn(); }catch(e){ console.error(fn.name+' init failed:', e); }
 });
 refresh();

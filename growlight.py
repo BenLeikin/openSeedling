@@ -16,6 +16,8 @@ Requires (handled by setup.sh):
 """
 
 import json
+import os
+import re
 import secrets
 import subprocess
 import sys
@@ -47,12 +49,22 @@ DEFAULTS = {
     "timezone": "America/Los_Angeles",
     "max_bright": 100,         # percent
     "ramp_min": 30,            # minutes
+    "light_override": "auto",  # auto = follow the sun schedule; on|off = manual hold
+    "manual_bright": 100,      # brightness held when light_override is "on"
+    "soil_temp_high_f": 90,    # warning line on the soil temp chart; 0 disables.
+                               #   Chiles germinate best ~85F and drop off above
+                               #   ~90-95F; seedlings prefer 70-80F once up.
     "sunrise_offset_min": 0,   # negative starts before sunrise
     "sunset_offset_min": 0,    # positive runs past sunset
     "capture_enabled": False,
     "capture_interval_min": 30,
     "capture_brightness": 100,  # light level held during each photo
     "roi": "",                  # crop as "x,y,w,h" fractions, blank = full frame
+    "cam_width": 2304,          # capture resolution at full field of view. The
+    "cam_height": 1296,         #   Module 3 sensor is 4608x2592, but a full 12MP
+                                #   capture exhausts the Pi Zero 2 W's 512MB RAM, so
+                                #   default to the 2304x1296 binned mode (same view).
+                                #   Raise to 4608x2592 only on a Pi with more memory
     "sample_interval_min": 5,   # how often to read + log sensors
     "ntfy_topic": "",           # set to enable push notifications (see notify.py)
     "discord_webhook": "",      # set to enable Discord alerts (see discord_alert.py)
@@ -65,6 +77,8 @@ DEFAULTS = {
     "pump_daily_max_seconds": 180,  # runaway backstop
     "fill_max_seconds": 60,     # hard cap on a fill-to-float run (if float never trips)
     "dryness_cal": {},          # per-cell {wet,dry} brightness anchors -> camera moisture %
+    "probe_cal": {},            # per-tray {wet,dry} raw ADC anchors -> probe moisture %
+    "probe_names": {"1": "Tray 1", "2": "Tray 2"},  # ADS1115 A0 = tray 1, A1 = tray 2
     "ai_enabled": False,        # daily Claude vision report (needs an API key, see ai_report.py)
     "ai_model": "claude-opus-4-8",
     "ai_report_hour": 8,        # local hour (0-23) to run the daily report
@@ -76,6 +90,12 @@ DEFAULTS = {
         "corners": [[0.12, 0.10], [0.88, 0.10], [0.88, 0.92], [0.12, 0.92]],
         "rows": 4, "cols": 4, "names": {}, "show": True, "locked": False,
     },
+    # What is actually planted where. Two trays, 3 wide x 4 deep, cells A1..C4.
+    # Each cell: {"seed": name, "equipment": what's occupying it, "planted": ISO date}
+    "trays": {
+        "1": {"label": "Tray 1", "rows": 4, "cols": 3, "cells": {}},
+        "2": {"label": "Tray 2", "rows": 4, "cols": 3, "cells": {}},
+    },
 }
 
 GPIO_PIN      = 18
@@ -85,6 +105,7 @@ HTTP_PORT     = 5000
 CONFIG_PATH   = Path(__file__).with_name("config.json")
 TIMELAPSE_DIR = Path(__file__).with_name("timelapse")
 AI_REPORT_PATH = Path(__file__).with_name("ai_report.json")
+PREVIEW_PATH = Path(__file__).with_name("preview.jpg")  # alignment viewfinder; not a timelapse frame
 report_lock = threading.Lock()
 report_state = {"generating": False}
 TIMEZONES     = sorted(available_timezones())
@@ -116,13 +137,56 @@ if CONFIG_PATH.exists():
     except Exception as e:
         print(f"config.json unreadable ({e}), using defaults")
 
+# One-time migration: trays were first laid out 4 wide x 3 deep (A1..D3); the
+# physical trays are 3 wide x 4 deep (A1..C4). Transpose saved cells so each
+# entry stays on the same physical spot, then persist the new shape.
+def _migrate_trays():
+    changed = False
+    for tid, t in (settings.get("trays") or {}).items():
+        if t.get("rows") == 3 and t.get("cols") == 4:
+            newcells = {}
+            for cid, v in (t.get("cells") or {}).items():
+                m = re.fullmatch(r"([A-D])([1-3])", str(cid))
+                if m:
+                    col = ord(m.group(1)) - 65        # old column 0-3
+                    row = int(m.group(2)) - 1          # old row 0-2
+                    newcells[f"{chr(65 + row)}{col + 1}"] = v   # transpose
+                else:
+                    newcells[cid] = v
+            t.update(rows=4, cols=3, cells=newcells)
+            changed = True
+            if newcells:
+                print(f"tray {tid}: migrated {len(newcells)} cells to 3x4 layout")
+    if changed:
+        try:
+            CONFIG_PATH.write_text(json.dumps(settings, indent=2))
+        except Exception as e:
+            print(f"tray migration not persisted ({e})")
+_migrate_trays()
+
 settings_lock = threading.Lock()
 wake = threading.Event()
 
 state = {"brightness": 0.0, "on": None, "off": None,
          "sunrise": None, "sunset": None}
 state_lock = threading.Lock()
+# camera health: every capture/preview outcome lands here so the dashboard
+# can tell "old photo because night" from "old photo because the camera died"
+camera = {"last_ok": None, "fails": 0, "last_err": "", "last_err_ts": None}
+
+
+def _camera_ok():
+    with state_lock:
+        camera.update(last_ok=time.time(), fails=0, last_err="", last_err_ts=None)
+
+
+def _camera_fail(err):
+    with state_lock:
+        camera["fails"] += 1
+        camera["last_err"] = str(err)[:200]
+        camera["last_err_ts"] = time.time()
 capturing = False   # capture thread holds the light; control loop defers
+capture_lock = threading.Lock()  # serialize camera access (manual vs scheduled)
 render = {"state": "idle", "msg": "", "frames": 0,
           "started": None, "elapsed": None}   # idle|running|done|error
 render_lock = threading.Lock()
@@ -328,6 +392,88 @@ def _cam_moisture(cell, b, cal):
     return round(max(0.0, min(100.0, 100.0 * (dry - b) / (dry - wet))))
 
 
+PROBE_DEFAULT_CAL = {"wet": 1.25, "dry": 2.95}   # typical HW-390 on 3.3V; used
+                                                 # until a tray is calibrated
+
+
+TEMP_COMP_REF_F = 70.0   # compensation is zero at this soil temp
+
+
+def compensated_volts(volts, cal, soil_temp_f):
+    """Capacitive probes read wetter (lower voltage) as the soil warms. Undo
+    that drift so moisture is comparable across a temperature swing, which
+    matters most on a heat mat. No coefficient configured = unchanged."""
+    tc = (cal or {}).get("temp_comp") or {}
+    coeff = tc.get("coeff")
+    if not coeff or soil_temp_f is None:
+        return volts
+    ref = tc.get("ref_f", TEMP_COMP_REF_F)
+    return volts - coeff * (soil_temp_f - ref)
+
+
+def probe_moisture(volts, cal, soil_temp_f=None):
+    """Map a tray probe's voltage to 0-100% from its wet/dry anchors.
+    Capacitive probes read high when dry, low when wet."""
+    if not cal:
+        return None
+    wet, dry = cal.get("wet"), cal.get("dry")
+    if wet is None or dry is None:
+        return None
+    if dry - wet < 0.05:      # anchors too close to mean anything
+        return None
+    v = compensated_volts(volts, cal, soil_temp_f)
+    return round(max(0.0, min(100.0, 100.0 * (dry - v) / (dry - wet))))
+
+
+def probe_moisture_any(volts, cal, soil_temp_f=None):
+    """(percent, approximate) - falls back to typical probe endpoints when the
+    tray hasn't been calibrated, so there's always a number to look at."""
+    pct = probe_moisture(volts, cal, soil_temp_f)
+    if pct is not None:
+        return pct, False
+    return probe_moisture(volts, PROBE_DEFAULT_CAL, soil_temp_f), True
+
+
+def latest_soil_temp_f(snapshot=None):
+    """Current soil temperature in F, or None. Uses the first DS18B20 found.
+    Pass an existing db.latest() snapshot to avoid a redundant query."""
+    for k, (ts, v) in (snapshot if snapshot is not None else db.latest()).items():
+        if k.startswith("temp:soil"):
+            return v * 9 / 5 + 32
+    return None
+
+
+def estimate_temp_comp(tray, hours=48):
+    """Regress a tray's probe voltage against soil temperature over the last
+    `hours` to find the thermal drift. Best run over a warm, no-watering
+    window, so the voltage change is dominated by the temperature artifact
+    rather than real drying. Returns a dict with the slope in V/F."""
+    volts = db.series(f"probe:{tray}", hours=hours)
+    if len(volts) < 10:
+        return {"ok": False, "error": f"not enough probe data ({len(volts)} points)"}
+    xs, ys = [], []
+    for ts, v in volts:
+        t = db.reading_near("temp:soil", ts, window=1800)
+        if t is None:
+            continue
+        xs.append(t * 9 / 5 + 32)   # soil temp F
+        ys.append(v)                # probe volts
+    n = len(xs)
+    if n < 10:
+        return {"ok": False, "error": f"not enough paired temp data ({n} points)"}
+    mx, my = sum(xs) / n, sum(ys) / n
+    denom = sum((x - mx) ** 2 for x in xs)
+    if denom < 1e-9:
+        return {"ok": False, "error": "soil temp did not vary enough to estimate"}
+    slope = sum((xs[i] - mx) * (ys[i] - my) for i in range(n)) / denom
+    sy = sum((y - my) ** 2 for y in ys) ** 0.5
+    r = (sum((xs[i] - mx) * (ys[i] - my) for i in range(n)) / (denom ** 0.5 * sy)
+         if sy > 0 else 0.0)
+    return {"ok": True, "tray": tray, "coeff": round(slope, 5), "r": round(r, 3),
+            "n": n, "temp_min": round(min(xs), 1), "temp_max": round(max(xs), 1),
+            "span": round(max(xs) - min(xs), 1)}
+
+
 def gather_report_data():
     """Assemble the controller snapshot the AI report is built from."""
     with settings_lock:
@@ -337,17 +483,51 @@ def gather_report_data():
     tz = ZoneInfo(cfg["timezone"])
     now = datetime.now(tz)
     cal = cfg.get("dryness_cal") or {}
-    cam, raw, growth = {}, {}, {}
-    for k, (ts, v) in db.latest().items():
+    pcal = cfg.get("probe_cal") or {}
+    pnames = cfg.get("probe_names") or {}
+    cam, raw, growth, probes, soiltemp = {}, {}, {}, {}, {}
+    snap = db.latest()
+    stf = latest_soil_temp_f(snap)
+    for k, (ts, v) in snap.items():
         if k.startswith("dry:"):
             cell = k[4:]
             m = _cam_moisture(cell, v, cal)
             (cam if m is not None else raw)[cell] = m if m is not None else round(v, 1)
         elif k.startswith("growth:"):
             growth[k[7:]] = round(v, 1)
+        elif k.startswith("probe:"):
+            t = k[6:]
+            pm, approx = probe_moisture_any(v, pcal.get(t) or {}, stf)
+            nm = pnames.get(t, f"Tray {t}")
+            if pm is not None:
+                probes[nm + (" (approx)" if approx else "")] = pm
+            else:
+                probes[nm] = round(v, 3)
+        elif k.startswith("temp:soil"):
+            label = "Soil" if k == "temp:soil" else f"Soil {k.split('_')[-1]}"
+            soiltemp[label] = round(v * 9 / 5 + 32, 1)   # report in F
     fv = sensors.read_float()
     flabel = "no sensor" if fv is None else ("not full" if fv >= 1 else "full")
     grid = cfg.get("grid") or {}
+    planting = {}
+    for tid, t in sorted((cfg.get("trays") or {}).items()):
+        rows = []
+        for cid, v in sorted((t.get("cells") or {}).items()):
+            bits = []
+            if v.get("seed"):
+                bits.append(v["seed"])
+            if v.get("equipment"):
+                bits.append(f"[{v['equipment']}]")
+            if v.get("planted"):
+                try:
+                    d = datetime.strptime(v["planted"], "%Y-%m-%d").date()
+                    bits.append(f"sown {v['planted']} ({(now.date() - d).days}d ago)")
+                except ValueError:
+                    pass
+            if bits:
+                rows.append(f"{cid}: {' '.join(bits)}")
+        if rows:
+            planting[t.get("label", f"Tray {tid}")] = rows
     bright = round(st.get("brightness") or 0)
     return {
         "date": now.strftime("%Y-%m-%d %H:%M"),
@@ -360,6 +540,9 @@ def gather_report_data():
         "grid": {"rows": grid.get("rows"), "cols": grid.get("cols"),
                  "names": grid.get("names") or {}},
         "camera_moisture": cam, "dryness_raw": raw, "growth": growth,
+        "probe_moisture": probes,
+        "soil_temp_f": soiltemp,
+        "planting": planting,
         "float": flabel,
         "pump_today_s": round(pump_state.get("today_seconds", 0.0), 1),
         "pump_last": pump_state.get("last_detail") or "none",
@@ -437,6 +620,17 @@ def run_report(reason="daily"):
             report_state["generating"] = False
 
 
+def clock_synced():
+    """True once the system clock is trustworthy. The Pi Zero 2 W has no RTC, so
+    at boot the time is wrong until NTP corrects it. Priming the report schedule
+    on that wrong time, then having the clock jump forward past the target, is
+    what fires a report on every reboot. systemd-timesyncd (the Pi OS default)
+    creates this file once the clock is synced."""
+    if os.path.exists("/run/systemd/timesync/synchronized"):
+        return True
+    return datetime.now().year >= 2025  # fallback for non-timesyncd setups
+
+
 def report_loop():
     """Run the AI report once a day when the clock crosses ai_report_hour:minute.
 
@@ -450,15 +644,16 @@ def report_loop():
         try:
             with settings_lock:
                 cfg = dict(settings)
-            if cfg.get("ai_enabled") and ai_report.have_key():
+            if cfg.get("ai_enabled") and ai_report.have_key() and clock_synced():
                 tz = ZoneInfo(cfg["timezone"])
                 now = datetime.now(tz)
                 target = (int(cfg.get("ai_report_hour", 8)) * 60
                           + int(cfg.get("ai_report_minute", 0)))
                 nowmin = now.hour * 60 + now.minute
                 if not primed:
-                    # first pass: if we're already past today's time, treat
-                    # today as handled so a restart doesn't fire a fresh report
+                    # first pass (on a synced clock): if we're already past
+                    # today's time, treat today as handled so a restart or
+                    # reboot doesn't fire a fresh report
                     if nowmin >= target:
                         last_day = now.date()
                     primed = True
@@ -530,11 +725,16 @@ def control_loop():
             print(f"{now.date()}: on {on_time:%H:%M}, off {off_time:%H:%M} "
                   f"({cfg['latitude']}, {cfg['longitude']}, {cfg['timezone']})")
         b = brightness_for(cfg, now, on_time, off_time)
+        ov = cfg.get("light_override", "auto")
+        if ov == "on":
+            b = max(0, min(100, int(cfg.get("manual_bright", cfg["max_bright"]))))
+        elif ov == "off":
+            b = 0
         if not capturing:
             set_brightness(b)
         with state_lock:
             state.update(brightness=b, on=on_time, off=off_time,
-                         sunrise=sunrise, sunset=sunset)
+                         sunrise=sunrise, sunset=sunset, override=ov)
         wake.wait(timeout=LOOP_SECONDS)
         wake.clear()
 
@@ -549,6 +749,8 @@ def take_photo(cfg, now):
         set_brightness(cfg["capture_brightness"])
         time.sleep(2)  # let light and auto-exposure settle
         fname = TIMELAPSE_DIR / f"{now:%Y%m%d_%H%M%S}.jpg"
+        cw = int(cfg.get("cam_width", 4608))
+        ch = int(cfg.get("cam_height", 2592))
         cmd = ["rpicam-still", "-n", "-o", str(fname), "-t", "2000"]
         try:
             roi = parse_roi(cfg.get("roi", ""))
@@ -557,18 +759,22 @@ def take_photo(cfg, now):
         if roi:
             x, y, w, h = roi
             cmd += ["--roi", f"{x},{y},{w},{h}",
-                    "--width", str(int(2592 * w) // 2 * 2),
-                    "--height", str(int(1944 * h) // 2 * 2)]
+                    "--width", str(int(cw * w) // 2 * 2),
+                    "--height", str(int(ch * h) // 2 * 2)]
         else:
-            cmd += ["--width", "2592", "--height", "1944"]
+            cmd += ["--width", str(cw), "--height", str(ch)]
         r = subprocess.run(cmd, capture_output=True, timeout=90)
         if r.returncode != 0:
-            print(f"capture failed: {r.stderr.decode(errors='replace')[-300:]}")
+            err = r.stderr.decode(errors="replace")[-300:]
+            print(f"capture failed: {err}")
+            _camera_fail(err.strip().splitlines()[-1] if err.strip() else "capture failed")
         else:
             make_thumb(fname)
             saved = fname
+            _camera_ok()
     except Exception as e:
         print(f"capture error: {e}")
+        _camera_fail(str(e))
     finally:
         capturing = False
         wake.set()  # control loop restores scheduled brightness now
@@ -620,7 +826,8 @@ def capture_loop():
                    now - last_shot >= timedelta(minutes=cfg["capture_interval_min"]))
             if in_day and due:
                 last_shot = now
-                path = take_photo(cfg, now)
+                with capture_lock:
+                    path = take_photo(cfg, now)
                 if path:
                     record_growth(path, cfg, now)
         time.sleep(15)
@@ -762,6 +969,28 @@ def dryness_cal_set():
             cal.setdefault(cell, {})[point] = v
         CONFIG_PATH.write_text(json.dumps(settings, indent=2))
     return jsonify(ok=True, point=point, cells=len(cells))
+
+
+@app.route("/api/probe_cal", methods=["POST"])
+@require_auth
+def probe_cal_set():
+    """Capture a tray probe's current raw reading as its 'wet' (100%) or 'dry'
+    (0%) anchor. Reads the probe live so the anchor reflects the soil right now."""
+    data = request.get_json(silent=True) or {}
+    tray = str(data.get("tray", ""))
+    point = data.get("point")
+    if tray not in ("1", "2") or point not in ("wet", "dry"):
+        return jsonify(ok=False, error="tray must be 1|2 and point wet|dry"), 200
+    live, spread = sensors.probe_spread(tray)
+    if live is None:
+        return jsonify(ok=False, error="no reading from that probe"), 200
+    with settings_lock:
+        cal = settings.setdefault("probe_cal", {})
+        cal.setdefault(tray, {})[point] = live
+        CONFIG_PATH.write_text(json.dumps(settings, indent=2))
+    # a wide spread means noise on the analog run; the anchor is unreliable
+    return jsonify(ok=True, tray=tray, point=point, volts=live,
+                   spread=spread, noisy=bool(spread and spread > 0.05))
 
 
 @app.route("/api/report")
@@ -934,6 +1163,102 @@ def detect_grid():
         return jsonify(ok=False, error=f"Detector error: {e}"), 200
 
 
+@app.route("/api/light", methods=["POST"])
+@require_auth
+def api_light():
+    """Manual light hold. 'on' forces manual_bright, 'off' forces dark, 'auto'
+    hands control back to the sun schedule. An optional 'brightness' (0-100)
+    sets the level the 'on' hold uses."""
+    data = request.get_json(silent=True) or {}
+    mode = data.get("mode")
+    bright = data.get("brightness")
+    if mode is not None and mode not in ("auto", "on", "off"):
+        return jsonify(ok=False, error="mode must be auto|on|off"), 200
+    if bright is not None:
+        try:
+            bright = max(0, min(100, int(bright)))
+        except (TypeError, ValueError):
+            return jsonify(ok=False, error="brightness must be 0-100"), 200
+    if mode is None and bright is None:
+        return jsonify(ok=False, error="nothing to set"), 200
+    with settings_lock:
+        if mode is not None:
+            settings["light_override"] = mode
+        if bright is not None:
+            settings["manual_bright"] = bright
+        CONFIG_PATH.write_text(json.dumps(settings, indent=2))
+        cur_mode = settings["light_override"]
+        cur_bright = settings["manual_bright"]
+    wake.set()          # apply now instead of waiting for the next loop pass
+    if mode is not None:
+        db.log_event("light", f"override set to {mode}")
+    return jsonify(ok=True, mode=cur_mode, brightness=cur_bright)
+
+
+@app.route("/api/probe_tempcomp", methods=["POST"])
+@require_auth
+def probe_tempcomp():
+    """Estimate (and optionally apply) a tray probe's temperature-drift
+    coefficient from logged data. Run it over a warm, no-watering window."""
+    data = request.get_json(silent=True) or {}
+    tray = str(data.get("tray", ""))
+    if tray not in ("1", "2"):
+        return jsonify(ok=False, error="tray must be 1 or 2"), 200
+    try:
+        hours = max(6, min(720, int(data.get("hours", 48))))
+    except (TypeError, ValueError):
+        hours = 48
+    res = estimate_temp_comp(tray, hours)
+    if not res.get("ok"):
+        return jsonify(res), 200
+    if res["span"] < 5:
+        res["warning"] = (f"soil temp only varied {res['span']}F; "
+                          "the estimate is weak until it swings more")
+    if data.get("apply"):
+        with settings_lock:
+            cal = settings.setdefault("probe_cal", {}).setdefault(tray, {})
+            cal["temp_comp"] = {"coeff": res["coeff"], "ref_f": TEMP_COMP_REF_F}
+            CONFIG_PATH.write_text(json.dumps(settings, indent=2))
+        res["applied"] = True
+    return jsonify(res)
+
+
+@app.route("/api/trays", methods=["POST"])
+@require_auth
+def api_trays():
+    """Save what's planted in each cell. Body: {"tray": "1"|"2", "cells":
+    {"A1": {"seed": str, "equipment": str, "planted": "YYYY-MM-DD"}, ...}}.
+    Empty cells are dropped so the map only holds what's actually there."""
+    data = request.get_json(silent=True) or {}
+    tray = str(data.get("tray", ""))
+    cells = data.get("cells")
+    label = data.get("label")
+    if tray not in ("1", "2"):
+        return jsonify(ok=False, error="tray must be 1 or 2"), 200
+    if not isinstance(cells, dict):
+        return jsonify(ok=False, error="cells must be an object"), 200
+    clean = {}
+    for cid, v in cells.items():
+        if not isinstance(v, dict) or not re.fullmatch(r"[A-Z]\d{1,2}", str(cid)):
+            continue
+        seed = str(v.get("seed", "")).strip()[:60]
+        equip = str(v.get("equipment", "")).strip()[:60]
+        planted = str(v.get("planted", "")).strip()[:10]
+        if planted and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", planted):
+            planted = ""
+        if seed or equip or planted:
+            clean[cid] = {"seed": seed, "equipment": equip, "planted": planted}
+    with settings_lock:
+        trays = settings.setdefault("trays", {})
+        t = trays.setdefault(tray, {"label": f"Tray {tray}", "rows": 3,
+                                    "cols": 4, "cells": {}})
+        t["cells"] = clean
+        if label is not None:
+            t["label"] = str(label).strip()[:40] or f"Tray {tray}"
+        CONFIG_PATH.write_text(json.dumps(settings, indent=2))
+    return jsonify(ok=True, tray=tray, count=len(clean))
+
+
 @app.route("/api/render", methods=["POST"])
 @require_auth
 def api_render():
@@ -942,6 +1267,69 @@ def api_render():
         return jsonify(error="Need at least 2 photos to render."), 400
     start_render()
     return jsonify(ok=True)
+
+
+@app.route("/api/capture", methods=["POST"])
+@require_auth
+def api_capture():
+    """Take a photo right now, using the same light-hold and exposure as the
+    timelapse so it lines up with the grid and growth analysis."""
+    if not capture_lock.acquire(blocking=False):
+        return jsonify(ok=False, error="A capture is already in progress."), 200
+    try:
+        with settings_lock:
+            cfg = dict(settings)
+        now = datetime.now(ZoneInfo(cfg["timezone"]))
+        path = take_photo(cfg, now)
+    finally:
+        capture_lock.release()
+    if not path:
+        return jsonify(ok=False, error="Capture failed; check the camera and the log."), 200
+    # analyze growth in the background so the response returns as soon as the
+    # photo is on disk; the dashboard can refresh the snapshot immediately
+    threading.Thread(target=record_growth, args=(path, cfg, now),
+                     daemon=True).start()
+    return jsonify(ok=True, photo=path.name)
+
+
+@app.route("/api/preview", methods=["POST"])
+@require_auth
+def api_preview():
+    """Grab a quick full-frame still for camera alignment. Not saved to the
+    timelapse, not logged, and the light is left as-is, so the dashboard can
+    poll it as a live-ish viewfinder while positioning the camera."""
+    if not capture_lock.acquire(blocking=False):
+        return jsonify(ok=False, busy=True), 200
+    try:
+        with settings_lock:
+            cw = int(settings.get("cam_width", 4608))
+            ch = int(settings.get("cam_height", 2592))
+        # half resolution keeps the full field of view but reads out faster
+        pw = max(2, (cw // 2) // 2 * 2)
+        ph = max(2, (ch // 2) // 2 * 2)
+        tmp = PREVIEW_PATH.with_suffix(".tmp.jpg")
+        cmd = ["rpicam-still", "-n", "-o", str(tmp), "-t", "500",
+               "--width", str(pw), "--height", str(ph)]
+        r = subprocess.run(cmd, capture_output=True, timeout=20)
+        if r.returncode != 0:
+            _camera_fail(r.stderr.decode(errors="replace")[-150:] or "preview failed")
+            return jsonify(ok=False,
+                           error="camera error; check the log"), 200
+        tmp.replace(PREVIEW_PATH)  # atomic, so a half-written frame is never served
+        _camera_ok()
+    except Exception as e:
+        _camera_fail(str(e))
+        return jsonify(ok=False, error=str(e)), 200
+    finally:
+        capture_lock.release()
+    return jsonify(ok=True, ts=int(time.time()))
+
+
+@app.route("/preview.jpg")
+def preview_img():
+    if not PREVIEW_PATH.exists():
+        return "no preview yet", 404
+    return send_file(PREVIEW_PATH, mimetype="image/jpeg")
 
 
 @app.route("/video")
@@ -956,28 +1344,41 @@ def video():
 def status():
     with state_lock:
         s = dict(state)
+        cam = dict(camera)
     with settings_lock:
         cfg = dict(settings)
     if s["on"] is None:
         return jsonify(error="warming up"), 503
     tz = ZoneInfo(cfg["timezone"])
     count, _, latest_time = photo_inventory()
+    snap = db.latest()                        # one query serves the whole response
+    stf = latest_soil_temp_f(snap)
+    pcal = cfg.get("probe_cal") or {}
+    sensors_out = {k: {"ts": ts,
+                       "value": (compensated_volts(v, pcal.get(k[6:]) or {}, stf)
+                                 if k.startswith("probe:") else v)}
+                   for k, (ts, v) in snap.items()}
     return jsonify(
         now=datetime.now(tz).isoformat(),
         brightness=s["brightness"],
+        light_override=s.get("override", cfg.get("light_override", "auto")),
+        manual_bright=cfg.get("manual_bright", 100),
         on=s["on"].isoformat(), off=s["off"].isoformat(),
         sunrise=s["sunrise"].isoformat(), sunset=s["sunset"].isoformat(),
         ramp=cfg["ramp_min"], max=cfg["max_bright"],
         gpio=GPIO_PIN, freq=PWM_FREQ, loop=LOOP_SECONDS,
         photo_count=count,
         latest_photo_time=latest_time.isoformat() if latest_time else None,
+        camera={"fails": cam["fails"], "last_err": cam["last_err"],
+                "last_ok": (datetime.fromtimestamp(cam["last_ok"], tz).isoformat()
+                            if cam["last_ok"] else None)},
         capturing=capturing,
         render=dict(render),
         video_time=(datetime.fromtimestamp(VIDEO_PATH.stat().st_mtime)
                     .isoformat() if VIDEO_PATH.exists() else None),
         settings=cfg,
-        sensors={k: {"ts": ts, "value": v}
-                 for k, (ts, v) in db.latest().items()},
+        probe_default_cal=PROBE_DEFAULT_CAL,
+        sensors=sensors_out,
         authed=is_authed(),
         auth_enabled=auth_enabled(),
         water={
@@ -1023,6 +1424,31 @@ def series():
     return jsonify(sensor=sensor, hours=hours, points=db.series(sensor, hours))
 
 
+@app.route("/api/series_all")
+def series_all():
+    """Every logged sensor's history in one request, so the chart grid doesn't
+    fire a request per card. Probe voltages are temperature-compensated here,
+    same as the live readings."""
+    try:
+        hours = max(1, min(24 * 90, int(request.args.get("hours", 168))))
+    except ValueError:
+        hours = 168
+    with settings_lock:
+        pcal = dict(settings.get("probe_cal") or {})
+    snap = db.latest()
+    stf = latest_soil_temp_f(snap)
+    out = {}
+    for k in snap.keys():
+        if k.startswith("growth_px:") or k == "float:tray":
+            continue                      # pixel counts and the float aren't charted
+        pts = db.series(k, hours)
+        if k.startswith("probe:"):
+            cal = pcal.get(k[6:]) or {}
+            pts = [[ts, compensated_volts(v, cal, stf)] for ts, v in pts]
+        out[k] = pts
+    return jsonify(hours=hours, series=out)
+
+
 @app.route("/api/settings", methods=["POST"])
 @require_auth
 def update_settings():
@@ -1040,6 +1466,9 @@ def update_settings():
         new["capture_interval_min"] = int(data["capture_interval_min"])
         new["capture_brightness"]   = int(data["capture_brightness"])
         new["roi"] = str(data.get("roi", "")).strip()
+        if "soil_temp_high_f" in data:
+            v = data.get("soil_temp_high_f")
+            new["soil_temp_high_f"] = max(0, min(150, int(v or 0)))
     except (KeyError, TypeError, ValueError):
         return jsonify(error="All fields are required and must be numbers "
                              "(timezone is text)."), 400

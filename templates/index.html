@@ -45,6 +45,21 @@
   <div class="pct"><b id="pct">--%</b><br><span style="font-size:12px;color:var(--leaf)">brightness</span></div>
 </div>
 
+<div class="card lightctl editonly" id="lightctl">
+  <div class="lcrow">
+    <span class="lclabel">Light</span>
+    <button type="button" class="lcbtn" id="lcauto" data-mode="auto">Auto</button>
+    <button type="button" class="lcbtn" id="lcon" data-mode="on">On</button>
+    <button type="button" class="lcbtn" id="lcoff" data-mode="off">Off</button>
+  </div>
+  <div class="lcslider" id="lcslider">
+    <input type="range" id="lcrange" min="0" max="100" step="1" value="100"
+           aria-label="Manual brightness" disabled>
+    <b id="lcval">100%</b>
+  </div>
+  <span id="lightinfo" role="status"></span>
+</div>
+
 <div class="card achart">
   <svg id="chart" viewBox="0 0 640 240" role="img" aria-label="Today's light curve"></svg>
 </div>
@@ -59,7 +74,7 @@
     <button type="button" id="genreport">Generate now</button>
     <label class="aitog"><input type="checkbox" id="aienabled"> Daily report</label>
     <label class="aihrwrap">at <input type="time" id="aitime" aria-label="Daily report time"></label>
-    <span id="reportinfo"></span>
+    <span id="reportinfo" role="status"></span>
   </div>
   <div id="reportbody"><p class="rmuted">No report yet.</p></div>
 </div>
@@ -70,11 +85,18 @@
 
 <div class="card asnap" id="photocard" style="display:none">
   <h2>&#128247; Latest snapshot</h2>
+  <div id="camwarn" class="camwarn" style="display:none" role="alert"></div>
   <div class="imgwrap">
     <img id="photo" alt="Latest seedling photo">
     <svg id="gridsvg" viewBox="0 0 1000 1000" preserveAspectRatio="none" style="display:none"></svg>
+    <svg id="guidesvg" viewBox="0 0 1000 1000" preserveAspectRatio="none" style="display:none"></svg>
   </div>
   <div id="photoinfo"></div>
+  <div class="capctl editonly">
+    <button type="button" id="capturebtn">&#128247; Take photo</button>
+    <button type="button" id="alignbtn">&#127919; Align</button>
+    <span id="captureinfo" role="status" class="muted"></span>
+  </div>
   <div class="gridctl editonly">
     <label><input type="checkbox" id="gridshow"> Show cell grid</label>
     <button type="button" id="gridlock">&#128274; Lock grid</button>
@@ -119,24 +141,49 @@
     <span class="u">s</span>
     <span id="pumpinfo"></span>
   </div>
-  <div class="drycal editonly" id="drycal" style="display:none">
-    <span class="schip">Camera moisture</span>
-    <button type="button" id="calwet">Set wet 100%</button>
-    <button type="button" id="caldry">Set dry 0%</button>
-    <span id="calinfo"></span>
-  </div>
-  <div class="chartctl">
-    <select id="chartsensor" aria-label="Sensor to chart"></select>
+  <div id="chartgrid"></div>
+  <div class="chartctl chartctl-bottom">
     <span class="ranges" id="ranges">
       <button type="button" data-h="24">24h</button>
       <button type="button" data-h="168" class="on">7d</button>
       <button type="button" data-h="720">30d</button>
     </span>
-    <span id="chartinfo"></span>
+    <span id="chartinfo" role="status"></span>
   </div>
-  <svg id="histchart" viewBox="0 0 720 240" preserveAspectRatio="none"
-       role="img" aria-label="Sensor history"></svg>
+  <details class="calwrap editonly">
+    <summary>Calibration &amp; maintenance</summary>
+  <div class="drycal editonly" id="drycal" style="display:none">
+    <span class="schip">Camera moisture</span>
+    <button type="button" id="calwet">Set wet 100%</button>
+    <button type="button" id="caldry">Set dry 0%</button>
+    <span id="calinfo" role="status"></span>
+  </div>
+  <div class="drycal editonly" id="probecal" style="display:none">
+    <span class="schip">Probe moisture</span>
+    <b>Tray 1</b>
+    <button type="button" id="probewet1">Set wet</button>
+    <button type="button" id="probedry1">Set dry</button>
+    <b>Tray 2</b>
+    <button type="button" id="probewet2">Set wet</button>
+    <button type="button" id="probedry2">Set dry</button>
+    <span id="probecalinfo" role="status"></span>
+  </div>
+  <div class="drycal editonly" id="probetc" style="display:none">
+    <span class="schip">Temp drift</span>
+    <button type="button" id="tc1">Check tray 1</button>
+    <button type="button" id="tc2">Check tray 2</button>
+    <span id="probetcinfo" role="status"></span>
+  </div>
+  </details>
   <div id="charttip"></div>
+</div>
+
+<div class="card atrays" id="traycard">
+  <h2>&#127793; Planting map</h2>
+  <div id="trayswrap"></div>
+  <div class="trayctl editonly">
+    <span id="trayinfo" role="status"></span>
+  </div>
 </div>
 
 <details class="card aset editonly">
@@ -159,8 +206,10 @@
       <div><label>Photo brightness (%) <input name="capture_brightness" type="number" min="1" max="100" required></label></div>
       <div class="tzrow"><label>Photo crop x,y,w,h (fractions, blank = full frame)
         <input name="roi" type="text" placeholder="0.22,0.08,0.57,0.82"></label></div>
+      <div><label>Soil temp warning (&deg;F, 0 = off)
+        <input name="soil_temp_high_f" type="number" min="0" max="150"></label></div>
     </div>
-    <button type="submit">Save &amp; replant</button><span id="msg"></span>
+    <button type="submit">Save &amp; replant</button><span id="msg" role="status"></span>
   </form>
 </details>
 

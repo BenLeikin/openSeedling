@@ -69,6 +69,9 @@
     display:block;background:#dfe9d4;min-height:160px}
   .imgwrap{position:relative;line-height:0}
   #gridsvg{position:absolute;inset:0;width:100%;height:100%;touch-action:none;cursor:crosshair}
+  #guidesvg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+  #guidesvg line{stroke:rgba(255,255,255,.8);stroke-width:1.5;vector-effect:non-scaling-stroke}
+  #alignbtn.on{background:#b23b3b}
   .gh{fill:#e8b04b;stroke:#27432e;stroke-width:3}
   .gc{cursor:pointer}
   .glbl{fill:#fff;font:700 26px Georgia,serif;paint-order:stroke;stroke:#1d3324;stroke-width:4px}
@@ -79,6 +82,8 @@
   .gridctl input[type=number]{width:54px}
   .gridctl input[type=checkbox]{width:auto}
   #photoinfo{font-size:13px;color:var(--leaf);margin-top:8px}
+  .capctl{display:flex;align-items:center;gap:12px;margin-top:10px}  .capctl button{margin-top:0;padding:6px 14px}
+  .capctl .muted{font-size:13px;color:var(--leaf)}
   .pctrl{display:flex;align-items:center;gap:12px;margin-top:12px}
   .pctrl button{margin-top:0;padding:8px 16px;white-space:nowrap}
   .pctrl input[type=range]{flex:1;width:auto;margin:0;padding:0;border:0;
@@ -114,6 +119,7 @@
     .glayout{display:grid;grid-template-columns:0.7fr 1.6fr;gap:14px;
       grid-template-areas:
         "left media"
+        "tray tray"
         "sens sens"
         "set  set";
       align-items:start}
@@ -121,6 +127,7 @@
     /* left column: cards packed to the top, no stretching into empty space */
     .aleft{grid-area:left;display:flex;flex-direction:column;gap:14px;align-self:start}
     .amedia{grid-area:media;display:flex;flex-direction:column;gap:14px;align-self:start}
+    .atrays{grid-area:tray}
     .asensors{grid-area:sens}
     .aset{grid-area:set}
     /* report card fills to the media column's bottom; body scrolls for overflow */
@@ -133,8 +140,6 @@
   }
 
 /* ---- sensors card ---- */
-.banner{background:#fdf3d6;border:1px solid #e8c96a;color:#7a5a13;
-  padding:8px 12px;border-radius:8px;font-size:13px;margin-bottom:12px}
 .sreadout{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px}
 .sgroup{flex:1 1 200px;min-width:170px}
 .sgroup h3{margin:0 0 6px;font-size:13px;color:var(--leaf);font-weight:700;
@@ -146,12 +151,11 @@
 .schip .u{color:var(--leaf);font-size:12px}
 .chartctl{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-bottom:8px}
 .chartctl select{width:auto;min-width:160px;margin-top:0}
+#chartinfo{font-size:12px;color:var(--leaf)}
 .ranges button{margin:0 0 0 4px;padding:5px 12px;background:#eef4e6;color:var(--leaf);
   border:1px solid var(--line)}
 .ranges button.on{background:var(--leaf);color:#fff;border-color:var(--leaf)}
 #chartinfo{font-size:12px;color:var(--leaf)}
-#histchart{width:100%;height:auto;background:#f6faf1;border:1px solid var(--line);
-  border-radius:10px}
 .gmoist{fill:#1d3324;font:700 17px sans-serif;paint-order:stroke;
   stroke:#eafff0;stroke-width:3px}
 
@@ -226,3 +230,164 @@ body.gridlocked .gridedit{display:none}
 #charttip{position:fixed;display:none;pointer-events:none;z-index:50;
   background:#2f4030;color:#eafff0;font-size:12px;padding:4px 8px;border-radius:6px;
   white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.25)}
+
+/* manual light override */
+.lightctl{display:flex;flex-direction:column;gap:8px;font-size:13px}
+.lightctl .lcrow{display:flex;align-items:center;gap:8px}
+.lightctl .lclabel{font-weight:600;color:var(--leaf)}
+.lightctl button.lcbtn{margin-top:0;padding:5px 14px;font-size:13px;
+  background:#eef4e6;color:var(--leaf);
+  border:1.5px solid transparent}          /* border always present, so the
+                                              selected state can't resize it */
+.lightctl button.lcbtn.on{background:var(--leaf);color:#fff;
+  border-color:var(--leaf)}
+.lightctl .lcslider{display:flex;align-items:center;gap:10px;width:100%}
+.lightctl .lcslider input[type=range]{flex:1;accent-color:var(--leaf);margin:0;
+  min-width:0}
+.lightctl .lcslider b{width:46px;flex:none;text-align:right;color:var(--leaf);
+  font-size:13px;font-variant-numeric:tabular-nums}  /* fixed cell + even digit
+                                                        widths: no jitter */
+.lightctl .lcslider.dim{opacity:.4}
+.lightctl .lcslider.dim input[type=range]{cursor:not-allowed}
+.lightctl #lightinfo{color:var(--leaf);font-size:12px;
+  min-height:15px;line-height:15px}        /* space reserved whether or not the
+                                              hold message is showing */
+
+/* ---- chart grid: all sensors at once ---- */
+.csection{margin-top:14px}
+.csection h3{margin:0 0 8px;font-size:13px;font-weight:700;color:var(--leaf);
+  text-transform:uppercase;letter-spacing:.04em}
+.cgrid{display:grid;gap:10px;
+  grid-template-columns:repeat(auto-fill,minmax(240px,1fr))}
+.ccard{background:#f6faf1;border:1px solid var(--line);border-radius:10px;
+  padding:8px 10px 4px}
+.chead{display:flex;justify-content:space-between;align-items:baseline;gap:8px;
+  font-size:12px;font-weight:600;color:var(--ink);margin-bottom:4px}
+.chead .cunit{font-weight:400;color:var(--leaf);margin-left:3px;font-size:11px}
+.chead .cstats{font-weight:400;color:var(--leaf);font-size:11px;white-space:nowrap;
+  font-variant-numeric:tabular-nums}
+.chead .cstats b{color:var(--ink)}
+svg.cmini{width:100%;height:96px;display:block;cursor:crosshair}
+@media (max-width:700px){
+  .cgrid{grid-template-columns:1fr}
+  svg.cmini{height:110px}
+}
+
+/* ---- planting map ---- */
+.tray{margin-top:10px}
+.tray-head{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.tray-head b{font-size:14px;color:var(--leaf)}
+.tray-head .tsum{font-size:12px;color:var(--leaf);font-weight:400}
+.tgrid{display:grid;gap:6px}
+.tcell{background:#f6faf1;border:1px solid var(--line);border-radius:8px;
+  padding:6px 7px;display:flex;flex-direction:column;gap:4px;min-height:78px}
+.tcell.filled{background:#eef6e6;border-color:#cdddc0}
+.tcell .tid{font-size:10px;font-weight:700;color:var(--leaf);letter-spacing:.04em;
+  display:flex;justify-content:space-between;align-items:center}
+.tcell .tage{font-weight:400;font-size:10px;color:#7a8a72}
+.tcell input{width:100%;margin:0;padding:3px 5px;font-size:12px;
+  border:1px solid var(--line);border-radius:5px;background:#fff}
+.tcell input.tseed{font-weight:600}
+.tcell input.tequip{font-style:italic}
+.tcell input.tdate{font-size:11px;color:var(--leaf)}
+body.readonly .tcell input{background:#f6faf1;border-color:transparent;
+  pointer-events:none}
+.trayctl{margin-top:10px;font-size:12px;color:var(--leaf);min-height:16px}
+@media (max-width:700px){ .tcell{min-height:auto} }
+.chead .cstats b.hot{color:#b5322f}
+
+/* =================== production polish layer =================== */
+/* interactive states: one consistent language for every control */
+button{transition:background-color .15s ease,color .15s ease,
+  border-color .15s ease,transform .06s ease,box-shadow .15s ease}
+button:hover:not(:disabled){filter:brightness(1.05)}
+button:active:not(:disabled){transform:translateY(1px)}
+button:disabled{opacity:.55;cursor:not-allowed}
+input,select{transition:border-color .15s ease,box-shadow .15s ease}
+input:focus,select:focus{border-color:var(--leaf);outline:none;
+  box-shadow:0 0 0 3px rgba(74,124,89,.15)}
+/* keyboard focus is always visible, without doubling up on mouse clicks */
+:focus-visible{outline:2px solid var(--leaf);outline-offset:2px}
+button:focus:not(:focus-visible){outline:none}
+
+/* cards: subtle lift on the interactive ones only */
+.ccard,.tcell{transition:border-color .15s ease,box-shadow .15s ease}
+.ccard:hover{border-color:#cdddc0;box-shadow:0 1px 4px rgba(46,64,42,.06)}
+.tcell:focus-within{border-color:var(--leaf);
+  box-shadow:0 0 0 3px rgba(74,124,89,.12)}
+
+/* status/info lines: consistent size, never cause reflow */
+#captureinfo,#probecalinfo,#probetcinfo,#trayinfo,#calinfo,#chartinfo{
+  min-height:15px;display:inline-block}
+
+/* report body scrollbar: subtle, matches the palette */
+#reportbody{scrollbar-width:thin;scrollbar-color:#cdddc0 transparent}
+#reportbody::-webkit-scrollbar{width:8px}
+#reportbody::-webkit-scrollbar-thumb{background:#cdddc0;border-radius:4px}
+
+/* small screens: control rows wrap instead of overflowing */
+@media (max-width:700px){
+  .capctl,.gridctl,.drycal,.chartctl,.lcrow{flex-wrap:wrap}
+  .tgrid{gap:5px}
+  .tcell{padding:5px 6px}
+  button{padding:8px 14px}   /* comfortable touch targets */
+}
+
+.chartctl-bottom{margin:12px 0 0;justify-content:center}
+.calwrap{margin-top:12px;border-top:1px solid var(--line);padding-top:10px}
+.calwrap summary{cursor:pointer;font-size:13px;font-weight:600;color:var(--leaf);
+  list-style-position:inside;user-select:none}
+.calwrap summary:hover{filter:brightness(1.1)}
+.calwrap .drycal{margin-top:10px}
+
+/* =================== flourish layer =================== */
+/* moisture chips carry their own fill level as a background bar */
+.schip[data-fill]{position:relative;overflow:hidden;isolation:isolate}
+.schip[data-fill]::before{content:"";position:absolute;inset:0;z-index:-1;
+  background:linear-gradient(90deg,rgba(120,170,110,.28) var(--fill,0%),transparent var(--fill,0%));
+  transition:background .6s ease}
+
+/* the light card glows with the actual brightness (--lum set from status) */
+.aphase{--lum:0;box-shadow:0 0 calc(34px * var(--lum)) calc(2px * var(--lum))
+  rgba(246,196,78,calc(.55 * var(--lum)));
+  transition:box-shadow 1.2s ease}
+
+/* chart lines draw themselves in when (re)rendered */
+@keyframes drawline{from{stroke-dashoffset:1}to{stroke-dashoffset:0}}
+polyline.cline{stroke-dasharray:1;stroke-dashoffset:0;
+  animation:drawline .9s ease-out}
+
+/* cards ease in on first paint, gently staggered down the page */
+@keyframes cardin{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.glayout .card{animation:cardin .45s ease backwards}
+.glayout .card:nth-child(2){animation-delay:.05s}
+.glayout .card:nth-child(3){animation-delay:.1s}
+.aleft .card:nth-child(2){animation-delay:.07s}
+.aleft .card:nth-child(3){animation-delay:.14s}
+.amedia .card:nth-child(2){animation-delay:.1s}
+.asensors{animation-delay:.18s}
+.atrays{animation-delay:.22s}
+
+/* section headers grow a vine underline on hover */
+.card h2{position:relative;display:inline-block}
+.card h2::after{content:"";position:absolute;left:0;bottom:-3px;height:2px;width:0;
+  background:linear-gradient(90deg,var(--leaf),#9db648);border-radius:2px;
+  transition:width .35s ease}
+.card:hover h2::after{width:100%}
+
+/* motion off for those who ask for it */
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{transition:none !important;animation:none !important}
+}
+
+/* ---- camera / data health ---- */
+.camwarn{border-radius:9px;padding:8px 12px;font-size:13px;margin-bottom:10px;line-height:1.45}
+.camwarn.err{background:#fdeceb;border:1px solid #e8b6b3;color:#8a2d2a}
+.camwarn.amber{background:#fdf3d6;border:1px solid #e8c96a;color:#7a5a13}
+.camwarn .camerr{font-family:ui-monospace,monospace;font-size:11px;opacity:.85}
+#photo.camdead{filter:grayscale(.7) brightness(.92)}
+.schip.stale{opacity:.55}
+.schip.stale b::after{content:" \26A0";font-size:10px}
+.stalebadge{background:#fdf3d6;border:1px solid #e8c96a;color:#7a5a13;
+  border-radius:4px;padding:0 5px;font-size:10px;font-weight:600;vertical-align:1px}
+svg.cmini.cstale polyline.cline{stroke:#a8b5a0;opacity:.75}

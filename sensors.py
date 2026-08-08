@@ -16,19 +16,24 @@ Build one type at a time and verify before moving on.
 
 Hardware plan (all on the Pi's I2C bus, pins 3=SDA / 5=SCL, plus 1-Wire on
 GPIO4 / pin 7):
-  - 10x capacitive soil moisture  -> 3x ADS1115 ADC @ 0x48, 0x49, 0x4A
+  - 2x capacitive soil moisture (one per tray) -> ADS1115 ADC @ 0x48 (A0, A1)
   - BME280 air temp + humidity    -> 0x76
   - BH1750 ambient lux            -> 0x23
   - 5x DS18B20 soil temp          -> 1-Wire, /sys/bus/w1/devices/28-*
 """
 
 
+import glob
+import os
+import statistics
+import time
+
 # Flip these to True as each sensor type is wired and its _read_* filled in.
+# (Moisture probes have their own PROBE_ENABLED below.)
 ENABLED = {
-    "moisture": False,
     "air": False,      # BME280 temp + humidity
     "lux": False,      # BH1750
-    "soil_temp": False,
+    "soil_temp": True,   # DS18B20 on 1-Wire (GPIO4); auto-detects attached probes
 }
 
 # --- float switch (destination tray; reports raw switch state) ---
@@ -37,7 +42,7 @@ ENABLED = {
 # state so you can verify the mapping by hand, then mount/flip the float so
 # "tray full" lands on the fail-safe (broken-wire) state.
 FLOAT_PIN = 23
-FLOAT_ENABLED = False
+FLOAT_ENABLED = True
 _float_dev = None
 _float_init = False
 
@@ -73,37 +78,85 @@ def read_float():
         return None
 
 
-# Which ADS board + channel each cell's moisture probe lands on, and that
-# probe's calibration endpoints (raw counts in air vs in water). Filled in
-# during wiring + calibration; until then stub mode ignores this.
-#   "B2": {"addr": 0x48, "chan": 0, "dry": 26500, "wet": 12000}
-MOISTURE_MAP = {}
+# Two capacitive soil-moisture probes, one per seedling tray, on a single
+# ADS1115 at 0x48: tray 1 -> A0, tray 2 -> A1. read_probes() returns raw ADC
+# counts; wet/dry calibration and the %-conversion live in the app so they can
+# be set from the dashboard and persisted.
+PROBE_ENABLED = True
+PROBE_ADDR = 0x48
+PROBE_BUS = 1                       # /dev/i2c-1, the Pi's primary I2C bus
+PROBE_CHANNELS = {"1": 0, "2": 1}   # tray -> ADS1115 channel (A0, A1)
+_probe_chans = None
+_probe_init = False
 
 
 # --------------------------- moisture (ADS1115) ---------------------------
 
-def _moist_pct(raw, dry, wet):
-    """Capacitive probes read HIGH (dry) to LOW (wet). Map to 0-100%."""
-    if dry == wet:
+def _probes():
+    global _probe_chans, _probe_init
+    if _probe_init:
+        return _probe_chans
+    _probe_init = True
+    if not PROBE_ENABLED:
         return None
-    pct = (dry - raw) / (dry - wet) * 100.0
-    return max(0.0, min(100.0, pct))
+    try:
+        from adafruit_ads1x15.ads1115 import ADS1115
+        from adafruit_ads1x15.analog_in import AnalogIn
+        try:
+            # Address /dev/i2c-1 directly. Blinka's busio probe sometimes fails
+            # to see a board that i2cdetect finds; this path is reliable.
+            from adafruit_extended_bus import ExtendedI2C
+            i2c = ExtendedI2C(PROBE_BUS)
+        except ImportError:
+            import board
+            import busio
+            i2c = busio.I2C(board.SCL, board.SDA)
+        adc = ADS1115(i2c, address=PROBE_ADDR)
+        adc.gain = 1  # +/-4.096V full scale, covers a 3.3V sensor
+        _probe_chans = {t: AnalogIn(adc, ch) for t, ch in PROBE_CHANNELS.items()}
+    except Exception as e:
+        print(f"ADS1115 unavailable ({e}); moisture probes disabled")
+        _probe_chans = None
+    return _probe_chans
 
 
-def _read_moisture():
+def read_probes(samples=8):
+    """Median probe voltage per tray, e.g. {'probe:1': 1.883, 'probe:2': 1.844}.
+    Capacitive probes read low in wet soil, high in dry. A median of several
+    samples rejects switching noise from the light supply; a single read
+    catches whatever is on the line at that instant. Absent if the ADC is not
+    present. Conversion to a percentage happens in the app."""
+    chans = _probes()
+    if not chans:
+        return {}
     out = {}
-    if not ENABLED["moisture"] or not MOISTURE_MAP:
-        return out
-    # TODO (wire-up): real read via adafruit_ads1x15.
-    #   import board, busio
-    #   from adafruit_ads1x15.ads1115 import ADS1115
-    #   from adafruit_ads1x15.analog_in import AnalogIn
-    #   i2c = busio.I2C(board.SCL, board.SDA)
-    #   adcs = {a: ADS1115(i2c, address=a) for a in {0x48,0x49,0x4A}}
-    #   for cell, m in MOISTURE_MAP.items():
-    #       raw = AnalogIn(adcs[m["addr"]], m["chan"]).value
-    #       out[f"moisture:{cell}"] = _moist_pct(raw, m["dry"], m["wet"])
+    for tray, ch in chans.items():
+        try:
+            vals = [ch.voltage for _ in range(max(1, samples))]
+            out[f"probe:{tray}"] = round(statistics.median(vals), 4)
+        except Exception as e:
+            print(f"probe {tray} read error: {e}")
     return out
+
+
+def probe_spread(tray, samples=10, delay=0.2):
+    """Sample one probe repeatedly and return (median, spread). Used by
+    calibration: a wide spread means noise on the analog run, and an anchor
+    captured from it will be junk."""
+    chans = _probes()
+    if not chans or tray not in chans:
+        return None, None
+    ch = chans[tray]
+    vals = []
+    for _ in range(max(2, samples)):
+        try:
+            vals.append(ch.voltage)
+        except Exception:
+            pass
+        time.sleep(delay)
+    if len(vals) < 2:
+        return None, None
+    return round(statistics.median(vals), 4), round(max(vals) - min(vals), 4)
 
 
 # ----------------------------- air (BME280) -------------------------------
@@ -132,15 +185,37 @@ def _read_lux():
 # -------------------------- soil temp (DS18B20) ---------------------------
 
 def _read_soil_temps():
+    """Every DS18B20 on the 1-Wire bus, in Celsius (the dashboard converts to F,
+    matching the other temp: keys). Probes appear in sysfs
+    as /sys/bus/w1/devices/28-*; each w1_slave read carries a CRC line, and a
+    failed CRC (usually a wiring or pull-up problem) is dropped rather than
+    logged as a bogus temperature. Keys are stable per probe serial, so adding
+    a second probe later won't renumber the first."""
     if not ENABLED["soil_temp"]:
         return {}
-    # TODO (wire-up): read each 1-Wire probe from sysfs.
-    #   import glob
-    #   for i, dev in enumerate(sorted(glob.glob('/sys/bus/w1/devices/28-*')), 1):
-    #       raw = open(dev + '/w1_slave').read()
-    #       if 't=' in raw:
-    #           out[f"temp:soil_{i}"] = int(raw.split('t=')[1]) / 1000.0
-    return {}
+    out = {}
+    devs = sorted(glob.glob("/sys/bus/w1/devices/28-*"))
+    for dev in devs:
+        serial = os.path.basename(dev)
+        # single probe reads as "soil"; multiples get a serial suffix so the
+        # key never shifts when probes are added or reordered
+        key = "temp:soil" if len(devs) == 1 else f"temp:soil_{serial[-4:]}"
+        try:
+            with open(f"{dev}/w1_slave") as f:
+                lines = f.readlines()
+            if len(lines) < 2 or not lines[0].strip().endswith("YES"):
+                print(f"{serial}: CRC failed, skipping")
+                continue
+            if "t=" not in lines[1]:
+                continue
+            c = int(lines[1].split("t=")[1]) / 1000.0
+            if c in (85.0, -127.0):   # power-on default / disconnected
+                print(f"{serial}: bogus reading {c}C, skipping")
+                continue
+            out[key] = round(c, 2)   # Celsius; the dashboard converts to F
+        except Exception as e:
+            print(f"{serial}: read error ({e})")
+    return out
 
 
 # ------------------------------------------------------------------------- #
@@ -160,7 +235,7 @@ def read_all():
     fv = read_float()
     if fv is not None:
         out["float:tray"] = fv
-    for fn in (_read_moisture, _read_air, _read_lux, _read_soil_temps):
+    for fn in (read_probes, _read_air, _read_lux, _read_soil_temps):
         try:
             out.update(fn())
         except Exception as e:
