@@ -55,8 +55,14 @@ the watering controls, and the daily AI plant-health report.*
 | Signal | GPIO | Physical pin | Notes |
 | --- | --- | --- | --- |
 | Light PWM | 18 | 12 | Hardware PWM, 1 kHz, to the light MOSFET gate |
-| Pump | 24 | 18 | To the pump MOSFET gate (needs a separate 5 V brick + common ground) |
-| Float | 23 | 16 | Internal pull-up; other leg to GND. Disabled until wired (`FLOAT_ENABLED` in `sensors.py`) |
+| Pump tray 1 | 24 | 18 | To that pump's MOSFET gate (separate 5 V brick + common ground) |
+| Pump tray 2 | 26 | 37 | Second pump MOSFET gate, same supply rules |
+| Float tray 1 | 23 | 16 | Internal pull-up; other leg to GND (`FLOAT_ENABLED` in `sensors.py`) |
+| Float tray 2 | 22 | 15 | Internal pull-up; other leg to GND |
+
+Pin overrides: set `GROWLIGHT_PUMP_PINS="1:24,2:26"` or `GROWLIGHT_FLOAT_PINS="1:23,2:22"`
+in the systemd unit (`Environment=`) to move a pump or float off a bad GPIO without
+editing code. Restart the service to apply; the journal prints the pins in use.
 | I2C SDA | 2 | 3 | To ADS1115 SDA (soil moisture ADC) |
 | I2C SCL | 3 | 5 | To ADS1115 SCL |
 
@@ -283,7 +289,7 @@ Read endpoints are open; mutating ones require a session when a password is set.
 | POST | `/api/trays` | Save the planting map (what's sown in each cell) |
 | POST | `/api/render` | Render the timelapse MP4 |
 | POST | `/api/capture` | Take a photo now |
-| POST | `/api/pump` | Timed dose or fill-to-float |
+| POST | `/api/pump` | Timed dose or fill-to-float, per tray (`tray: "1"|"2"`) |
 | POST | `/api/ai_settings`, `/api/report` | AI report config / generate now |
 | POST | `/api/login`, `/api/logout` | Auth |
 

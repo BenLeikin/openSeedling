@@ -119,8 +119,8 @@
     .glayout{display:grid;grid-template-columns:0.7fr 1.6fr;gap:14px;
       grid-template-areas:
         "left media"
-        "tray tray"
         "sens sens"
+        "tray tray"
         "set  set";
       align-items:start}
     .glayout .card{margin-bottom:0}
@@ -391,3 +391,68 @@ polyline.cline{stroke-dasharray:1;stroke-dashoffset:0;
 .stalebadge{background:#fdf3d6;border:1px solid #e8c96a;color:#7a5a13;
   border-radius:4px;padding:0 5px;font-size:10px;font-weight:600;vertical-align:1px}
 svg.cmini.cstale polyline.cline{stroke:#a8b5a0;opacity:.75}
+.waterctl .wtray{font-weight:700;font-size:13px;color:var(--leaf);min-width:52px}
+#waterctl{display:flex;flex-direction:column;gap:8px}
+
+.ptrend{font-size:10px;font-weight:600;margin-left:5px;padding:0 5px;border-radius:4px;
+  background:#eef4e6;color:var(--leaf);white-space:nowrap}
+.ptrend.down{background:#fdeceb;color:#8a2d2a}
+.ptrend.up{background:#eaf5e4;color:#2e6b32}
+.schip.dli.ok b{color:#2e6b32}
+.schip.dli.low b{color:#8a6a13}
+.schip.dli.high b{color:#8a2d2a}
+
+/* ---- settings: grouped sections ---- */
+.fgroup{margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid var(--line)}
+.fgroup:last-of-type{border-bottom:0;padding-bottom:4px}
+.fgroup>h3{font-size:12px;font-weight:700;color:var(--leaf);text-transform:uppercase;
+  letter-spacing:.05em;margin:0 0 4px}
+.fhint{font-size:12px;color:#7a8a72;margin:0 0 10px;line-height:1.45}
+.fgroup .frow{margin-bottom:0}
+.fgroup .checkrow{margin-top:6px}
+.fgroup .checkrow label{font-size:14px;color:var(--fir)}
+.tzrow .fhint{margin-top:4px}
+
+/* ---- empty states ---- */
+.emptystate{background:#f6faf1;border:1px dashed var(--line);border-radius:10px;
+  padding:14px 16px;color:var(--leaf);font-size:13px;line-height:1.5}
+.emptystate b{display:block;color:var(--fir);font-size:14px;margin-bottom:4px}
+.emptystate p{margin:0}
+.emptystate code{background:#eef4e6;padding:1px 5px;border-radius:4px;font-size:12.5px}
+
+/* ---- density: the section you act on gets more room ---- */
+.csection.primary .cgrid{grid-template-columns:repeat(auto-fill,minmax(300px,1fr))}
+.csection.primary svg.cmini{height:132px}
+.csection.primary .chead{font-size:13px}
+.csection:not(.primary) svg.cmini{height:84px}
+.csection:not(.primary) .cgrid{grid-template-columns:repeat(auto-fill,minmax(210px,1fr))}
+@media (max-width:700px){
+  .csection.primary .cgrid,.csection:not(.primary) .cgrid{grid-template-columns:1fr}
+  .csection.primary svg.cmini{height:120px}
+  .csection:not(.primary) svg.cmini{height:96px}
+}
+
+/* left column pulls its weight on wide screens: light + water read as one panel */
+@media (min-width:1100px){
+  .aleft{gap:12px}
+  .aleft .card{padding:16px}
+  .aphase .phase{gap:12px}
+}
+
+/* ---- camera off: reclaim the media column instead of leaving a gap ---- */
+body.nocam .amedia{display:none}
+@media (min-width:1100px){
+  body.nocam .glayout{
+    grid-template-columns:1fr;
+    grid-template-areas:
+      "left"
+      "sens"
+      "tray"
+      "set";
+  }
+  /* the left column is now full width, so let its cards sit side by side */
+  body.nocam .aleft{flex-direction:row;flex-wrap:wrap;align-items:stretch}
+  body.nocam .aleft>.card{flex:1 1 300px;margin-bottom:0}
+  body.nocam .aleft>.aphase{flex:1 1 260px}
+  body.nocam .achart{flex:2 1 420px}
+}

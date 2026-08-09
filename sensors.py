@@ -31,8 +31,8 @@ import time
 # Flip these to True as each sensor type is wired and its _read_* filled in.
 # (Moisture probes have their own PROBE_ENABLED below.)
 ENABLED = {
-    "air": False,      # BME280 temp + humidity
-    "lux": False,      # BH1750
+    "air": True,       # BME280/BMP280 air temp (+ humidity, + pressure)
+    "lux": True,       # BH1750 ambient light
     "soil_temp": True,   # DS18B20 on 1-Wire (GPIO4); auto-detects attached probes
 }
 
@@ -41,82 +41,97 @@ ENABLED = {
 # other leg to GND, internal pull-up. read_float() reports the raw contact
 # state so you can verify the mapping by hand, then mount/flip the float so
 # "tray full" lands on the fail-safe (broken-wire) state.
-FLOAT_PIN = 23
+# Float GPIOs (BCM). Override via GROWLIGHT_FLOAT_PINS="1:23,2:22" if you
+# need to move one off a bad pin without editing code.
+FLOAT_PINS = {"1": 23, "2": 22}   # tray -> BCM pin (physical 16, 15)
+_fp = os.environ.get("GROWLIGHT_FLOAT_PINS", "").strip()
+if _fp:
+    try:
+        FLOAT_PINS = {a.strip(): int(b) for a, b in
+                      (part.split(":") for part in _fp.split(","))}
+        print(f"float pins from environment: {FLOAT_PINS}")
+    except Exception as _e:
+        print(f"GROWLIGHT_FLOAT_PINS unreadable ({_e}); using {FLOAT_PINS}")
 FLOAT_ENABLED = True
-_float_dev = None
+_float_devs = {}
 _float_init = False
 
 
-def _float():
-    global _float_dev, _float_init
+def _floats():
+    global _float_devs, _float_init
     if _float_init:
-        return _float_dev
+        return _float_devs
     _float_init = True
     if not FLOAT_ENABLED:
-        return None
+        return _float_devs
     try:
         from gpiozero import Button
-        # pull_up=True -> is_pressed is True when the pin is pulled LOW
-        # (switch closed to GND). Open circuit / broken wire -> not pressed.
-        _float_dev = Button(FLOAT_PIN, pull_up=True, bounce_time=0.1)
     except Exception as e:
-        print(f"float switch unavailable ({e}); reporting unknown")
-        _float_dev = None
-    return _float_dev
+        print(f"float switches unavailable ({e}); reporting unknown")
+        return _float_devs
+    for tray, pin in FLOAT_PINS.items():
+        try:
+            _float_devs[tray] = Button(pin, pull_up=True, bounce_time=0.1)
+        except Exception as e:
+            print(f"float {tray} (GPIO{pin}) unavailable ({e}); reporting unknown")
+    return _float_devs
 
 
-def read_float():
-    """Raw switch state: 1.0 = closed (pin low), 0.0 = open (pin high or
-    broken wire), None = no sensor. Interpretation (which state means 'full')
-    is decided during mounting; see FLOAT_ENABLED comment."""
-    dev = _float()
+def read_float(tray="1"):
+    """One tray's float contact: 1.0 closed (not full), 0.0 open (full),
+    None if that switch isn't available. Open=full is the fail-safe sense:
+    a broken wire reads full and refuses to pump."""
+    dev = _floats().get(str(tray))
     if dev is None:
         return None
     try:
         return 1.0 if dev.is_pressed else 0.0
-    except Exception:
+    except Exception as e:
+        print(f"float {tray} read error: {e}")
         return None
 
 
-# Two capacitive soil-moisture probes, one per seedling tray, on a single
-# ADS1115 at 0x48: tray 1 -> A0, tray 2 -> A1. read_probes() returns raw ADC
-# counts; wet/dry calibration and the %-conversion live in the app so they can
-# be set from the dashboard and persisted.
-PROBE_ENABLED = True
-PROBE_ADDR = 0x48
-PROBE_BUS = 1                       # /dev/i2c-1, the Pi's primary I2C bus
-PROBE_CHANNELS = {"1": 0, "2": 1}   # tray -> ADS1115 channel (A0, A1)
+def read_floats():
+    """All wired floats, e.g. {'float:1': 1.0, 'float:2': 0.0}."""
+    out = {}
+    for tray in FLOAT_PINS:
+        v = read_float(tray)
+        if v is not None:
+            out[f"float:{tray}"] = v
+    return out
+
+
+PROBE_BUS = 1            # /dev/i2c-1 (pins 3/5)
+PROBE_ADDR = 0x48        # ADS1115, ADDR tied to GND
+PROBE_CHANNELS = {"1": 0, "2": 1}   # tray -> ADS input (probe 1 -> A0, 2 -> A1)
+
 _probe_chans = None
 _probe_init = False
 
 
-# --------------------------- moisture (ADS1115) ---------------------------
-
 def _probes():
+    """ADS1115 channels per tray, initialized once. Uses ExtendedI2C on bus 1:
+    the plain Blinka bus probe has missed devices that i2cdetect sees, and the
+    extended path talks to the kernel device directly. Gain 1 covers the
+    probes' 0-3.3 V output. Returns {} if the ADC or libraries are absent, so
+    a bare Pi (or the sandbox) runs without probes rather than crashing."""
     global _probe_chans, _probe_init
     if _probe_init:
-        return _probe_chans
+        return _probe_chans or {}
     _probe_init = True
-    if not PROBE_ENABLED:
-        return None
     try:
-        from adafruit_ads1x15.ads1115 import ADS1115
+        import adafruit_ads1x15.ads1115 as ADS
         from adafruit_ads1x15.analog_in import AnalogIn
-        try:
-            # Address /dev/i2c-1 directly. Blinka's busio probe sometimes fails
-            # to see a board that i2cdetect finds; this path is reliable.
-            from adafruit_extended_bus import ExtendedI2C
-            i2c = ExtendedI2C(PROBE_BUS)
-        except ImportError:
-            import board
-            import busio
-            i2c = busio.I2C(board.SCL, board.SDA)
-        adc = ADS1115(i2c, address=PROBE_ADDR)
-        adc.gain = 1  # +/-4.096V full scale, covers a 3.3V sensor
-        _probe_chans = {t: AnalogIn(adc, ch) for t, ch in PROBE_CHANNELS.items()}
+        ads = ADS.ADS1115(_i2c(), address=PROBE_ADDR)
+        ads.gain = 1
+        # AnalogIn takes a plain channel number. Some driver versions also
+        # export P0..P3 constants, but they're just ints 0-3 and not all
+        # versions have them, so pass the integer directly.
+        _probe_chans = {tray: AnalogIn(ads, idx)
+                        for tray, idx in PROBE_CHANNELS.items()}
     except Exception as e:
         print(f"ADS1115 unavailable ({e}); moisture probes disabled")
-        _probe_chans = None
+        _probe_chans = {}
     return _probe_chans
 
 
@@ -161,25 +176,108 @@ def probe_spread(tray, samples=10, delay=0.2):
 
 # ----------------------------- air (BME280) -------------------------------
 
+_i2c_bus = None
+
+
+def _i2c():
+    """One shared I2C handle for the BME/BMP280 and BH1750. Prefers the
+    extended-bus path (same reliability reasoning as the ADS1115)."""
+    global _i2c_bus
+    if _i2c_bus is not None:
+        return _i2c_bus
+    try:
+        from adafruit_extended_bus import ExtendedI2C
+        _i2c_bus = ExtendedI2C(PROBE_BUS)
+    except ImportError:
+        import board
+        import busio
+        _i2c_bus = busio.I2C(board.SCL, board.SDA)
+    return _i2c_bus
+
+
+_air_dev = None
+_air_init = False
+_air_has_humidity = True
+
+
 def _read_air():
+    """BME280 (temp/humidity/pressure) or BMP280 (temp/pressure only); the two
+    ship on identical-looking boards at 0x76 or 0x77, so probe both addresses
+    and detect the variant by chip id (BME=0x60, BMP=0x58). Temps in Celsius."""
+    global _air_dev, _air_init, _air_has_humidity
     if not ENABLED["air"]:
         return {}
-    # TODO (wire-up): real read via adafruit_bme280 @ 0x76.
-    #   from adafruit_bme280 import basic as bme280
-    #   sensor = bme280.Adafruit_BME280_I2C(i2c, address=0x76)
-    #   return {"temp:air": sensor.temperature, "humidity": sensor.humidity}
-    return {}
+    if not _air_init:
+        _air_init = True
+        for addr in (0x76, 0x77):
+            try:
+                i2c = _i2c()
+                # read chip id first to pick the right driver
+                from adafruit_bus_device.i2c_device import I2CDevice
+                buf = bytearray(1)
+                with I2CDevice(i2c, addr) as dev:
+                    dev.write_then_readinto(bytes([0xD0]), buf)
+                chip = buf[0]
+                if chip == 0x60:          # BME280: has humidity
+                    from adafruit_bme280 import basic as bme280
+                    _air_dev = bme280.Adafruit_BME280_I2C(i2c, address=addr)
+                    _air_has_humidity = True
+                elif chip == 0x58:        # BMP280: no humidity
+                    import adafruit_bmp280
+                    _air_dev = adafruit_bmp280.Adafruit_BMP280_I2C(i2c, address=addr)
+                    _air_has_humidity = False
+                else:
+                    continue
+                print(f"air sensor: {'BME280' if _air_has_humidity else 'BMP280'} at {hex(addr)}")
+                break
+            except Exception:
+                continue
+        if _air_dev is None:
+            print("air sensor (BME/BMP280) not found at 0x76/0x77; disabled")
+    if _air_dev is None:
+        return {}
+    try:
+        out = {"temp:air": round(_air_dev.temperature, 2),
+               "pressure": round(_air_dev.pressure, 1)}
+        if _air_has_humidity:
+            out["humidity"] = round(_air_dev.relative_humidity, 1)
+        return out
+    except Exception as e:
+        print(f"air sensor read error: {e}")
+        return {}
 
 
 # ------------------------------ lux (BH1750) ------------------------------
 
+_lux_dev = None
+_lux_init = False
+
+
 def _read_lux():
+    """BH1750 ambient light, at 0x23 (ADDR low) or 0x5C (ADDR high)."""
+    global _lux_dev, _lux_init
     if not ENABLED["lux"]:
         return {}
-    # TODO (wire-up): real read via adafruit_bh1750 @ 0x23.
-    #   import adafruit_bh1750
-    #   return {"lux": adafruit_bh1750.BH1750(i2c).lux}
-    return {}
+    if not _lux_init:
+        _lux_init = True
+        for addr in (0x23, 0x5C):
+            try:
+                import adafruit_bh1750
+                _lux_dev = adafruit_bh1750.BH1750(_i2c(), address=addr)
+                _lux_dev.lux  # probe read
+                print(f"lux sensor: BH1750 at {hex(addr)}")
+                break
+            except Exception:
+                _lux_dev = None
+        if _lux_dev is None:
+            print("lux sensor (BH1750) not found at 0x23/0x5C; disabled")
+    if _lux_dev is None:
+        return {}
+    try:
+        return {"lux": round(_lux_dev.lux, 1)}
+    except Exception as e:
+        print(f"lux read error: {e}")
+        return {}
 
 
 # -------------------------- soil temp (DS18B20) ---------------------------
@@ -232,10 +330,7 @@ def read_all():
     independently and wrapped so one failed device never aborts the rest;
     failures and not-yet-wired types are simply absent from the result."""
     out = {}
-    fv = read_float()
-    if fv is not None:
-        out["float:tray"] = fv
-    for fn in (read_probes, _read_air, _read_lux, _read_soil_temps):
+    for fn in (read_probes, read_floats, _read_air, _read_lux, _read_soil_temps):
         try:
             out.update(fn())
         except Exception as e:
@@ -245,4 +340,9 @@ def read_all():
 
 if __name__ == "__main__":
     for k, v in sorted(read_all().items()):
-        print(f"  {k:18s} {v}")
+        if k.startswith("temp:"):
+            print(f"  {k:18s} {v * 9 / 5 + 32:.1f} F   ({v} C)")
+        elif k.startswith("probe:"):
+            print(f"  {k:18s} {v} V")
+        else:
+            print(f"  {k:18s} {v}")

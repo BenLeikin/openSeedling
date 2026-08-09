@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Seedling Light</title>
-<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css', v=v) }}">
 </head>
 <body>
 <header>
@@ -132,15 +132,7 @@
 <div class="card asensors" id="sensorcard" style="display:none">
   <h2>&#128202; Sensors</h2>
   <div class="sreadout" id="sreadout"></div>
-  <div class="waterctl editonly" id="waterctl" style="display:none">
-    <span class="schip">Float <b id="floatstate">--</b></span>
-    <span class="schip">Pump today <b id="pumptoday">0</b><span class="u">s</span></span>
-    <button type="button" id="fillbtn">Fill to float</button>
-    <button type="button" id="pumpbtn">Test pump</button>
-    <input type="number" id="pumpsecs" value="3" min="1" max="20" aria-label="Pump seconds">
-    <span class="u">s</span>
-    <span id="pumpinfo"></span>
-  </div>
+  <div class="editonly" id="waterctl" style="display:none"></div>
   <div id="chartgrid"></div>
   <div class="chartctl chartctl-bottom">
     <span class="ranges" id="ranges">
@@ -181,6 +173,12 @@
 <div class="card atrays" id="traycard">
   <h2>&#127793; Planting map</h2>
   <div id="trayswrap"></div>
+  <div class="emptystate" id="trayhint" style="display:none">
+    <b>Nothing planted yet.</b>
+    <p>Type a seed name into any cell to start the map. Add the sow date and the
+      dashboard tracks days since planting, and the daily report uses it instead of
+      guessing what is growing where.</p>
+  </div>
   <div class="trayctl editonly">
     <span id="trayinfo" role="status"></span>
   </div>
@@ -189,26 +187,60 @@
 <details class="card aset editonly">
   <summary><h2>&#127807; Settings</h2></summary>
   <form id="cfgform">
-    <div class="frow">
-      <div><label>Latitude <input name="latitude" type="number" step="0.0001" min="-90" max="90" required></label></div>
-      <div><label>Longitude <input name="longitude" type="number" step="0.0001" min="-180" max="180" required></label></div>
-      <div class="tzrow"><label>Timezone <select name="timezone" required>
-        {% for z in tzs %}<option value="{{ z }}">{{ z }}</option>{% endfor %}
-      </select></label></div>
-      <div><label>Max brightness (%) <input name="max_bright" type="number" min="1" max="100" required></label></div>
-      <div><label>Ramp length (min) <input name="ramp_min" type="number" min="0" max="240" required></label></div>
-      <div><label>Sunrise offset (min) <input name="sunrise_offset_min" type="number" min="-360" max="360" required></label></div>
-      <div><label>Sunset offset (min) <input name="sunset_offset_min" type="number" min="-360" max="360" required></label></div>
-      <div class="checkrow"><input type="checkbox" name="capture_enabled" id="capen">
-        <label for="capen" style="font-size:14px;color:var(--fir)">Timelapse camera</label></div>
-      <div></div>
-      <div><label>Photo interval (min) <input name="capture_interval_min" type="number" min="5" max="720" required></label></div>
-      <div><label>Photo brightness (%) <input name="capture_brightness" type="number" min="1" max="100" required></label></div>
-      <div class="tzrow"><label>Photo crop x,y,w,h (fractions, blank = full frame)
-        <input name="roi" type="text" placeholder="0.22,0.08,0.57,0.82"></label></div>
-      <div><label>Soil temp warning (&deg;F, 0 = off)
-        <input name="soil_temp_high_f" type="number" min="0" max="150"></label></div>
+
+    <div class="fgroup">
+      <h3>Location &amp; schedule</h3>
+      <p class="fhint">Sunrise and sunset are computed from your coordinates; offsets shift the
+        light window either side of them.</p>
+      <div class="frow">
+        <div><label>Latitude <input name="latitude" type="number" step="0.0001" min="-90" max="90" required></label></div>
+        <div><label>Longitude <input name="longitude" type="number" step="0.0001" min="-180" max="180" required></label></div>
+        <div class="tzrow"><label>Timezone <select name="timezone" required>
+          {% for z in tzs %}<option value="{{ z }}">{{ z }}</option>{% endfor %}
+        </select></label></div>
+        <div><label>Sunrise offset (min) <input name="sunrise_offset_min" type="number" min="-360" max="360" required></label></div>
+        <div><label>Sunset offset (min) <input name="sunset_offset_min" type="number" min="-360" max="360" required></label></div>
+      </div>
     </div>
+
+    <div class="fgroup">
+      <h3>Light</h3>
+      <div class="frow">
+        <div><label>Max brightness (%) <input name="max_bright" type="number" min="1" max="100" required></label></div>
+        <div><label>Ramp length (min) <input name="ramp_min" type="number" min="0" max="240" required></label></div>
+      </div>
+    </div>
+
+    <div class="fgroup">
+      <h3>Camera</h3>
+      <div class="frow">
+        <div class="checkrow"><input type="checkbox" name="camera_enabled" id="camen">
+          <label for="camen">Camera features (photos, timelapse, AI report)</label></div>
+        <div class="checkrow"><input type="checkbox" name="capture_enabled" id="capen">
+          <label for="capen">Timelapse capture</label></div>
+        <div><label>Photo interval (min) <input name="capture_interval_min" type="number" min="5" max="720" required></label></div>
+        <div><label>Photo brightness (%) <input name="capture_brightness" type="number" min="1" max="100" required></label></div>
+        <div class="tzrow"><label>Photo crop x,y,w,h (fractions, blank = full frame)
+          <input name="roi" type="text" placeholder="0.22,0.08,0.57,0.82"></label></div>
+      </div>
+    </div>
+
+    <div class="fgroup">
+      <h3>Display &amp; thresholds</h3>
+      <div class="frow">
+        <div><label>Units
+          <select name="units">
+            <option value="imperial">Imperial (&deg;F, inHg)</option>
+            <option value="metric">Metric (&deg;C, hPa)</option>
+          </select></label></div>
+        <div><label>Soil temp warning (<span id="threshlbl">&deg;F</span>, 0 = off)
+          <input name="soil_temp_high_f" type="number" min="0" max="150"></label></div>
+        <div class="tzrow"><label>Lux&rarr;PPFD factor (fixture spectrum, 0 = off)
+          <input name="lux_to_ppfd_k" type="number" min="0" max="200" step="1"></label>
+          <span class="fhint">~54 sunlight, ~60 mixed red/blue/white panel, ~72 white LED.</span></div>
+      </div>
+    </div>
+
     <button type="submit">Save &amp; replant</button><span id="msg" role="status"></span>
   </form>
 </details>
@@ -217,6 +249,6 @@
 
 <footer id="cfg"></footer>
 
-<script src="{{ url_for('static', filename='app.js') }}"></script>
+<script src="{{ url_for('static', filename='app.js', v=v) }}"></script>
 </body>
 </html>

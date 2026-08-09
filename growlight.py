@@ -51,11 +51,19 @@ DEFAULTS = {
     "ramp_min": 30,            # minutes
     "light_override": "auto",  # auto = follow the sun schedule; on|off = manual hold
     "manual_bright": 100,      # brightness held when light_override is "on"
+    "units": "imperial",       # "imperial" (F, inHg) or "metric" (C, hPa);
+                               #   storage stays Celsius/hPa either way
+    "lux_to_ppfd_k": 60,       # lux -> PPFD divisor; set for your fixture's
+                               #   spectrum (0 = hide PPFD/DLI). ~60 suits a
+                               #   white-dominant mixed red/blue/white panel.
     "soil_temp_high_f": 90,    # warning line on the soil temp chart; 0 disables.
                                #   Chiles germinate best ~85F and drop off above
                                #   ~90-95F; seedlings prefer 70-80F once up.
     "sunrise_offset_min": 0,   # negative starts before sunrise
     "sunset_offset_min": 0,    # positive runs past sunset
+    "camera_enabled": False,   # master switch for all camera features (photos,
+                               #   timelapse, camera vision, AI report). Off until
+                               #   a working camera is connected.
     "capture_enabled": False,
     "capture_interval_min": 30,
     "capture_brightness": 100,  # light level held during each photo
@@ -115,20 +123,32 @@ THUMB_DIR     = TIMELAPSE_DIR / "thumbs"
 TIMELAPSE_DIR.mkdir(exist_ok=True)
 THUMB_DIR.mkdir(exist_ok=True)
 
-# --- pump actuator (gpiozero, guarded so off-Pi / unwired stays safe) ---
-PUMP_PIN = 24  # BCM; physical pin 18
-try:
-    from gpiozero import OutputDevice
-    _pump = OutputDevice(PUMP_PIN, active_high=True, initial_value=False)
-    PUMP_HW = True
-except Exception as _e:
-    _pump = None
-    PUMP_HW = False
-    print(f"pump GPIO unavailable ({_e}); pump control disabled")
+# --- pump actuators (gpiozero, guarded so off-Pi / unwired stays safe) ---
+# Pump GPIOs (BCM). Override without editing code by setting GROWLIGHT_PUMP_PINS,
+# e.g. GROWLIGHT_PUMP_PINS="1:24,2:26" in the systemd unit, then restart.
+PUMP_PINS = {"1": 24, "2": 26}   # tray -> BCM (physical 18, 37)
+_pp = os.environ.get("GROWLIGHT_PUMP_PINS", "").strip()
+if _pp:
+    try:
+        PUMP_PINS = {t.strip(): int(v) for t, v in
+                     (part.split(":") for part in _pp.split(","))}
+        print(f"pump pins from environment: {PUMP_PINS}")
+    except Exception as _e:
+        print(f"GROWLIGHT_PUMP_PINS unreadable ({_e}); using {PUMP_PINS}")
+_pumps = {}
+for _t, _pin in PUMP_PINS.items():
+    try:
+        from gpiozero import OutputDevice
+        _pumps[_t] = OutputDevice(_pin, active_high=True, initial_value=False)
+    except Exception as _e:
+        print(f"pump {_t} GPIO{_pin} unavailable ({_e}); disabled")
+PUMP_HW = bool(_pumps)
 
-pump_state = {"running": False, "last_run": 0.0,
-              "today_seconds": 0.0, "day": "", "last_detail": ""}
-pump_lock = threading.Lock()
+def _blank_pump():
+    return {"running": False, "last_run": 0.0,
+            "today_seconds": 0.0, "day": "", "last_detail": ""}
+pump_state = {t: _blank_pump() for t in PUMP_PINS}
+pump_lock = threading.Lock()   # also serializes the two pumps: one at a time
 
 settings = dict(DEFAULTS)
 if CONFIG_PATH.exists():
@@ -276,85 +296,90 @@ def _today_str():
     return datetime.now(ZoneInfo(settings["timezone"])).date().isoformat()
 
 
-def run_pump(seconds, reason="manual", force=False):
-    """Run the pump for `seconds`, clamped to the hard cap. Safety: refuses if
-    hardware is absent, if already running, or (unless forced) if the daily cap
-    would be exceeded. Blocks for the duration, so call it in a thread.
+def run_pump(tray, seconds, reason="manual", force=False):
+    """Run one tray's pump for `seconds`, clamped to the hard cap. Safety:
+    refuses if that pump is absent, if any pump is running (one at a time, the
+    two share a supply), or (unless forced) if the tray's daily cap would be
+    exceeded. Blocks for the duration, so call it in a thread.
     Returns (ok, message). Logs every run as a pump event."""
+    tray = str(tray)
     with settings_lock:
         cap = float(settings.get("pump_max_seconds", 20))
         daily_cap = float(settings.get("pump_daily_max_seconds", 180))
     secs = max(0.0, min(float(seconds), cap))
     with pump_lock:
-        if not PUMP_HW:
-            return False, "pump hardware not available"
-        if pump_state["running"]:
-            return False, "pump already running"
-        if pump_state["day"] != _today_str():
-            pump_state["day"] = _today_str()
-            pump_state["today_seconds"] = 0.0
-        if not force and pump_state["today_seconds"] + secs > daily_cap:
-            return False, "daily pump limit reached"
-        pump_state["running"] = True
+        if tray not in _pumps:
+            return False, f"pump {tray} hardware not available"
+        if any(st["running"] for st in pump_state.values()):
+            return False, "a pump is already running"
+        st = pump_state[tray]
+        if st["day"] != _today_str():
+            st["day"] = _today_str()
+            st["today_seconds"] = 0.0
+        if not force and st["today_seconds"] + secs > daily_cap:
+            return False, f"tray {tray} daily pump limit reached"
+        st["running"] = True
     elapsed = 0.0
     try:
-        _pump.on()
+        _pumps[tray].on()
         t0 = time.time()
         time.sleep(secs)
         elapsed = time.time() - t0
     finally:
-        _pump.off()
+        _pumps[tray].off()
         with pump_lock:
-            pump_state["running"] = False
-            pump_state["last_run"] = time.time()
-            pump_state["today_seconds"] += elapsed
-            pump_state["last_detail"] = f"{reason} {elapsed:.1f}s"
+            st["running"] = False
+            st["last_run"] = time.time()
+            st["today_seconds"] += elapsed
+            st["last_detail"] = f"{reason} {elapsed:.1f}s"
     try:
-        db.log_event("pump", f"{reason} {elapsed:.1f}s")
+        db.log_event("pump", f"tray {tray}: {reason} {elapsed:.1f}s")
     except Exception:
         pass
     return True, f"ran {elapsed:.1f}s"
 
 
-def run_pump_until_full(reason="fill", force=False):
+def run_pump_until_full(tray, reason="fill", force=False):
     """Run the pump until the float reads full, then stop. A hard time cap is
     the backstop: if the float never trips within fill_max_seconds the pump
     stops anyway and the run is flagged, because that means the source is empty,
     the tube is off, or the float failed. Float reading None (sensor lost) is
     treated as 'stop' (fail-safe). Blocks; call in a thread. Logs the run."""
+    tray = str(tray)
     with settings_lock:
         cap = float(settings.get("fill_max_seconds", 60))
         daily_cap = float(settings.get("pump_daily_max_seconds", 180))
     with pump_lock:
-        if not PUMP_HW:
-            return False, "pump hardware not available"
-        if pump_state["running"]:
-            return False, "pump already running"
-        if pump_state["day"] != _today_str():
-            pump_state["day"] = _today_str()
-            pump_state["today_seconds"] = 0.0
-        f0 = sensors.read_float()
+        if tray not in _pumps:
+            return False, f"pump {tray} hardware not available"
+        if any(st["running"] for st in pump_state.values()):
+            return False, "a pump is already running"
+        st = pump_state[tray]
+        if st["day"] != _today_str():
+            st["day"] = _today_str()
+            st["today_seconds"] = 0.0
+        f0 = sensors.read_float(tray)
         if f0 is None and not force:
-            return False, "no float sensor; refusing to fill blind"
+            return False, f"no float sensor on tray {tray}; refusing to fill blind"
         if f0 is not None and f0 < 1:
-            return False, "tray already full"
-        remaining = daily_cap - pump_state["today_seconds"]
+            return False, f"tray {tray} already full"
+        remaining = daily_cap - st["today_seconds"]
         if not force and remaining <= 0:
-            return False, "daily pump limit reached"
+            return False, f"tray {tray} daily pump limit reached"
         run_cap = cap if force else min(cap, remaining)
-        pump_state["running"] = True
+        st["running"] = True
     elapsed = 0.0
     tripped = False
     confirm = 0                              # consecutive "full" reads needed
     CONFIRM_NEEDED = 4                        # ~0.4s steady, rejects slosh/bobble
     try:
-        _pump.on()
+        _pumps[tray].on()
         t0 = time.time()
         while True:
             elapsed = time.time() - t0
             if elapsed >= run_cap:
                 break                        # cap hit, float never stayed full
-            fv = sensors.read_float()
+            fv = sensors.read_float(tray)
             if fv is None or fv < 1:         # full (open) or sensor lost
                 confirm += 1
                 if confirm >= CONFIRM_NEEDED:
@@ -364,14 +389,14 @@ def run_pump_until_full(reason="fill", force=False):
                 confirm = 0                  # a not-full read resets the count
             time.sleep(0.1)                  # poll the float ~10x/sec
     finally:
-        _pump.off()
+        _pumps[tray].off()
         with pump_lock:
-            pump_state["running"] = False
-            pump_state["last_run"] = time.time()
-            pump_state["today_seconds"] += elapsed
-            detail = (f"{reason}: full at {elapsed:.1f}s" if tripped
-                      else f"{reason}: STOPPED at {elapsed:.1f}s cap, no float trip")
-            pump_state["last_detail"] = detail
+            st["running"] = False
+            st["last_run"] = time.time()
+            st["today_seconds"] += elapsed
+            detail = (f"tray {tray} {reason}: full at {elapsed:.1f}s" if tripped
+                      else f"tray {tray} {reason}: STOPPED at {elapsed:.1f}s cap, no float trip")
+            st["last_detail"] = detail
     try:
         db.log_event("pump", detail)
     except Exception:
@@ -474,6 +499,29 @@ def estimate_temp_comp(tray, hours=48):
             "span": round(max(xs) - min(xs), 1)}
 
 
+def _units():
+    with settings_lock:
+        return settings.get("units", "imperial")
+
+
+def temp_out(c):
+    """Celsius storage -> the configured display unit."""
+    return round(c if _units() == "metric" else c * 9 / 5 + 32, 1)
+
+
+def temp_unit():
+    return "C" if _units() == "metric" else "F"
+
+
+def press_out(hpa):
+    return round(hpa if _units() == "metric" else hpa * 0.0295299830714,
+                 0 if _units() == "metric" else 2)
+
+
+def press_unit():
+    return "hPa" if _units() == "metric" else "inHg"
+
+
 def gather_report_data():
     """Assemble the controller snapshot the AI report is built from."""
     with settings_lock:
@@ -485,7 +533,7 @@ def gather_report_data():
     cal = cfg.get("dryness_cal") or {}
     pcal = cfg.get("probe_cal") or {}
     pnames = cfg.get("probe_names") or {}
-    cam, raw, growth, probes, soiltemp = {}, {}, {}, {}, {}
+    cam, raw, growth, probes, soiltemp, env = {}, {}, {}, {}, {}, {}
     snap = db.latest()
     stf = latest_soil_temp_f(snap)
     for k, (ts, v) in snap.items():
@@ -505,9 +553,18 @@ def gather_report_data():
                 probes[nm] = round(v, 3)
         elif k.startswith("temp:soil"):
             label = "Soil" if k == "temp:soil" else f"Soil {k.split('_')[-1]}"
-            soiltemp[label] = round(v * 9 / 5 + 32, 1)   # report in F
-    fv = sensors.read_float()
-    flabel = "no sensor" if fv is None else ("not full" if fv >= 1 else "full")
+            soiltemp[label] = temp_out(v)
+        elif k == "temp:air":
+            env["air_f"] = temp_out(v)
+        elif k == "pressure":
+            env["pressure"] = press_out(v)
+        elif k in ("humidity", "lux"):
+            env[k] = round(v, 1)
+    fstates = {}
+    for _t in sensors.FLOAT_PINS:
+        _fv = sensors.read_float(_t)
+        fstates[_t] = "no sensor" if _fv is None else ("not full" if _fv >= 1 else "full")
+    flabel = ", ".join(f"tray {t}: {v}" for t, v in sorted(fstates.items()))
     grid = cfg.get("grid") or {}
     planting = {}
     for tid, t in sorted((cfg.get("trays") or {}).items()):
@@ -542,7 +599,12 @@ def gather_report_data():
         "camera_moisture": cam, "dryness_raw": raw, "growth": growth,
         "probe_moisture": probes,
         "soil_temp_f": soiltemp,
+        "environment": env,
+        "pressure_trend": pressure_tendency(),
+        "light_metrics": {"ppfd": ppfd_from_lux((snap.get("lux") or (None, None))[1]),
+                          "dli": dli_today()},
         "planting": planting,
+        "units": {"temp": temp_unit(), "press": press_unit()},
         "float": flabel,
         "pump_today_s": round(pump_state.get("today_seconds", 0.0), 1),
         "pump_last": pump_state.get("last_detail") or "none",
@@ -553,6 +615,9 @@ def gather_report_data():
 def run_report(reason="daily"):
     """Generate one AI report: gather data + latest photo, call the API, store
     the result, and push the summary. Serialized via report_lock."""
+    with settings_lock:
+        if not settings.get("camera_enabled"):
+            return {"ok": False, "error": "camera features are disabled in settings"}
     with report_lock:
         if report_state["generating"]:
             return {"ok": False, "error": "a report is already being generated"}
@@ -644,7 +709,8 @@ def report_loop():
         try:
             with settings_lock:
                 cfg = dict(settings)
-            if cfg.get("ai_enabled") and ai_report.have_key() and clock_synced():
+            if (cfg.get("ai_enabled") and cfg.get("camera_enabled")
+                    and ai_report.have_key() and clock_synced()):
                 tz = ZoneInfo(cfg["timezone"])
                 now = datetime.now(tz)
                 target = (int(cfg.get("ai_report_hour", 8)) * 60
@@ -816,7 +882,7 @@ def capture_loop():
             make_thumb(missing)
         with settings_lock:
             cfg = dict(settings)
-        if cfg["capture_enabled"]:
+        if cfg.get("camera_enabled") and cfg["capture_enabled"]:
             tz = ZoneInfo(cfg["timezone"])
             now = datetime.now(tz)
             with state_lock:
@@ -1042,7 +1108,7 @@ def api_report_run():
 
 @app.route("/api/float")
 def api_float():
-    return jsonify(float=sensors.read_float())
+    return jsonify(floats={t: sensors.read_float(t) for t in sensors.FLOAT_PINS})
 
 
 @app.route("/api/login", methods=["POST"])
@@ -1066,9 +1132,20 @@ def logout():
     return jsonify(ok=True, authed=False)
 
 
+def _asset_ver():
+    """Static asset version from file mtimes: browsers refetch app.js/style.css
+    the moment either changes, so a deploy can never leave a stale script
+    running against new markup."""
+    try:
+        st = Path(app.static_folder)
+        return int(max((st / f).stat().st_mtime for f in ("app.js", "style.css")))
+    except Exception:
+        return 0
+
+
 @app.route("/")
 def index():
-    return render_template("index.html", tzs=TIMEZONES)
+    return render_template("index.html", tzs=TIMEZONES, v=_asset_ver())
 
 
 @app.route("/photo/latest")
@@ -1274,6 +1351,9 @@ def api_render():
 def api_capture():
     """Take a photo right now, using the same light-hold and exposure as the
     timelapse so it lines up with the grid and growth analysis."""
+    with settings_lock:
+        if not settings.get("camera_enabled"):
+            return jsonify(ok=False, error="camera features are disabled in settings"), 200
     if not capture_lock.acquire(blocking=False):
         return jsonify(ok=False, error="A capture is already in progress."), 200
     try:
@@ -1298,6 +1378,9 @@ def api_preview():
     """Grab a quick full-frame still for camera alignment. Not saved to the
     timelapse, not logged, and the light is left as-is, so the dashboard can
     poll it as a live-ish viewfinder while positioning the camera."""
+    with settings_lock:
+        if not settings.get("camera_enabled"):
+            return jsonify(ok=False, error="camera features are disabled in settings"), 200
     if not capture_lock.acquire(blocking=False):
         return jsonify(ok=False, busy=True), 200
     try:
@@ -1354,10 +1437,12 @@ def status():
     snap = db.latest()                        # one query serves the whole response
     stf = latest_soil_temp_f(snap)
     pcal = cfg.get("probe_cal") or {}
+    cam_on = bool(cfg.get("camera_enabled"))
     sensors_out = {k: {"ts": ts,
                        "value": (compensated_volts(v, pcal.get(k[6:]) or {}, stf)
                                  if k.startswith("probe:") else v)}
-                   for k, (ts, v) in snap.items()}
+                   for k, (ts, v) in snap.items()
+                   if cam_on or not (k.startswith("dry:") or k.startswith("growth:"))}
     return jsonify(
         now=datetime.now(tz).isoformat(),
         brightness=s["brightness"],
@@ -1379,15 +1464,25 @@ def status():
         settings=cfg,
         probe_default_cal=PROBE_DEFAULT_CAL,
         sensors=sensors_out,
+        pressure_tendency=pressure_tendency(),
+        light_metrics=(lambda lx: {
+            "k": lux_k(),
+            "ppfd": ppfd_from_lux(lx),
+            "dli": dli_today(),
+        } if lx is not None and lux_k() else None)(
+            (snap.get("lux") or (None, None))[1]),
         authed=is_authed(),
         auth_enabled=auth_enabled(),
         water={
-            "float": sensors.read_float(),
             "pump_hw": PUMP_HW,
-            "pump_running": pump_state["running"],
-            "pump_last": pump_state["last_detail"],
-            "today_seconds": round(pump_state["today_seconds"], 1),
             "auto_water": cfg.get("auto_water", False),
+            "trays": {t: {
+                "float": sensors.read_float(t),
+                "pump_hw": t in _pumps,
+                "running": pump_state[t]["running"],
+                "last": pump_state[t]["last_detail"],
+                "today_seconds": round(pump_state[t]["today_seconds"], 1),
+            } for t in PUMP_PINS},
         },
     )
 
@@ -1395,21 +1490,24 @@ def status():
 @app.route("/api/pump", methods=["POST"])
 @require_auth
 def pump_test():
-    if not PUMP_HW:
-        return jsonify(ok=False, error="pump hardware not available"), 200
     data = request.get_json(silent=True) or {}
+    tray = str(data.get("tray", "1"))
+    if tray not in PUMP_PINS:
+        return jsonify(ok=False, error="tray must be 1 or 2"), 200
+    if tray not in _pumps:
+        return jsonify(ok=False, error=f"pump {tray} hardware not available"), 200
     try:
         secs = float(data.get("seconds", 3))
     except (TypeError, ValueError):
         secs = 3.0
     force = bool(data.get("force", False))
     if data.get("until_full"):
-        threading.Thread(target=lambda: run_pump_until_full("fill", force),
+        threading.Thread(target=lambda: run_pump_until_full(tray, "fill", force),
                          daemon=True).start()
-        return jsonify(ok=True, started=True, mode="fill")
-    threading.Thread(target=lambda: run_pump(secs, "manual", force),
+        return jsonify(ok=True, started=True, mode="fill", tray=tray)
+    threading.Thread(target=lambda: run_pump(tray, secs, "manual", force),
                      daemon=True).start()
-    return jsonify(ok=True, started=True, mode="timed")
+    return jsonify(ok=True, started=True, mode="timed", tray=tray)
 
 
 @app.route("/api/series")
@@ -1422,6 +1520,95 @@ def series():
     if not sensor:
         return jsonify(error="sensor required"), 400
     return jsonify(sensor=sensor, hours=hours, points=db.series(sensor, hours))
+
+
+def pressure_tendency():
+    """Barometric trend, the way a barometer's 3-hour tendency works. Returns
+    the change over 3h and 24h in hPa plus a plain-language reading. Falling
+    pressure precedes unsettled weather; rising precedes clearing. Thresholds
+    follow the conventional 3-hour bands used in surface observation."""
+    pts = db.series("pressure", hours=26)
+    if len(pts) < 4:
+        return None
+    now_ts, now_v = pts[-1]
+
+    def value_at(hours_ago):
+        target = now_ts - hours_ago * 3600
+        best, bestd = None, 3600      # accept within an hour of the target
+        for ts, v in pts:
+            d = abs(ts - target)
+            if d < bestd:
+                best, bestd = v, d
+        return best
+
+    p3, p24 = value_at(3), value_at(24)
+    if p3 is None:
+        return None
+    d3 = round(now_v - p3, 1)
+    out = {"now": round(now_v, 1), "change_3h": d3,
+           "change_24h": round(now_v - p24, 1) if p24 is not None else None}
+    # conventional 3-hour tendency bands
+    if d3 <= -6:
+        words, arrow = "falling rapidly - expect a change", "down"
+    elif d3 <= -2:
+        words, arrow = "falling - unsettled ahead", "down"
+    elif d3 < -0.5:
+        words, arrow = "slowly falling", "down"
+    elif d3 < 0.5:
+        words, arrow = "steady", "flat"
+    elif d3 < 2:
+        words, arrow = "slowly rising", "up"
+    elif d3 < 6:
+        words, arrow = "rising - clearing", "up"
+    else:
+        words, arrow = "rising rapidly", "up"
+    out["words"], out["arrow"] = words, arrow
+    return out
+
+
+def lux_k():
+    """Lux -> PPFD divisor for this fixture's spectrum. Lux is weighted for
+    human vision and undercounts the deep red and royal blue a grow panel
+    emits, so the divisor is fixture-specific: ~54 sunlight, ~72 white LED,
+    ~60 for a white-dominant mixed panel. 0 disables the derived metrics."""
+    with settings_lock:
+        try:
+            return max(0.0, float(settings.get("lux_to_ppfd_k", 60)))
+        except (TypeError, ValueError):
+            return 60.0
+
+
+def ppfd_from_lux(lux):
+    k = lux_k()
+    if not k or lux is None:
+        return None
+    return round(lux / k, 1)
+
+
+def dli_today():
+    """Daily light integral so far today, in mol/m2/day: PPFD integrated over
+    time since local midnight. This is the number that actually tracks growth,
+    since it folds intensity and duration (ramps included) into one figure.
+    Trapezoidal over logged lux; gaps longer than 30 min are skipped rather
+    than interpolated, so downtime doesn't invent light that never fell."""
+    k = lux_k()
+    if not k:
+        return None
+    with settings_lock:
+        tz = ZoneInfo(settings["timezone"])
+    now = datetime.now(tz)
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    since = int(midnight.timestamp())
+    pts = [(ts, v) for ts, v in db.series("lux", hours=25) if ts >= since]
+    if len(pts) < 2:
+        return None
+    total = 0.0                       # micromol/m2 accumulated
+    for (t0, v0), (t1, v1) in zip(pts, pts[1:]):
+        dt = t1 - t0
+        if dt <= 0 or dt > 1800:      # gap: don't fill it in
+            continue
+        total += ((v0 + v1) / 2 / k) * dt
+    return round(total / 1_000_000, 2)      # micromol -> mol
 
 
 @app.route("/api/series_all")
@@ -1438,14 +1625,21 @@ def series_all():
     snap = db.latest()
     stf = latest_soil_temp_f(snap)
     out = {}
+    with settings_lock:
+        camera_on = bool(settings.get("camera_enabled"))
     for k in snap.keys():
-        if k.startswith("growth_px:") or k == "float:tray":
+        if k.startswith("growth_px:") or k.startswith("float:"):
             continue                      # pixel counts and the float aren't charted
+        if not camera_on and (k.startswith("dry:") or k.startswith("growth:")):
+            continue                      # camera vision paused; hide its series
         pts = db.series(k, hours)
         if k.startswith("probe:"):
             cal = pcal.get(k[6:]) or {}
             pts = [[ts, compensated_volts(v, cal, stf)] for ts, v in pts]
         out[k] = pts
+    k = lux_k()
+    if k and "lux" in out:
+        out["ppfd"] = [[ts, round(v / k, 1)] for ts, v in out["lux"]]
     return jsonify(hours=hours, series=out)
 
 
@@ -1463,9 +1657,18 @@ def update_settings():
         new["sunrise_offset_min"] = int(data["sunrise_offset_min"])
         new["sunset_offset_min"]  = int(data["sunset_offset_min"])
         new["capture_enabled"]      = bool(data["capture_enabled"])
+        if "camera_enabled" in data:
+            new["camera_enabled"] = bool(data["camera_enabled"])
         new["capture_interval_min"] = int(data["capture_interval_min"])
         new["capture_brightness"]   = int(data["capture_brightness"])
         new["roi"] = str(data.get("roi", "")).strip()
+        if data.get("units") in ("imperial", "metric"):
+            new["units"] = data["units"]
+        if "lux_to_ppfd_k" in data:
+            try:
+                new["lux_to_ppfd_k"] = max(0.0, min(200.0, float(data["lux_to_ppfd_k"] or 0)))
+            except (TypeError, ValueError):
+                pass
         if "soil_temp_high_f" in data:
             v = data.get("soil_temp_high_f")
             new["soil_temp_high_f"] = max(0, min(150, int(v or 0)))

@@ -312,11 +312,22 @@ function fillForm(cfg){
   for(const k of ['latitude','longitude','timezone','max_bright','ramp_min',
                   'sunrise_offset_min','sunset_offset_min',
                   'capture_interval_min','capture_brightness','roi',
-                  'soil_temp_high_f'])
+                  'lux_to_ppfd_k'])
     if(f.elements[k] && document.activeElement!==f.elements[k])
       f.elements[k].value=cfg[k];
+  {const u=f.elements['units'];
+   if(u&&document.activeElement!==u){u.value=cfg.units||'imperial';units=u.value;}
+   const th=f.elements['soil_temp_high_f'];
+   if(th&&document.activeElement!==th){
+     const fv=+cfg.soil_temp_high_f||0;
+     th.value=fv?Math.round(tFromF(fv)):0;
+   }
+   const lbl=document.getElementById('threshlbl');
+   if(lbl)lbl.innerHTML=tUnit();}
   if(document.activeElement!==f.elements['capture_enabled'])
     f.elements['capture_enabled'].checked=!!cfg['capture_enabled'];
+  if(f.elements['camera_enabled']&&document.activeElement!==f.elements['camera_enabled'])
+    f.elements['camera_enabled'].checked=!!cfg['camera_enabled'];
 }
 
 let frames=[],fidx=0,ptimer=null;
@@ -346,6 +357,7 @@ function togglePlay(){
   },125);
 }
 async function loadFrames(){
+  if(window._camOn===false)return;
   try{
     const r=await fetch('/api/photos');const j=await r.json();
     const had=frames.length;
@@ -460,7 +472,7 @@ function initAuth(){
 
 // ---------------- sensors: readout, chart, overlay ----------------
 let sensorData={};
-let sampleMin=5, capMin=30, capOn=false, camHealth=null;
+let sampleMin=5, capMin=30, capOn=false, camHealth=null, presTrend=null, lightMetrics=null;
 let dryCal={};                 // per-cell {wet,dry} brightness anchors
 let probeCal={}, probeNames={}, probeDefaultCal=null;   // per-tray anchors, labels, fallback
 function probePct(c, v){
@@ -483,15 +495,32 @@ function camMoisture(cell, b){
 }
 let chartHours=168;
 
+let units='imperial';
+function isMetric(){return units==='metric';}
 function c2f(c){return c*9/5+32;}
+// display helpers: storage stays Celsius / hPa, only presentation switches
+function tDisp(c){return isMetric()?c:c*9/5+32;}
+function tUnit(){return isMetric()?'\u00b0C':'\u00b0F';}
+function tFromF(f){return isMetric()?(f-32)*5/9:f;}   // an F-stored setting, shown
+function tToF(v){return isMetric()?v*9/5+32:v;}       // ...and read back
+function pDisp(hpa){return isMetric()?hpa:hpa*0.0295299830714;}
+function pUnit(){return isMetric()?'hPa':'inHg';}
+function pDec(){return isMetric()?0:2;}
 // key -> {group, label, value, unit}
 function sensorMeta(key, val){
-  if(key==='temp:air')   return {group:'Environment', label:'Air',      value:c2f(val).toFixed(1), unit:'\u00b0F'};
+  if(key==='temp:air')   return {group:'Environment', label:'Air',      value:tDisp(val).toFixed(1), unit:tUnit()};
   if(key==='humidity')   return {group:'Environment', label:'Humidity', value:val.toFixed(0),       unit:'%'};
   if(key==='lux')        return {group:'Environment', label:'Light',    value:Math.round(val).toLocaleString(), unit:'lx'};
-  if(key==='temp:soil')  return {group:'Soil temp',   label:'Soil',     value:c2f(val).toFixed(1), unit:'\u00b0F'};
+  if(key==='ppfd')       return {group:'Environment', label:'PPFD',     value:Math.round(val).toLocaleString(), unit:'\u00b5mol'};
+  if(key==='pressure'){
+    const t=presTrend, ar=t?({down:'\u2198',up:'\u2197',flat:'\u2192'}[t.arrow]||''):'';
+    return {group:'Environment', label:'Pressure', value:pDisp(val).toFixed(pDec()), unit:pUnit(),
+            suffix:t?` <span class="ptrend ${t.arrow}">${ar} ${t.words}</span>`:'',
+            title:t?`${t.change_3h>0?'+':''}${pDisp(t.change_3h).toFixed(pDec())} ${pUnit()} over 3h`
+                    +(t.change_24h!=null?` \u00b7 ${t.change_24h>0?'+':''}${pDisp(t.change_24h).toFixed(pDec())} ${pUnit()} over 24h`:''):''};}
+  if(key==='temp:soil')  return {group:'Soil',        label:'Soil temp',value:tDisp(val).toFixed(1), unit:tUnit()};
   if(key.startsWith('temp:soil_'))
-                         return {group:'Soil temp',   label:'Probe '+key.split('_')[1], value:c2f(val).toFixed(1), unit:'\u00b0F'};
+                         return {group:'Soil',        label:'Soil temp '+key.split('_')[1], value:tDisp(val).toFixed(1), unit:tUnit()};
   if(key.startsWith('moisture:')){
     const cell=key.slice(9);
     const nm=(grid&&grid.names&&grid.names[cell])?grid.names[cell]:cell;
@@ -511,10 +540,10 @@ function sensorMeta(key, val){
     const t=key.slice(6);
     const nm=probeNames[t]||('Tray '+t);
     const m=probeMoisture(t, val);
-    if(m) return {group:'Moisture (probe)', label:nm,
+    if(m) return {group:'Soil', label:nm,
                   value:(m.approx?'~':'')+m.pct.toFixed(0), unit:'%',
                   title:val.toFixed(3)+'V'+(m.approx?' - estimated, not yet calibrated':'')};
-    return {group:'Moisture (probe)', label:nm, value:val.toFixed(3), unit:'V'};
+    return {group:'Soil', label:nm, value:val.toFixed(3), unit:'V'};
   }
   if(key.startsWith('dry:')){
     const cell=key.slice(4);
@@ -532,6 +561,9 @@ function renderSensors(j){
   probeCal=(j.settings&&j.settings.probe_cal)||{};
   probeNames=(j.settings&&j.settings.probe_names)||{};
   if(j.probe_default_cal)probeDefaultCal=j.probe_default_cal;
+  presTrend=j.pressure_tendency||null;
+  lightMetrics=j.light_metrics||null;
+  if(j.settings&&j.settings.units)units=j.settings.units;
   if(j.settings&&j.settings.soil_temp_high_f!=null)
     soilTempHigh=+j.settings.soil_temp_high_f;
   if(j.settings){
@@ -551,7 +583,7 @@ function renderSensors(j){
   const groups={};
   for(const k of keys){
     if(k.startsWith('growth_px:'))continue;   // raw counts are chart-only
-    if(k==='float:tray')continue;             // shown in the water controls instead
+    if(k.startsWith('float:'))continue;       // shown in the water controls instead
     const v=sensorData[k].value;
     const missing = v==null || (typeof v==='number'&&isNaN(v));
     const m=sensorMeta(k, missing?0:v);
@@ -559,7 +591,7 @@ function renderSensors(j){
     if(missing)m.value='-';                    // no reading -> dash
     (groups[m.group]=groups[m.group]||[]).push(m);
   }
-  const order=['Environment','Soil temp','Moisture','Moisture (probe)','Moisture (cam)','Growth','Dryness','Other'];
+  const order=['Environment','Soil','Moisture','Moisture (cam)','Growth','Dryness','Other'];
   let h='';
   for(const g of order){
     if(!groups[g])continue;
@@ -572,11 +604,36 @@ function renderSensors(j){
          +'last reading '+agoStr(new Date(ts*1000));}}
       {const fill=(m.unit==='%'&&!isNaN(parseFloat(m.value)))
           ?` style="--fill:${Math.max(0,Math.min(100,parseFloat(m.value)))}%" data-fill`:'' ;
-       h+=`<span class="schip${m.stale?' stale':''}"${fill}${m.title?` title="${m.title}"`:''}>${m.label} <b>${m.value}</b><span class="u">${m.unit}</span></span>`;}
+       h+=`<span class="schip${m.stale?' stale':''}"${fill}${m.title?` title="${m.title}"`:''}>${m.label} <b>${m.value}</b><span class="u">${m.unit}</span>${m.suffix||''}</span>`;}
     }
     h+='</div>';
   }
+  if(!h){
+    h='<div class="emptystate">'
+      +'<b>No sensors reporting yet.</b>'
+      +'<p>Wire the ADS1115, BME/BMP280, BH1750 or DS18B20 to the I2C pins, then check '
+      +'they appear in <code>i2cdetect -y 1</code>. Readings show up within one sample '
+      +'interval of the service restarting.</p></div>';
+  }
   document.getElementById('sreadout').innerHTML=h;
+  {// derived light metrics ride alongside the Environment chips
+   const env=document.querySelector('#sreadout .sgroup');
+   if(lightMetrics&&env){
+     const groups=[...document.querySelectorAll('#sreadout .sgroup')];
+     const envg=groups.find(g=>/Environment/.test(g.querySelector('h3')?.textContent||''));
+     if(envg){
+       let extra='';
+       if(lightMetrics.ppfd!=null)
+         extra+=`<span class="schip" title="lux \u00f7 ${lightMetrics.k} (fixture spectrum factor)">`
+           +`PPFD <b>${Math.round(lightMetrics.ppfd)}</b><span class="u">\u00b5mol</span></span>`;
+       if(lightMetrics.dli!=null){
+         const d=lightMetrics.dli, cls=(d>=6&&d<=12)?'ok':(d<6?'low':'high');
+         extra+=`<span class="schip dli ${cls}" title="daily light integral so far today \u00b7 seedlings want 6-12 mol/m\u00b2/day">`
+           +`DLI <b>${d.toFixed(1)}</b><span class="u">mol</span></span>`;
+       }
+       if(extra)envg.insertAdjacentHTML('beforeend',extra);
+     }
+   }}
   const dc=document.getElementById('drycal');
   if(dc)dc.style.display = keys.some(k=>k.startsWith('dry:')) ? '' : 'none';
   const pcctl=document.getElementById('probecal');
@@ -591,24 +648,30 @@ function renderSensors(j){
 }
 // ---- chart grid: every sensor visible at once, grouped by section ----
 const CHART_SECTIONS=[
-  {id:'env',    title:'Environment',      match:k=>k.startsWith('temp:')||k==='humidity'||k==='lux'},
-  {id:'probe',  title:'Soil moisture (probes)', match:k=>k.startsWith('probe:')},
+  // ordered by how often they drive a decision, not by sensor type
+  {id:'soil',   title:'Soil',
+   match:k=>k.startsWith('temp:soil')||k.startsWith('probe:')},
+  {id:'env',    title:'Environment',
+   match:k=>k==='temp:air'||k==='humidity'||k==='lux'||k==='ppfd'||k==='pressure'},
   {id:'cam',    title:'Camera moisture',  match:k=>k.startsWith('dry:')||k.startsWith('moisture:')},
   {id:'growth', title:'Growth',           match:k=>k.startsWith('growth:')},
   {id:'other',  title:'Other',            match:k=>true},
 ];
 let seriesData={}, chartPlots={}, soilTempHigh=90;
 function chartUnitFor(s){
-  if(s.startsWith('temp:'))return '\u00b0F';
+  if(s.startsWith('temp:'))return tUnit();
   if(s.startsWith('humidity')||s.startsWith('moisture:')||s.startsWith('growth:'))return '%';
   if(s.startsWith('probe:')){const t=s.slice(6);
     return (probeCal[t]&&probeCal[t].wet!=null)||probeDefaultCal?'%':'V';}
   if(s.startsWith('dry:')){const c=dryCal[s.slice(4)];return (c&&c.wet!=null)?'%':'';}
   if(s.startsWith('lux'))return 'lx';
+  if(s==='pressure')return pUnit();
+  if(s==='ppfd')return '\u00b5mol/m\u00b2/s';
   return '';
 }
 function convertFor(s){
-  if(s.startsWith('temp:'))return v=>c2f(v);
+  if(s.startsWith('temp:'))return v=>tDisp(v);
+  if(s==='pressure')return v=>pDisp(v);
   if(s.startsWith('probe:')){const t=s.slice(6);
     return v=>{const m=probeMoisture(t,v);return m==null?v:m.pct;};}
   if(s.startsWith('dry:')){const cell=s.slice(4);
@@ -633,15 +696,26 @@ async function loadChart(){
 function renderChartGrid(){
   const grid=document.getElementById('chartgrid');
   if(!grid)return;
-  const keys=Object.keys(seriesData).filter(k=>k!=='float:tray').sort();
-  if(!keys.length){grid.innerHTML='<p class="rmuted">No sensor history yet.</p>';return;}
+  const keys=Object.keys(seriesData).filter(k=>!k.startsWith('float:')).sort();
+  if(!keys.length){
+    const haveNow=Object.keys(sensorData||{}).length>0;
+    grid.innerHTML='<div class="emptystate">'
+      +(haveNow
+        ? '<b>Collecting history.</b><p>Charts appear once a few samples are logged, '
+          +'usually within 15 minutes of the first reading.</p>'
+        : '<b>No history yet.</b><p>Once sensors are connected and reporting, their '
+          +'charts build up here automatically.</p>')
+      +'</div>';
+    return;
+  }
   const used=new Set();
   let h='';
   for(const sec of CHART_SECTIONS){
     const mine=keys.filter(k=>!used.has(k)&&sec.match(k));
     if(!mine.length)continue;
     mine.forEach(k=>used.add(k));
-    h+=`<div class="csection"><h3>${sec.title}</h3><div class="cgrid">`;
+    h+=`<div class="csection${sec.id==='soil'?' primary':''}"><h3>${sec.title}</h3>`
+      +`<div class="cgrid">`;
     for(const k of mine){
       const m=sensorMeta(k,0);
       h+=`<div class="ccard">
@@ -675,7 +749,7 @@ function drawMini(key){
   let y0=Math.min(...ys), y1=Math.max(...ys);
   const pct=unit==='%';
   // warning line on soil temp charts (chile germination upper limit)
-  const hiLine=(key.startsWith('temp:soil')&&soilTempHigh>0)?soilTempHigh:null;
+  const hiLine=(key.startsWith('temp:soil')&&soilTempHigh>0)?tFromF(soilTempHigh):null;
   if(hiLine!=null){y0=Math.min(y0,hiLine);y1=Math.max(y1,hiLine);}  // keep it on-chart
   if(pct){y0=Math.min(y0,0);y1=Math.max(y1,100);}   // % charts on a fixed scale
   if(y0===y1){y0-=1;y1+=1;}
@@ -690,6 +764,22 @@ function drawMini(key){
   h+=`<polygon points="${area}" fill="rgba(74,124,89,0.10)"/>`;
   h+=`<polyline fill="none" stroke="#4a7c59" stroke-width="1.8" points="${line}"
         pathLength="1" class="cline" vector-effect="non-scaling-stroke"/>`;
+  if(key==='pressure'&&data.length>=4){
+    // least-squares fit across the window: the slope is the weather signal
+    const n=data.length;
+    const mx=xs.reduce((a,b)=>a+b,0)/n, my=ys.reduce((a,b)=>a+b,0)/n;
+    let num=0,den=0;
+    for(let i=0;i<n;i++){num+=(xs[i]-mx)*(ys[i]-my);den+=(xs[i]-mx)**2;}
+    if(den>0){
+      const m0=num/den;
+      const fy=t=>my+m0*(t-mx);
+      const c=(v)=>Math.max(P,Math.min(H-B,sy(v)));
+      h+=`<line x1="${sx(x0).toFixed(1)}" y1="${c(fy(x0)).toFixed(1)}"
+            x2="${sx(x1).toFixed(1)}" y2="${c(fy(x1)).toFixed(1)}"
+            stroke="#8a8a8a" stroke-width="1.2" stroke-dasharray="4 3"
+            vector-effect="non-scaling-stroke" opacity="0.85"/>`;
+    }
+  }
   if(hiLine!=null){
     const hy=sy(hiLine);
     if(hy>=P&&hy<=H-B){
@@ -699,7 +789,7 @@ function drawMini(key){
             stroke="#b5322f" stroke-width="1.2" stroke-dasharray="5 4"
             vector-effect="non-scaling-stroke"/>`;
       h+=`<text x="${W-P-2}" y="${(hy-3).toFixed(1)}" text-anchor="end" font-size="9"
-            fill="#b5322f">too warm ${soilTempHigh}\u00b0F</text>`;
+            fill="#b5322f">too warm ${Math.round(tFromF(soilTempHigh))}${tUnit()}</text>`;
     }
   }
   const fmtT=t=>{const d=new Date(t*1000);
@@ -711,7 +801,7 @@ function drawMini(key){
         stroke-dasharray="3 3" style="display:none"/>`;
   h+=`<circle class="hdot" r="3" fill="#2e7d32" stroke="#fff" stroke-width="1.2" style="display:none"/>`;
   svg.innerHTML=h;
-  const dec=(unit==='%')?0:(unit==='lx'?0:1);
+  const dec=(unit==='%')?0:(unit==='lx'?0:(unit==='inHg'?2:(unit==='hPa'?0:1)));
   const cur=ys[ys.length-1], lo=Math.min(...ys), hi=Math.max(...ys);
   const over=hiLine!=null&&cur>hiLine;
   const lim=(key.startsWith('dry:')||key.startsWith('growth:'))?3*capMin:3*sampleMin;
@@ -761,26 +851,64 @@ async function pollFloat(){
     const r=await fetch('/api/float');
     if(!r.ok)return;
     const j=await r.json();
-    const fs=document.getElementById('floatstate');
-    if(fs)fs.textContent=floatLabel(j.float);
+    for(const t in (j.floats||{})){
+      const fs=document.getElementById('floatstate'+t);
+      if(fs)fs.textContent=floatLabel(j.floats[t]);
+    }
   }catch(e){}
 }
 function renderWater(j){
   const w=j.water;const box=document.getElementById('waterctl');
-  if(!w){box.style.display='none';return;}
+  if(!w||!w.trays){box.style.display='none';return;}
   box.style.display='';
-  document.getElementById('floatstate').textContent = floatLabel(w.float);
-  document.getElementById('pumptoday').textContent=w.today_seconds;
-  const btn=document.getElementById('pumpbtn');
-  const fbtn=document.getElementById('fillbtn');
-  const busy = !w.pump_hw || w.pump_running;
-  btn.disabled = busy;
-  if(fbtn)fbtn.disabled = busy;
-  btn.textContent = w.pump_running ? 'Pumping...' : 'Test pump';
-  if(fbtn)fbtn.textContent = w.pump_running ? 'Filling...' : 'Fill to float';
-  if(!w.pump_hw)document.getElementById('pumpinfo').textContent='no pump hardware';
-  else if(w.pump_last && !w.pump_running)
-    document.getElementById('pumpinfo').textContent='last: '+w.pump_last;
+  const anyRunning=Object.values(w.trays).some(t=>t.running);
+  for(const t of Object.keys(w.trays).sort()){
+    const tw=w.trays[t];
+    let row=document.getElementById('wrow'+t);
+    if(!row){
+      row=document.createElement('div');
+      row.className='waterctl'; row.id='wrow'+t;
+      row.innerHTML=
+        `<span class="wtray" id="wlabel${t}">Tray ${t}</span>`
+        +`<span class="schip">Float <b id="floatstate${t}">--</b></span>`
+        +`<span class="schip">Pump today <b id="pumptoday${t}">0</b><span class="u">s</span></span>`
+        +`<button type="button" id="fillbtn${t}">Fill to float</button>`
+        +`<button type="button" id="pumpbtn${t}">Test pump</button>`
+        +`<input type="number" id="pumpsecs${t}" value="3" min="1" max="20" aria-label="Tray ${t} pump seconds">`
+        +`<span class="u">s</span>`
+        +`<span id="pumpinfo${t}" role="status"></span>`;
+      box.appendChild(row);
+      document.getElementById('fillbtn'+t).addEventListener('click',()=>waterAct(t,{until_full:true},'filling...'));
+      document.getElementById('pumpbtn'+t).addEventListener('click',()=>{
+        const secs=+document.getElementById('pumpsecs'+t).value||3;
+        waterAct(t,{seconds:secs},'starting...');});
+    }
+    const lbl=document.getElementById('wlabel'+t);
+    if(lbl&&probeNames[t])lbl.textContent=probeNames[t];
+    document.getElementById('floatstate'+t).textContent=floatLabel(tw.float);
+    document.getElementById('pumptoday'+t).textContent=tw.today_seconds;
+    const pb=document.getElementById('pumpbtn'+t), fb=document.getElementById('fillbtn'+t);
+    const dead=!tw.pump_hw;
+    pb.disabled=fb.disabled=dead||anyRunning;   // one pump at a time
+    pb.textContent=tw.running?'Pumping...':'Test pump';
+    fb.textContent=tw.running?'Filling...':'Fill to float';
+    const info=document.getElementById('pumpinfo'+t);
+    if(dead)info.textContent='no pump hardware';
+    else if(tw.last&&!tw.running)info.textContent='last: '+tw.last;
+  }
+}
+async function waterAct(tray, body, msg){
+  const info=document.getElementById('pumpinfo'+tray);
+  if(info)info.textContent=msg;
+  try{
+    const r=await fetch('/api/pump',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({...body, tray})});
+    const j=await r.json().catch(()=>({}));
+    if(r.status===401){if(info)info.textContent='log in to run the pump';return;}
+    if(!j.ok&&info)info.textContent=j.error||('HTTP '+r.status);
+    // progress/result arrives via the status poll (running/last) + live float
+  }catch(e){if(info)info.textContent='request failed';}
 }
 async function calibrate(point){
   const info=document.getElementById('calinfo');info.textContent='saving...';
@@ -869,6 +997,9 @@ function renderTrays(j){
     h+='</div></div>';
   }
   wrap.innerHTML=h;
+  {const filled=Object.values(trays).reduce((n,t)=>n+Object.keys(t.cells||{}).length,0);
+   const hint=document.getElementById('trayhint');
+   if(hint)hint.style.display=filled?'none':'';}
 }
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;')
   .replace(/</g,'&lt;').replace(/>/g,'&gt;');}
@@ -919,29 +1050,6 @@ function initTrays(){
   wrap.addEventListener('change',queue);
 }
 function initSensors(){
-  const fb=document.getElementById('fillbtn');
-  if(fb)fb.addEventListener('click',async()=>{
-    const info=document.getElementById('pumpinfo');info.textContent='filling...';
-    try{
-      const r=await fetch('/api/pump',{method:'POST',
-        headers:{'Content-Type':'application/json'},body:JSON.stringify({until_full:true})});
-      const j=await r.json().catch(()=>({}));
-      if(!r.ok)info.textContent = r.status===401 ? 'log in to run the pump'
-              : ('fill failed: '+(j.error||('HTTP '+r.status)));
-      // success/result shows via the status poll (pump_last) + live float
-    }catch(e){info.textContent='fill request failed';}
-  });
-  const pb=document.getElementById('pumpbtn');
-  if(pb)pb.addEventListener('click',async()=>{
-    const secs=+document.getElementById('pumpsecs').value||3;
-    document.getElementById('pumpinfo').textContent='starting...';
-    try{
-      const r=await fetch('/api/pump',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({seconds:secs})});
-      const j=await r.json();
-      if(!j.ok)document.getElementById('pumpinfo').textContent=j.error||'failed';
-    }catch(e){document.getElementById('pumpinfo').textContent='request failed';}
-  });
   const cw=document.getElementById('calwet');
   if(cw)cw.addEventListener('click',()=>calibrate('wet'));
   const cd=document.getElementById('caldry');
@@ -1110,12 +1218,30 @@ function handleGrid(j){
 }
 
 async function refresh(){
+  let j=null;
   try{
-    const r=await fetch('/api/status');const j=await r.json();
+    const r=await fetch('/api/status');
+    if(!r.ok && r.status!==503)throw 0;
+    j=await r.json();
+  }catch(e){
+    // the server genuinely didn't answer
+    document.getElementById('phase').textContent='Controller unreachable';
+    return;
+  }
+  try{
     S={...j,now:new Date(j.now),on:new Date(j.on),off:new Date(j.off),
        sunrise:new Date(j.sunrise),sunset:new Date(j.sunset)};
     fillForm(j.settings);
-    renderPhoto(j);
+    {const camOn=!!(j.settings&&j.settings.camera_enabled);
+     for(const id of ['photocard','videocard','reportcard']){
+       const el=document.getElementById(id);
+       if(el)el.dataset.camoff=camOn?'':'1';
+       if(el&&!camOn)el.style.display='none';
+     }
+     window._camOn=camOn;
+     // collapse the media column entirely, or its grid track sits empty
+     document.body.classList.toggle('nocam', !camOn);}
+    if(window._camOn)renderPhoto(j);
     renderVideoState(j);
     loadFrames();
     applyAuth(j);
@@ -1129,7 +1255,12 @@ async function refresh(){
     if(Date.now()-lastChartLoad>120000)loadChart();   // history every ~2 min
     renderWater(j);
     render();
-  }catch(e){document.getElementById('phase').textContent='Controller unreachable';}
+  }catch(e){
+    // the server answered but our page code failed: usually a stale cached
+    // script after a deploy. Say so instead of blaming the controller.
+    console.error('render error:', e);
+    document.getElementById('phase').textContent='Page error \u2013 hard-refresh (Ctrl-Shift-R)';
+  }
 }
 
 document.getElementById('cfgform').addEventListener('submit',async ev=>{
@@ -1142,9 +1273,19 @@ document.getElementById('cfgform').addEventListener('submit',async ev=>{
     body[k]=parseFloat(f.elements[k].value);
   body.timezone=f.elements['timezone'].value.trim();
   body.roi=f.elements['roi'].value.trim();
-  if(f.elements['soil_temp_high_f'])
-    body.soil_temp_high_f=parseInt(f.elements['soil_temp_high_f'].value||0,10);
+  if(f.elements['lux_to_ppfd_k'])
+    body.lux_to_ppfd_k=parseFloat(f.elements['lux_to_ppfd_k'].value||0);
+  if(f.elements['units'])body.units=f.elements['units'].value;
+  if(f.elements['soil_temp_high_f']){
+    const shown=parseFloat(f.elements['soil_temp_high_f'].value||0);
+    // the number was typed in whatever unit the field was showing, which is
+    // the CURRENT `units`, not the one being saved: converting with the new
+    // selection would silently rescale the threshold when toggling systems
+    body.soil_temp_high_f=shown?Math.round(tToF(shown)):0;   // store F
+  }
   body.capture_enabled=f.elements['capture_enabled'].checked;
+  if(f.elements['camera_enabled'])
+    body.camera_enabled=f.elements['camera_enabled'].checked;
   msg.textContent='Planting...';msg.className='';
   try{
     const r=await fetch('/api/settings',{method:'POST',

@@ -141,11 +141,35 @@ def build_context(d):
                  "species where a cell is listed):")
         for tray, rows in pl.items():
             L.append(f"  {tray}: " + "; ".join(rows))
+    U = d.get("units") or {"temp": "F", "press": "hPa"}
+    env = d.get("environment") or {}
+    if env:
+        bits=[]
+        if env.get("air_f") is not None: bits.append(f"air {env['air_f']}{U['temp']}")
+        if env.get("humidity") is not None: bits.append(f"RH {env['humidity']}%")
+        if env.get("lux") is not None: bits.append(f"light {env['lux']} lx")
+        if env.get("pressure") is not None: bits.append(f"pressure {env['pressure']} {U['press']}")
+        L.append("Ambient conditions: " + ", ".join(bits))
+    lm = d.get("light_metrics") or {}
+    if lm.get("ppfd") is not None:
+        line = f"Light intensity: {lm['ppfd']} PPFD (umol/m2/s) at the sensor"
+        if lm.get("dli") is not None:
+            line += (f"; daily light integral so far {lm['dli']} mol/m2/day "
+                     "(seedlings want roughly 6-12)")
+        L.append(line)
+    pt = d.get("pressure_trend")
+    if pt:
+        L.append(f"Barometric trend: {pt['words']} ({pt['change_3h']:+} hPa over 3h)"
+                 + (f", {pt['change_24h']:+} hPa over 24h" if pt.get("change_24h") is not None else "")
+                 + "  [trend deltas always in hPa]")
     stf = d.get("soil_temp_f") or {}
     if stf:
-        L.append("Soil temperature F: "
+        band = ("18-29C germination, 21-27C once sprouted"
+                if U["temp"] == "C" else
+                "65-85F germination, 70-80F once sprouted")
+        L.append(f"Soil temperature {U['temp']}: "
                  + ", ".join(f"{k}={v}" for k, v in sorted(stf.items()))
-                 + " (seedlings germinate best roughly 65-75F at the root zone)")
+                 + f" (chiles: {band}; sustained heat past that stretches seedlings)")
     gr = d.get("growth") or {}
     if gr:
         L.append("Canopy index % per cell (relative, understated under magenta light): "
