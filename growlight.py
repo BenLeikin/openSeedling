@@ -41,6 +41,7 @@ import sensors
 import notify
 import ai_report
 import discord_alert
+import alerts
 
 # ------------------- defaults (overridden by config.json) -------------------
 DEFAULTS = {
@@ -51,6 +52,12 @@ DEFAULTS = {
     "ramp_min": 30,            # minutes
     "light_override": "auto",  # auto = follow the sun schedule; on|off = manual hold
     "manual_bright": 100,      # brightness held when light_override is "on"
+    "alerts_enabled": True,     # Discord threshold alerts (needs discord_webhook)
+    "alert_sustain_min": 10,    # a condition must hold this long before firing
+    "alert_cooldown_hours": 6,  # reminder interval while a problem persists
+    "alert_soil_low_f": 60,     # 0 disables
+    "alert_dry_pct": 15,        # calibrated trays only
+    "alert_humidity_high": 80,  # 0 disables
     "units": "imperial",       # "imperial" (F, inHg) or "metric" (C, hPa);
                                #   storage stays Celsius/hPa either way
     "lux_to_ppfd_k": 60,       # lux -> PPFD divisor; set for your fixture's
@@ -193,6 +200,13 @@ state_lock = threading.Lock()
 # camera health: every capture/preview outcome lands here so the dashboard
 # can tell "old photo because night" from "old photo because the camera died"
 camera = {"last_ok": None, "fails": 0, "last_err": "", "last_err_ts": None}
+
+# light response sweep: brightness % -> measured lux, so the dashboard can show
+# what the driver actually delivers (PWM dimming is rarely linear)
+sweep_state = {"running": False, "pct": 0, "error": "", "started": 0.0,
+               "cancel": False}   # cancel is a request; running means the
+                                  # worker thread is still holding the light
+sweep_lock = threading.Lock()
 
 
 def _camera_ok():
@@ -763,6 +777,7 @@ def sample_loop():
             readings = sensors.read_all()
             if readings:
                 db.log_many(list(readings.items()))
+                run_alerts(readings)
         except Exception as e:
             print(f"sample_loop error: {e}")
         # housekeeping once a day: roll raw -> hourly, prune old raw
@@ -774,6 +789,59 @@ def sample_loop():
                 print(f"prune error: {e}")
             last_prune = now
         time.sleep(interval * 60)
+
+
+def run_alerts(readings):
+    """Evaluate the alert rules against this tick's readings and push anything
+    that changed state. Never raises: a failure here must not stop sampling."""
+    try:
+        with settings_lock:
+            cfg = dict(settings)
+        if not cfg.get("alerts_enabled", True):
+            return
+        acfg = {
+            "sustain_seconds": cfg.get("alert_sustain_min", 10) * 60,
+            "cooldown_seconds": cfg.get("alert_cooldown_hours", 6) * 3600,
+            "soil_temp_high_f": cfg.get("soil_temp_high_f", 0),
+            "soil_temp_low_f": cfg.get("alert_soil_low_f", 60),
+            "probe_dry_pct": cfg.get("alert_dry_pct", 15),
+            "humidity_high": cfg.get("alert_humidity_high", 80),
+        }
+        snap = dict(readings)
+
+        # tray moisture as percentages, using each tray's calibration
+        pcal = cfg.get("probe_cal") or {}
+        names = cfg.get("probe_names") or {}
+        stf = latest_soil_temp_f()
+        moist = {}
+        for k, v in readings.items():
+            if not k.startswith("probe:"):
+                continue
+            t = k[6:]
+            pct, approx = probe_moisture_any(v, pcal.get(t) or {}, stf)
+            if pct is not None and not approx:      # only alert on real calibration
+                moist[names.get(t, f"Tray {t}")] = pct
+        snap["_moisture"] = moist
+
+        with state_lock:
+            snap["_camera_fails"] = camera["fails"] if cfg.get("camera_enabled") else 0
+
+        # sensors that have gone quiet: expected keys missing from this read
+        expected = set(cfg.get("_seen_sensors") or [])
+        snap["_stale"] = sorted(expected - set(readings)) if expected else []
+        seen = sorted(set(readings) | expected)
+        if seen != sorted(expected):
+            with settings_lock:
+                settings["_seen_sensors"] = seen
+
+        for action, key, title, message, level in alerts.check_all(
+                snap, acfg, "C" if cfg.get("units") == "metric" else "F"):
+            prefix = {"fire": "", "remind": "Still: ", "clear": "Resolved: "}[action]
+            discord_alert.send(prefix + title, message,
+                               level="good" if action == "clear" else level)
+            print(f"alert {action}: {key}")
+    except Exception as e:
+        print(f"alert check error: {e}")
 
 
 def control_loop():
@@ -796,8 +864,8 @@ def control_loop():
             b = max(0, min(100, int(cfg.get("manual_bright", cfg["max_bright"]))))
         elif ov == "off":
             b = 0
-        if not capturing:
-            set_brightness(b)
+        if not capturing and not sweep_state["running"]:
+            set_brightness(b)      # a sweep owns the light while it runs
         with state_lock:
             state.update(brightness=b, on=on_time, off=off_time,
                          sunrise=sunrise, sunset=sunset, override=ov)
@@ -1465,6 +1533,10 @@ def status():
         probe_default_cal=PROBE_DEFAULT_CAL,
         sensors=sensors_out,
         pressure_tendency=pressure_tendency(),
+        sweep={"running": sweep_state["running"], "pct": sweep_state["pct"],
+               "error": sweep_state["error"]},
+        light_curve=cfg.get("light_curve"),
+        day_light=day_light_summary(),
         light_metrics=(lambda lx: {
             "k": lux_k(),
             "ppfd": ppfd_from_lux(lx),
@@ -1611,6 +1683,111 @@ def dli_today():
     return round(total / 1_000_000, 2)      # micromol -> mol
 
 
+def run_light_sweep(step=5, settle=2.0):
+    """Step the light 0..100% and record lux at each stop, so we can chart the
+    fixture's real response curve. Runs in a thread; the control loop leaves the
+    light alone while sweep_state["running"] is set, and the previous brightness
+    is restored at the end whatever happens."""
+    points = []
+    before = 0
+    try:
+        with state_lock:
+            before = state.get("brightness") or 0
+        levels = list(range(0, 101, step))
+        if levels[-1] != 100:
+            levels.append(100)
+        for i, pct in enumerate(levels):
+            if sweep_state["cancel"]:
+                break
+            set_brightness(pct)
+            time.sleep(settle)                    # let the sensor integrate
+            if sweep_state["cancel"]:             # cancelled while settling
+                break
+            lux = (sensors.read_all() or {}).get("lux")
+            if lux is None:
+                sweep_state["error"] = "no lux sensor reading; aborted"
+                break
+            points.append([pct, round(lux, 1)])
+            sweep_state["pct"] = pct
+    except Exception as e:
+        sweep_state["error"] = str(e)
+    finally:
+        try:
+            set_brightness(before)                # always hand the light back
+        except Exception:
+            pass
+        complete = points and points[-1][0] == 100 and not sweep_state["error"]
+        if complete:
+            with settings_lock:
+                settings["light_curve"] = {
+                    "ts": int(time.time()), "step": step,
+                    "settle": settle, "points": points,
+                }
+                CONFIG_PATH.write_text(json.dumps(settings, indent=2))
+            print(f"light sweep: {len(points)} points, "
+                  f"peak {max(p[1] for p in points):.0f} lx")
+        elif points:
+            print(f"light sweep stopped at {points[-1][0]}%; keeping previous curve")
+        with sweep_lock:
+            sweep_state["running"] = False
+            sweep_state["cancel"] = False
+        wake.set()                                # control loop resumes at once
+
+
+@app.route("/api/light_sweep", methods=["POST"])
+@require_auth
+def api_light_sweep():
+    """Start (or cancel) a light response sweep."""
+    data = request.get_json(silent=True) or {}
+    if data.get("cancel"):
+        with sweep_lock:
+            sweep_state["cancel"] = True     # the worker restores the light
+        return jsonify(ok=True, cancelled=True)
+    if sensors.read_all().get("lux") is None:
+        return jsonify(ok=False, error="no lux sensor detected"), 200
+    try:
+        step = max(1, min(25, int(data.get("step", 5))))
+        settle = max(0.5, min(10.0, float(data.get("settle", 2.0))))
+    except (TypeError, ValueError):
+        step, settle = 5, 2.0
+    with sweep_lock:
+        if sweep_state["running"]:
+            return jsonify(ok=False, error="a sweep is already running"), 200
+        sweep_state.update(running=True, pct=0, error="", cancel=False,
+                           started=time.time())
+    threading.Thread(target=run_light_sweep, args=(step, settle),
+                     daemon=True).start()
+    est = int((101 / step + 1) * (settle + 0.3))
+    return jsonify(ok=True, started=True, estimate_seconds=est)
+
+
+def day_light_summary():
+    """Today's light in one shot: DLI so far, the peak intensity reached, and
+    how long the light has actually been delivering. Reads the same lux history
+    the DLI integration uses, so the numbers always agree."""
+    k = lux_k()
+    with settings_lock:
+        tz = ZoneInfo(settings["timezone"])
+    now = datetime.now(tz)
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    since = int(midnight.timestamp())
+    pts = [(ts, v) for ts, v in db.series("lux", hours=25) if ts >= since]
+    if not pts:
+        return None
+    peak = max(v for _, v in pts)
+    lit_s = 0
+    for (t0, v0), (t1, _) in zip(pts, pts[1:]):
+        dt = t1 - t0
+        if 0 < dt <= 1800 and v0 >= 100:      # 100 lx: light is genuinely on
+            lit_s += dt
+    return {
+        "dli": dli_today(),
+        "peak_lux": round(peak, 1),
+        "peak_ppfd": round(peak / k, 1) if k else None,
+        "lit_minutes": round(lit_s / 60),
+    }
+
+
 @app.route("/api/series_all")
 def series_all():
     """Every logged sensor's history in one request, so the chart grid doesn't
@@ -1662,6 +1839,18 @@ def update_settings():
         new["capture_interval_min"] = int(data["capture_interval_min"])
         new["capture_brightness"]   = int(data["capture_brightness"])
         new["roi"] = str(data.get("roi", "")).strip()
+        for k, lo, hi in (("alert_sustain_min", 1, 120),
+                          ("alert_cooldown_hours", 1, 72),
+                          ("alert_soil_low_f", 0, 120),
+                          ("alert_dry_pct", 0, 90),
+                          ("alert_humidity_high", 0, 100)):
+            if k in data:
+                try:
+                    new[k] = max(lo, min(hi, int(data[k] or 0)))
+                except (TypeError, ValueError):
+                    pass
+        if "alerts_enabled" in data:
+            new["alerts_enabled"] = bool(data["alerts_enabled"])
         if data.get("units") in ("imperial", "metric"):
             new["units"] = data["units"]
         if "lux_to_ppfd_k" in data:

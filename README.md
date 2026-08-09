@@ -287,6 +287,19 @@ Read endpoints are open; mutating ones require a session when a password is set.
 | POST | `/api/probe_tempcomp` | Estimate/apply a probe's temperature-drift coefficient |
 | POST | `/api/light` | Manual light hold (auto/on/off) + manual brightness |
 | POST | `/api/trays` | Save the planting map (what's sown in each cell) |
+
+### Discord alerts
+
+Set `discord_webhook` in the secrets file (same place as the API key), then
+enable **Threshold alerts** in Settings. Rules cover soil temperature (high and
+low), tray dryness on calibrated probes, humidity, watering that fails to reach
+the float, camera failures, and sensors that stop reporting.
+
+Each rule fires once when a condition has held for the sustain window, reminds
+on the cooldown interval while it persists, and posts a recovery notice when it
+clears. Hysteresis and the sustain window mean a sensor hovering at a threshold
+cannot spam the channel. Alert state is in memory, so a restart re-arms
+everything.
 | POST | `/api/render` | Render the timelapse MP4 |
 | POST | `/api/capture` | Take a photo now |
 | POST | `/api/pump` | Timed dose or fill-to-float, per tray (`tray: "1"|"2"`) |

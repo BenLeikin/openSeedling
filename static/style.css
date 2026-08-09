@@ -439,20 +439,67 @@ svg.cmini.cstale polyline.cline{stroke:#a8b5a0;opacity:.75}
   .aphase .phase{gap:12px}
 }
 
-/* ---- camera off: reclaim the media column instead of leaving a gap ---- */
+
+/* ================= top strip: status, control, curve, stats =================
+   One row of live state above everything else, on every screen and whether or
+   not the camera is on. The media column (report/photo/timelapse) sits below. */
 body.nocam .amedia{display:none}
 @media (min-width:1100px){
-  body.nocam .glayout{
+  .glayout{
     grid-template-columns:1fr;
     grid-template-areas:
       "left"
+      "media"
       "sens"
       "tray"
       "set";
   }
-  /* the left column is now full width, so let its cards sit side by side */
-  body.nocam .aleft{flex-direction:row;flex-wrap:wrap;align-items:stretch}
-  body.nocam .aleft>.card{flex:1 1 300px;margin-bottom:0}
-  body.nocam .aleft>.aphase{flex:1 1 260px}
-  body.nocam .achart{flex:2 1 420px}
+  .aleft{flex-direction:row;flex-wrap:wrap;align-items:stretch;gap:12px}
+  .aleft>.card{margin-bottom:0}
+  .aleft>.aphase{flex:1 1 280px}
+  .aleft>.lightctl{flex:1 1 260px}
+  .aleft>.achart{flex:1 1 380px}
+  .aleft>.afacts{flex:1 1 100%}
+  .achart svg{max-height:150px}
+
+  /* facts read as a stat strip rather than a two-column list */
+  .afacts .grid{grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:0}
+  .afacts .grid dd{grid-row:1;font-size:19px;font-family:Georgia,serif}
+  .afacts .grid dt{grid-row:2;font-size:12px}
+  .afacts .grid dt,.afacts .grid dd{padding:0 14px;border-left:1px solid var(--line)}
+  .afacts .grid dt:first-of-type,.afacts .grid dd:first-of-type{border-left:0;padding-left:0}
+
+  /* media row: report beside the photo, timelapse below */
+  .amedia{display:grid;gap:14px;
+    grid-template-columns:1.1fr 1fr;
+    align-items:start}
+  .amedia>.areport{grid-row:span 2}
+  #reportcard{max-height:none}
+  #photo,#vframe{max-height:52vh;object-fit:contain}
 }
+
+/* ---- light response curve ---- */
+.lcurve{margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}
+.lcurvehead{display:flex;align-items:center;gap:10px;font-size:12px;
+  font-weight:600;color:var(--leaf);margin-bottom:6px}
+.lcurvehead button{margin:0;padding:4px 12px;font-size:12px;
+  background:#eef4e6;color:var(--leaf);border:1px solid var(--line)}
+.lcurvehead #sweepinfo{font-weight:400;font-size:11px;color:#7a8a72;margin-left:auto;
+  text-align:right}
+#lcurve{width:100%;height:118px;display:block;background:#f6faf1;
+  border:1px solid var(--line);border-radius:8px}
+
+/* ---- day progress inside the phase card ---- */
+.aphase{display:block}
+.phaserow{display:flex;align-items:center;gap:14px}
+.dayprog{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
+.dpbar{position:relative;height:8px;border-radius:5px;background:#eef4e6;
+  border:1px solid var(--line);overflow:visible}
+.dpbar span{display:block;height:100%;border-radius:5px;
+  background:linear-gradient(90deg,#cfe3b8,var(--sun));transition:width .6s ease}
+.dpbar i{position:absolute;top:-3px;width:2px;height:14px;background:var(--fir);
+  border-radius:1px;transform:translateX(-1px);transition:left .6s ease}
+.dprow{display:flex;justify-content:space-between;align-items:baseline;gap:10px;
+  margin-top:7px;font-size:12px;color:var(--leaf)}
+.dprow>span{white-space:nowrap}
+.dprow b{color:var(--fir);font-size:13px}

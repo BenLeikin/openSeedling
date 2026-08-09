@@ -26,7 +26,8 @@
 
 <div class="aleft">
 
-<div class="card phase aphase">
+<div class="card aphase">
+  <div class="phaserow">
   <div class="sun" id="bulb" aria-hidden="true">
     <svg viewBox="0 0 100 100" class="sunsvg">
       <g class="raygroup"><path d="M61.0 32.0 Q50.0 3.0 50.0 3.0 L39.0 32.0 Z"/><path d="M68.5 39.9 Q73.5 9.3 73.5 9.3 L49.5 28.9 Z"/><path d="M71.1 50.5 Q90.7 26.5 90.7 26.5 L60.1 31.5 Z"/><path d="M68.0 61.0 Q97.0 50.0 97.0 50.0 L68.0 39.0 Z"/><path d="M60.1 68.5 Q90.7 73.5 90.7 73.5 L71.1 49.5 Z"/><path d="M49.5 71.1 Q73.5 90.7 73.5 90.7 L68.5 60.1 Z"/><path d="M39.0 68.0 Q50.0 97.0 50.0 97.0 L61.0 68.0 Z"/><path d="M31.5 60.1 Q26.5 90.7 26.5 90.7 L50.5 71.1 Z"/><path d="M28.9 49.5 Q9.3 73.5 9.3 73.5 L39.9 68.5 Z"/><path d="M32.0 39.0 Q3.0 50.0 3.0 50.0 L32.0 61.0 Z"/><path d="M39.9 31.5 Q9.3 26.5 9.3 26.5 L28.9 50.5 Z"/><path d="M50.5 28.9 Q26.5 9.3 26.5 9.3 L31.5 39.9 Z"/></g>
@@ -43,6 +44,24 @@
     <span id="next">&nbsp;</span>
   </div>
   <div class="pct"><b id="pct">--%</b><br><span style="font-size:12px;color:var(--leaf)">brightness</span></div>
+  </div>
+  <div class="dayprog" id="dayprog">
+    <div class="dplabel">Photoperiod</div>
+    <div class="dpbar"><span id="dpfill"></span><i id="dpnow"></i></div>
+    <div class="dprow"><span id="dpleft">&nbsp;</span><span id="dplit"></span></div>
+
+    <div class="dplabel">Daily light integral</div>
+    <div class="dlibar">
+      <span class="dliband"></span>
+      <span class="dlifill" id="dlifill"></span>
+    </div>
+    <div class="dprow">
+      <span id="dlival"></span>
+      <span class="dlicap">target 6&ndash;12 mol</span>
+    </div>
+
+    <dl class="daystats" id="daystats"></dl>
+  </div>
 </div>
 
 <div class="card lightctl editonly" id="lightctl">
@@ -58,6 +77,15 @@
     <b id="lcval">100%</b>
   </div>
   <span id="lightinfo" role="status"></span>
+  <div class="lcurve editonly" id="lcurvewrap">
+    <div class="lcurvehead">
+      <span>Light response</span>
+      <button type="button" id="sweepbtn">Measure</button>
+      <span id="sweepinfo" role="status"></span>
+    </div>
+    <svg id="lcurve" viewBox="0 0 320 132" preserveAspectRatio="none"
+         role="img" aria-label="Measured light output versus brightness"></svg>
+  </div>
 </div>
 
 <div class="card achart">
@@ -68,6 +96,10 @@
   <dl class="grid" id="facts"></dl>
 </div>
 
+</div>
+
+<div class="amedia">
+
 <div class="card areport" id="reportcard">
   <h2>&#129516; Garden report</h2>
   <div class="reportctl editonly" id="reportctl" style="display:none">
@@ -77,11 +109,6 @@
     <span id="reportinfo" role="status"></span>
   </div>
   <div id="reportbody"><p class="rmuted">No report yet.</p></div>
-</div>
-
-</div>
-
-<div class="amedia">
 
 <div class="card asnap" id="photocard" style="display:none">
   <h2>&#128247; Latest snapshot</h2>
@@ -125,6 +152,8 @@
        style="display:none;margin-left:auto;font-size:14px;font-weight:600;
        color:var(--leaf)">&#11015; Download MP4</a>
   </div>
+</div>
+
 </div>
 
 </div>
@@ -238,6 +267,27 @@
         <div class="tzrow"><label>Lux&rarr;PPFD factor (fixture spectrum, 0 = off)
           <input name="lux_to_ppfd_k" type="number" min="0" max="200" step="1"></label>
           <span class="fhint">~54 sunlight, ~60 mixed red/blue/white panel, ~72 white LED.</span></div>
+      </div>
+    </div>
+
+    <div class="fgroup">
+      <h3>Alerts</h3>
+      <p class="fhint">Discord alerts fire once a condition holds for the sustain
+        window, then stay quiet until it clears. Needs a webhook in secrets.</p>
+      <div class="frow">
+        <div class="checkrow"><input type="checkbox" name="alerts_enabled" id="alen">
+          <label for="alen">Threshold alerts</label></div>
+        <div></div>
+        <div><label>Must hold for (min)
+          <input name="alert_sustain_min" type="number" min="1" max="120"></label></div>
+        <div><label>Remind every (hours)
+          <input name="alert_cooldown_hours" type="number" min="1" max="72"></label></div>
+        <div><label>Soil too cold below (<span id="alcoldlbl">&deg;F</span>, 0 = off)
+          <input name="alert_soil_low_f" type="number" min="0" max="120"></label></div>
+        <div><label>Tray dry at or below (%)
+          <input name="alert_dry_pct" type="number" min="0" max="90"></label></div>
+        <div><label>Humidity high at (%, 0 = off)
+          <input name="alert_humidity_high" type="number" min="0" max="100"></label></div>
       </div>
     </div>
 

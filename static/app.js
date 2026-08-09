@@ -312,9 +312,19 @@ function fillForm(cfg){
   for(const k of ['latitude','longitude','timezone','max_bright','ramp_min',
                   'sunrise_offset_min','sunset_offset_min',
                   'capture_interval_min','capture_brightness','roi',
-                  'lux_to_ppfd_k'])
+                  'lux_to_ppfd_k','alert_sustain_min','alert_cooldown_hours',
+                  'alert_dry_pct','alert_humidity_high'])
     if(f.elements[k] && document.activeElement!==f.elements[k])
       f.elements[k].value=cfg[k];
+  {const ae=f.elements['alerts_enabled'];
+   if(ae&&document.activeElement!==ae)ae.checked=cfg.alerts_enabled!==false;
+   const cold=f.elements['alert_soil_low_f'];
+   if(cold&&document.activeElement!==cold){
+     const fv=+cfg.alert_soil_low_f||0;
+     cold.value=fv?Math.round(tFromF(fv)):0;
+   }
+   const cl=document.getElementById('alcoldlbl');
+   if(cl)cl.innerHTML=tUnit();}
   {const u=f.elements['units'];
    if(u&&document.activeElement!==u){u.value=cfg.units||'imperial';units=u.value;}
    const th=f.elements['soil_temp_high_f'];
@@ -1252,6 +1262,8 @@ async function refresh(){
     handleGrid(j);
     renderSensors(j);
     renderTrays(j);
+    renderSweep(j);
+    renderDayProgress(j);
     if(Date.now()-lastChartLoad>120000)loadChart();   // history every ~2 min
     renderWater(j);
     render();
@@ -1276,6 +1288,13 @@ document.getElementById('cfgform').addEventListener('submit',async ev=>{
   if(f.elements['lux_to_ppfd_k'])
     body.lux_to_ppfd_k=parseFloat(f.elements['lux_to_ppfd_k'].value||0);
   if(f.elements['units'])body.units=f.elements['units'].value;
+  for(const k of ['alert_sustain_min','alert_cooldown_hours','alert_dry_pct','alert_humidity_high'])
+    if(f.elements[k])body[k]=parseInt(f.elements[k].value||0,10);
+  if(f.elements['alerts_enabled'])body.alerts_enabled=f.elements['alerts_enabled'].checked;
+  if(f.elements['alert_soil_low_f']){
+    const shown=parseFloat(f.elements['alert_soil_low_f'].value||0);
+    body.alert_soil_low_f=shown?Math.round(tToF(shown)):0;
+  }
   if(f.elements['soil_temp_high_f']){
     const shown=parseFloat(f.elements['soil_temp_high_f'].value||0);
     // the number was typed in whatever unit the field was showing, which is
@@ -1411,7 +1430,160 @@ function initReport(){
 setInterval(refresh,15000);
 setInterval(render,60000);
 setInterval(pollFloat,1500);
+function curveLuxAt(pts, pct){
+  // linear interpolation between the two measured points either side
+  if(!pts.length)return null;
+  if(pct<=pts[0][0])return pts[0][1];
+  if(pct>=pts[pts.length-1][0])return pts[pts.length-1][1];
+  for(let i=1;i<pts.length;i++){
+    if(pts[i][0]>=pct){
+      const [x0,y0]=pts[i-1],[x1,y1]=pts[i];
+      return x1===x0?y1:y0+(y1-y0)*(pct-x0)/(x1-x0);
+    }
+  }
+  return pts[pts.length-1][1];
+}
+function drawLightCurve(curve, sweeping, nowPct){
+  const svg=document.getElementById('lcurve');
+  const wrap=document.getElementById('lcurvewrap');
+  if(!svg||!wrap)return;
+  const pts=(curve&&curve.points)||[];
+  if(!pts.length){
+    svg.innerHTML=`<text x="160" y="66" text-anchor="middle" fill="#7a8a72" font-size="11">`
+      +`${sweeping?'measuring\u2026':'no measurement yet'}</text>`;
+    return;
+  }
+  const W=320,H=132,P=8,B=18,L=26;
+  const maxL=Math.max(...pts.map(p=>p[1]))||1;
+  const sx=v=>L+(v/100)*(W-L-P);
+  const sy=v=>H-B-(v/maxL)*(H-B-P);
+  let h='';
+  for(let i=0;i<=2;i++){const y=P+(H-B-P)*i/2;
+    h+=`<line x1="${L}" y1="${y}" x2="${W-P}" y2="${y}" stroke="#e6f0de" stroke-width="1"/>`;}
+  // straight line from origin to peak: how linear the dimming actually is
+  h+=`<line x1="${sx(0)}" y1="${sy(0)}" x2="${sx(100)}" y2="${sy(maxL)}"
+        stroke="#c9c9c9" stroke-width="1" stroke-dasharray="4 3"/>`;
+  const line=pts.map(p=>`${sx(p[0]).toFixed(1)},${sy(p[1]).toFixed(1)}`).join(' ');
+  h+=`<polyline fill="none" stroke="#e8b04b" stroke-width="2" points="${line}"
+        vector-effect="non-scaling-stroke"/>`;
+  pts.forEach(p=>{h+=`<circle cx="${sx(p[0]).toFixed(1)}" cy="${sy(p[1]).toFixed(1)}" r="1.7" fill="#c98a1e"/>`;});
+  h+=`<text x="${L}" y="${H-5}" font-size="9" fill="#7a8a72">0%</text>`;
+  h+=`<text x="${W-P}" y="${H-5}" font-size="9" fill="#7a8a72" text-anchor="end">100%</text>`;
+  h+=`<text x="2" y="${P+8}" font-size="9" fill="#7a8a72">${Math.round(maxL).toLocaleString()}</text>`;
+  h+=`<text x="2" y="${H-B}" font-size="9" fill="#7a8a72">0 lx</text>`;
+  // where the light is set right now, and what the curve says that delivers
+  if(nowPct!=null&&!sweeping){
+    const px=sx(Math.max(0,Math.min(100,nowPct)));
+    const lx=curveLuxAt(pts,nowPct);
+    const py=sy(lx);
+    h+=`<line x1="${px.toFixed(1)}" y1="${P}" x2="${px.toFixed(1)}" y2="${H-B}"
+          stroke="#4a7c59" stroke-width="1.2" stroke-dasharray="3 3"/>`;
+    h+=`<circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="3.4"
+          fill="#2e7d32" stroke="#fff" stroke-width="1.4"/>`;
+    const label=`${Math.round(nowPct)}% \u2192 ${Math.round(lx).toLocaleString()} lx`;
+    const wEst=label.length*5.3+8;
+    const flip=px>W-wEst-P;                 // keep the label on-canvas near 100%
+    h+=`<rect x="${(flip?px-wEst-3:px+3).toFixed(1)}" y="${P+1}" width="${wEst.toFixed(1)}" height="14"
+          rx="3" fill="#2f4030" opacity="0.92"/>`;
+    h+=`<text x="${(flip?px-wEst+1:px+7).toFixed(1)}" y="${P+11}" font-size="9.5"
+          fill="#eafff0">${label}</text>`;
+  }
+  svg.innerHTML=h;
+  const info=document.getElementById('sweepinfo');
+  if(info&&!sweeping&&curve.ts){
+    const half=pts.find(p=>p[1]>=maxL/2);
+    info.textContent=`peak ${Math.round(maxL).toLocaleString()} lx`
+      +(half?` \u00b7 50% output at ${half[0]}% set`:'');
+  }
+}
+async function startSweep(){
+  const info=document.getElementById('sweepinfo');
+  const btn=document.getElementById('sweepbtn');
+  if(sweepRunning){
+    await fetch('/api/light_sweep',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({cancel:true})});
+    return;
+  }
+  if(info)info.textContent='starting\u2026';
+  try{
+    const r=await fetch('/api/light_sweep',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({step:5,settle:2})});
+    const j=await r.json().catch(()=>({}));
+    if(r.status===401){if(info)info.textContent='log in first';return;}
+    if(!j.ok){if(info)info.textContent=j.error||'failed';return;}
+    if(info)info.textContent=`measuring\u2026 (~${j.estimate_seconds}s)`;
+    if(btn)btn.textContent='Cancel';
+  }catch(e){if(info)info.textContent='request failed';}
+}
+let sweepRunning=false, lastCurve=null;
+function renderDayProgress(j){
+  const wrap=document.getElementById('dayprog');
+  if(!wrap||!S.on||!S.off)return;
+  const on=+S.on, off=+S.off, now=Date.now();
+  const span=off-on;
+  if(!(span>0)){wrap.style.display='none';return;}
+  wrap.style.display='';
+  const frac=Math.max(0,Math.min(1,(now-on)/span));
+  const fill=document.getElementById('dpfill');
+  const marker=document.getElementById('dpnow');
+  if(fill)fill.style.width=(frac*100).toFixed(1)+'%';
+  if(marker)marker.style.left=(frac*100).toFixed(1)+'%';
+  const left=document.getElementById('dpleft');
+  if(left){
+    if(now<on)      left.textContent='lights on in '+durStr(on-now);
+    else if(now>off)left.textContent='lights off \u00b7 on again tomorrow';
+    else            left.textContent=durStr(off-now)+' of light left';
+  }
+  const day=j.day_light||null;
+  // how long the light has actually delivered today
+  const lit=document.getElementById('dplit');
+  if(lit)lit.textContent=(day&&day.lit_minutes)?durStr(day.lit_minutes*60000)+' lit':'';
+
+  // DLI against the seedling target band (6-12), scaled to 16 mol
+  const d=(day&&day.dli!=null)?day.dli:(lightMetrics&&lightMetrics.dli);
+  const dfill=document.getElementById('dlifill');
+  const dval=document.getElementById('dlival');
+  if(dfill)dfill.style.width=Math.max(0,Math.min(100,(d||0)/16*100)).toFixed(1)+'%';
+  if(dval){
+    if(d==null){dval.textContent='building today\u2019s total';}
+    else{
+      const band=d<6?'below target so far':(d<=12?'in target':'above target');
+      dval.innerHTML=`<b>${d.toFixed(1)}</b> mol \u00b7 ${band}`;
+    }
+  }
+  // peak intensity reached today
+  const stats=document.getElementById('daystats');
+  if(stats){
+    let h2='';
+    if(day&&day.peak_ppfd!=null)
+      h2+=`<dt>Peak today</dt><dd>${Math.round(day.peak_ppfd)} <small>\u00b5mol</small></dd>`;
+    if(day&&day.peak_lux!=null)
+      h2+=`<dt>Peak light</dt><dd>${Math.round(day.peak_lux).toLocaleString()} <small>lx</small></dd>`;
+    stats.innerHTML=h2;
+    stats.style.display=h2?'':'none';
+  }
+}
+function durStr(ms){
+  const m=Math.max(0,Math.round(ms/60000));
+  if(m<60)return m+' min';
+  return Math.floor(m/60)+'h '+String(m%60).padStart(2,'0')+'m';
+}
+function renderSweep(j){
+  const btn=document.getElementById('sweepbtn');
+  const info=document.getElementById('sweepinfo');
+  const sw=j.sweep||{};
+  const was=sweepRunning; sweepRunning=!!sw.running;
+  if(btn)btn.textContent=sweepRunning?'Cancel':'Measure';
+  if(sweepRunning&&info)info.textContent=`measuring\u2026 ${sw.pct}%`;
+  if(was&&!sweepRunning&&info&&sw.error)info.textContent=sw.error;
+  lastCurve=j.light_curve||null;
+  if(!dragging)                                   // a drag owns the marker
+    drawLightCurve(lastCurve, sweepRunning,
+                   sweepRunning?null:(j.brightness!=null?j.brightness:null));
+}
 function initLight(){
+  {const b=document.getElementById('sweepbtn');
+   if(b)b.addEventListener('click',startSweep);}
   document.querySelectorAll('.lcbtn').forEach(b=>
     b.addEventListener('click',()=>setLight(b.dataset.mode)));
   const rng=document.getElementById('lcrange');
@@ -1428,8 +1600,17 @@ function initLight(){
   rng.addEventListener('pointerdown',startDrag);
   rng.addEventListener('keydown',startDrag);
   rng.addEventListener('input',()=>{
-    if(val)val.textContent=rng.value+'%';   // label tracks instantly
-    if(dragging)pushBrightness(+rng.value); // light tracks, throttled
+    const v=+rng.value;
+    if(val)val.textContent=v+'%';           // slider label tracks instantly
+    if(dragging){
+      pushBrightness(v);                    // light tracks, throttled
+      // the readouts follow the drag rather than the 15s status poll
+      const pctEl=document.getElementById('pct');
+      if(pctEl)pctEl.textContent=v+'%';
+      const ph=document.querySelector('.aphase');
+      if(ph)ph.style.setProperty('--lum',(v/100).toFixed(2));
+      drawLightCurve(lastCurve, false, v);
+    }
   });
   rng.addEventListener('pointerup',endDrag);
   rng.addEventListener('pointercancel',endDrag);
