@@ -36,6 +36,124 @@ sudo apt-get update
 # correctly before blaming the software for not seeing it.
 sudo apt-get install -y python3-venv python3-pip rpicam-apps ffmpeg i2c-tools
 
+# ---------------------------------------------------------------------------
+# Interactive configuration.
+#
+# Answers are written to an env file that the systemd unit reads, so nothing
+# here edits Python. Re-running keeps existing answers as the defaults, and
+# --defaults skips every prompt (useful for reinstalling on a known box).
+# ---------------------------------------------------------------------------
+ENV_FILE="$APP_DIR/.env"
+declare -A CFG
+if [[ -f "$ENV_FILE" ]]; then
+  while IFS='=' read -r k v; do
+    [[ "$k" =~ ^[A-Z_]+$ ]] && CFG["$k"]="$v"
+  done < "$ENV_FILE"
+  # an explicitly empty hardware key means "none"; keep it rather than
+  # letting the suggested default creep back in on the next run
+  # An explicitly empty hardware key means the user answered "none". Record
+  # that separately: an empty string cannot itself be distinguished from
+  # "unset" when ask() falls back to its suggested default.
+  for _k in GROWLIGHT_PUMP_PINS GROWLIGHT_FLOAT_PINS GROWLIGHT_FAN_PIN; do
+    if grep -q "^$_k=$" "$ENV_FILE" 2>/dev/null; then
+      CFG["$_k"]=""; CFG["${_k}__NONE"]=1
+    fi
+  done
+fi
+
+NONINTERACTIVE=0
+[[ "${1:-}" == "--defaults" ]] && NONINTERACTIVE=1
+[[ -t 0 ]] || NONINTERACTIVE=1     # piped input: do not block waiting for a human
+
+ask() {                            # ask VAR "prompt" "default" ["hint"]
+  local var="$1" prompt="$2" hint="${4:-}" reply def
+  if [[ -n "${CFG[${1}__NONE]:-}" ]]; then
+    def="none"                     # previously opted out; offer that again
+  else
+    def="${CFG[$1]:-$3}"
+  fi
+  if [[ "$NONINTERACTIVE" -eq 1 ]]; then CFG["$var"]="$def"; return; fi
+  [[ -n "$hint" ]] && echo "    $hint"
+  read -r -p "    $prompt [$def]: " reply
+  CFG["$var"]="${reply:-$def}"
+}
+
+ask_secret() {                     # ask_secret VAR "prompt" "hint"
+  local var="$1" prompt="$2" hint="${3:-}" reply cur="${CFG[$1]:-}"
+  if [[ "$NONINTERACTIVE" -eq 1 ]]; then CFG["$var"]="$cur"; return; fi
+  [[ -n "$hint" ]] && echo "    $hint"
+  if [[ -n "$cur" ]]; then
+    read -r -p "    $prompt [keep existing]: " reply
+    CFG["$var"]="${reply:-$cur}"
+  else
+    read -r -p "    $prompt [skip]: " reply
+    CFG["$var"]="$reply"
+  fi
+}
+
+if [[ "$NONINTERACTIVE" -eq 1 ]]; then
+  echo "==> Configuration: using defaults (non-interactive)"
+else
+  echo
+  echo "=================================================="
+  echo " Configuration. Press Enter to accept each default."
+  echo " Everything here can be changed later in $ENV_FILE."
+  echo "=================================================="
+  echo
+  echo "-- GPIO pins (BCM numbering) --"
+fi
+
+ask GROWLIGHT_LIGHT_PIN "Light PWM pin (18 or 19 only)" "18" \
+  "Only GPIO18 and GPIO19 have hardware PWM. 18 = header pin 12, 19 = pin 35."
+case "${CFG[GROWLIGHT_LIGHT_PIN]}" in
+  18|19) ;;
+  *) echo "    GPIO${CFG[GROWLIGHT_LIGHT_PIN]} cannot do hardware PWM; using 18"
+     CFG[GROWLIGHT_LIGHT_PIN]=18 ;;
+esac
+
+# Optional hardware. "none" is a first-class answer: the variable is written
+# empty, the device is never claimed, and its controls stay hidden in the UI.
+ask GROWLIGHT_PUMP_PINS "Pump pins, tray:pin (or 'none')" "1:24,2:26" \
+  "One entry per tray with a pump. 24 = pin 18, 26 = pin 37. Answer 'none' if you have no pumps."
+ask GROWLIGHT_FLOAT_PINS "Float switch pins, tray:pin (or 'none')" "1:23,2:22" \
+  "23 = pin 16, 22 = pin 15. Other leg to ground; rising water should OPEN the switch. 'none' if unwired."
+ask GROWLIGHT_FAN_PIN "Fan pin (or 'none')" "20" \
+  "20 = pin 38. Any free GPIO; software PWM. 'none' if you have no fan."
+
+# normalise the opt-outs to an empty value
+for _k in GROWLIGHT_PUMP_PINS GROWLIGHT_FLOAT_PINS GROWLIGHT_FAN_PIN; do
+  case "${CFG[$_k]:-}" in
+    none|NONE|None|no|n|-|skip) CFG["$_k"]=""; echo "    $_k: none" ;;
+  esac
+done
+
+if [[ "$NONINTERACTIVE" -eq 0 ]]; then
+  echo
+  echo "-- Optional integrations (Enter to skip) --"
+fi
+ask_secret ANTHROPIC_API_KEY "Anthropic API key" \
+  "Enables the daily AI garden report. Skip if you do not want it."
+ask_secret DISCORD_WEBHOOK "Discord webhook URL" \
+  "Enables threshold alerts. Skip to leave alerts off."
+
+# I2C/1-Wire addresses are auto-detected at runtime, so there is nothing to ask.
+umask 077
+{
+  echo "# Written by scripts/setup.sh. Read by the systemd unit."
+  echo "# Edit here and 'sudo systemctl restart growlight' to apply."
+  # Hardware keys are written even when empty: that is how "I have no pump"
+  # persists across a re-run instead of reverting to the suggested default.
+  for k in GROWLIGHT_LIGHT_PIN GROWLIGHT_PUMP_PINS GROWLIGHT_FLOAT_PINS GROWLIGHT_FAN_PIN; do
+    echo "$k=${CFG[$k]:-}"
+  done
+  for k in ANTHROPIC_API_KEY DISCORD_WEBHOOK; do
+    [[ -n "${CFG[$k]:-}" ]] && echo "$k=${CFG[$k]}"
+  done
+} > "$ENV_FILE"
+chmod 600 "$ENV_FILE"
+umask 022
+echo "    saved to $ENV_FILE (mode 600)"
+
 echo "==> [2/7] Boot config: PWM, I2C and 1-Wire"
 CONFIG_TXT=/boot/firmware/config.txt
 [[ -f "$CONFIG_TXT" ]] || CONFIG_TXT=/boot/config.txt
@@ -54,7 +172,7 @@ add_boot_line() {
     NEED_REBOOT=1
   fi
 }
-add_boot_line "dtoverlay=pwm,pin=18,func=2" "light dimming"
+add_boot_line "dtoverlay=pwm,pin=${CFG[GROWLIGHT_LIGHT_PIN]},func=2" "light dimming"
 add_boot_line "dtparam=i2c_arm=on"          "soil probes, air and lux sensors"
 add_boot_line "dtoverlay=w1-gpio,gpiopin=4" "DS18B20 soil temperature"
 
@@ -103,6 +221,7 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
+EnvironmentFile=-$APP_DIR/.env
 ExecStart=$APP_DIR/venv/bin/python $APP_DIR/growlight.py
 WorkingDirectory=$APP_DIR
 Restart=always

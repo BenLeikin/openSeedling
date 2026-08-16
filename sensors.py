@@ -44,8 +44,12 @@ ENABLED = {
 # Float GPIOs (BCM). Override via GROWLIGHT_FLOAT_PINS="1:23,2:22" if you
 # need to move one off a bad pin without editing code.
 FLOAT_PINS = {"1": 23, "2": 22}   # tray -> BCM pin (physical 16, 15)
-_fp = os.environ.get("GROWLIGHT_FLOAT_PINS", "").strip()
-if _fp:
+_fp = os.environ.get("GROWLIGHT_FLOAT_PINS")
+if _fp is not None and not _fp.strip():
+    FLOAT_PINS = {}                     # explicitly configured as "no floats"
+    print("float pins: none configured")
+elif (_fp or "").strip():
+    _fp = _fp.strip()
     try:
         FLOAT_PINS = {a.strip(): int(b) for a, b in
                       (part.split(":") for part in _fp.split(","))}

@@ -61,9 +61,25 @@ the watering controls, and the daily AI plant-health report.*
 | Float tray 1 | 23 | 16 | Internal pull-up; other leg to GND (`FLOAT_ENABLED` in `sensors.py`) |
 | Float tray 2 | 22 | 15 | Internal pull-up; other leg to GND |
 
-Pin overrides: set `GROWLIGHT_PUMP_PINS="1:24,2:26"` or `GROWLIGHT_FLOAT_PINS="1:23,2:22"`
-in the systemd unit (`Environment=`) to move a pump or float off a bad GPIO without
-editing code. Restart the service to apply; the journal prints the pins in use.
+Pin overrides live in `.env` next to the app, written by `scripts/setup.sh` and
+read by the systemd unit:
+
+| Variable | Example | Notes |
+| --- | --- | --- |
+| `GROWLIGHT_LIGHT_PIN` | `18` | Hardware PWM: **only 18 or 19** |
+| `GROWLIGHT_PUMP_PINS` | `1:24,2:26` | One entry per tray with a pump |
+| `GROWLIGHT_FLOAT_PINS` | `1:23,2:22` | One entry per tray with a float |
+| `GROWLIGHT_FAN_PIN` | `20` | Any free GPIO (software PWM) |
+| `ANTHROPIC_API_KEY` | | Enables the daily AI report |
+| `DISCORD_WEBHOOK` | | Enables threshold alerts |
+
+Answer `none` to any hardware prompt you do not have; that device is then never
+claimed, its dashboard controls stay hidden, and re-running setup offers `none`
+again rather than reverting to the suggested pin. Wire it up later and re-run
+setup to enable it.
+
+Edit `.env` and restart to apply; the journal prints the pins in use at startup.
+`.env` is gitignored and written mode 600 because it holds secrets.
 | I2C SDA | 2 | 3 | To ADS1115 SDA (soil moisture ADC) |
 | I2C SCL | 3 | 5 | To ADS1115 SCL |
 
@@ -101,6 +117,12 @@ git clone <your-repo-url> ~/growlight
 cd ~/growlight
 bash scripts/setup.sh
 ```
+
+It asks which GPIO each device is on (suggesting the defaults below) and
+optionally takes your Anthropic API key and Discord webhook. Answers go to
+`.env`, which the systemd unit reads, so nothing in the Python needs editing.
+Re-running offers your previous answers as the defaults; `bash scripts/setup.sh
+--defaults` skips every prompt.
 
 The script is idempotent and preserves `config.json` and `growlight.db`, so it is
 safe to re-run after an update. It handles:

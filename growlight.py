@@ -131,7 +131,12 @@ DEFAULTS = {
     },
 }
 
-GPIO_PIN      = 18
+GPIO_PIN      = 18   # hardware PWM channel 0. Only 18 or 19 can do hardware
+                     # PWM; GROWLIGHT_LIGHT_PIN picks between them.
+try:
+    GPIO_PIN = int(os.environ.get("GROWLIGHT_LIGHT_PIN", GPIO_PIN))
+except ValueError:
+    pass
 PWM_FREQ      = 1000
 LOOP_SECONDS  = 30
 HTTP_PORT     = 5000
@@ -153,23 +158,38 @@ THUMB_DIR.mkdir(exist_ok=True)
 # e.g. GROWLIGHT_PUMP_PINS="1:24,2:26" in the systemd unit, then restart.
 FAN_PIN = 20                     # BCM; physical 38. Low-side switched via a
                                  #   D4184 with a flyback across the fan.
+_fanenv = os.environ.get("GROWLIGHT_FAN_PIN")
+if _fanenv is not None and not _fanenv.strip():
+    FAN_PIN = None                      # explicitly configured as "no fan"
+else:
+    try:
+        FAN_PIN = int(_fanenv) if _fanenv else FAN_PIN
+    except ValueError:
+        print(f"GROWLIGHT_FAN_PIN unreadable; using {FAN_PIN}")
 # Speed control is software PWM: GPIO20 has no hardware PWM channel (those are
 # 18 and 19, and 18 drives the light). Software PWM is fine for a fan at these
 # duty cycles, but cheap fans can whine audibly or stall below ~30%, which is
 # why fan_min_speed exists.
 _fan = None
 FAN_PWM_HZ = 100
-try:
-    from gpiozero import PWMOutputDevice as _PWMOut
-    _fan = _PWMOut(FAN_PIN, frequency=FAN_PWM_HZ, initial_value=0)
-except Exception as _e:
-    print(f"fan GPIO{FAN_PIN} unavailable ({_e}); fan control disabled")
+if FAN_PIN is None:
+    print("fan: none configured")
+else:
+    try:
+        from gpiozero import PWMOutputDevice as _PWMOut
+        _fan = _PWMOut(FAN_PIN, frequency=FAN_PWM_HZ, initial_value=0)
+    except Exception as _e:
+        print(f"fan GPIO{FAN_PIN} unavailable ({_e}); fan control disabled")
 FAN_HW = _fan is not None
 fan_state = {"on": False, "reason": "off", "speed": 0}
 
 PUMP_PINS = {"1": 24, "2": 26}   # tray -> BCM (physical 18, 37)
-_pp = os.environ.get("GROWLIGHT_PUMP_PINS", "").strip()
-if _pp:
+_pp = os.environ.get("GROWLIGHT_PUMP_PINS")
+if _pp is not None and not _pp.strip():
+    PUMP_PINS = {}                      # explicitly configured as "no pumps"
+    print("pump pins: none configured")
+elif (_pp or "").strip():
+    _pp = _pp.strip()
     try:
         PUMP_PINS = {t.strip(): int(v) for t, v in
                      (part.split(":") for part in _pp.split(","))}
@@ -278,7 +298,8 @@ VIDEO_PATH = TIMELAPSE_DIR / "timelapse.mp4"
 GROWTH_SCRIPT = Path(__file__).with_name("growth.py")
 
 try:
-    pwm = HardwarePWM(pwm_channel=0, hz=PWM_FREQ, chip=0)
+    pwm = HardwarePWM(pwm_channel=(1 if GPIO_PIN == 19 else 0),
+                      hz=PWM_FREQ, chip=0)
     pwm.start(0)
 except Exception as e:
     sys.exit(f"Hardware PWM unavailable ({e}). Check that "
