@@ -57,6 +57,7 @@ the watering controls, and the daily AI plant-health report.*
 | Light PWM | 18 | 12 | Hardware PWM, 1 kHz, to the light MOSFET gate |
 | Pump tray 1 | 24 | 18 | To that pump's MOSFET gate (separate 5 V brick + common ground) |
 | Pump tray 2 | 26 | 37 | Second pump MOSFET gate, same supply rules |
+| Fan | 20 | 38 | Fan MOSFET gate; 5 V fan on the pump supply, flyback across the fan |
 | Float tray 1 | 23 | 16 | Internal pull-up; other leg to GND (`FLOAT_ENABLED` in `sensors.py`) |
 | Float tray 2 | 22 | 15 | Internal pull-up; other leg to GND |
 
@@ -98,45 +99,37 @@ On the Pi:
 ```bash
 git clone <your-repo-url> ~/growlight
 cd ~/growlight
-python3 -m venv venv
-./venv/bin/pip install flask astral rpi-hardware-pwm gpiozero werkzeug
-./venv/bin/pip install adafruit-circuitpython-ads1x15   # soil moisture ADC
-sudo apt install -y python3-lgpio ffmpeg i2c-tools
+bash scripts/setup.sh
 ```
 
-`gpiozero` needs the `lgpio` backend. The pip build of `lgpio` is fragile on the
-Pi, so install the system package (`python3-lgpio`) and let the venv see it by
-setting `include-system-site-packages = true` in `venv/pyvenv.cfg`.
+The script is idempotent and preserves `config.json` and `growlight.db`, so it is
+safe to re-run after an update. It handles:
 
-Run it directly to test:
+1. System packages (`rpicam-apps`, `ffmpeg`, `i2c-tools`)
+2. Boot config: the PWM overlay for light dimming, plus I2C and 1-Wire for the
+   sensors. **Adding any of these requires a reboot**, and the script says so.
+3. Swap, so a timelapse render does not OOM a 512 MB board
+4. A venv with the core and sensor libraries
+5. The systemd unit, enabled at boot
+6. Shell convenience (venv auto-activate)
+7. A hardware check: which I2C addresses and DS18B20 sensors are actually visible
 
-```bash
-./venv/bin/python growlight.py
-```
+That last step is the useful one when something is not reading. It distinguishes
+"the sensor is not wired" from "the software is not seeing it": if `i2cdetect`
+does not list the address, no amount of restarting the service will help.
 
-The dashboard comes up on `http://<pi-ip>:5000`.
+After the first run, reboot if asked, then set the location and schedule in
+Settings on the dashboard.
 
 ### Run as a service
 
-Create `/etc/systemd/system/growlight.service`:
-
-```ini
-[Unit]
-Description=Growlight controller
-After=network-online.target
-
-[Service]
-User=ben
-WorkingDirectory=/home/ben/growlight
-ExecStart=/home/ben/growlight/venv/bin/python /home/ben/growlight/growlight.py
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
-```
+`scripts/setup.sh` writes and enables `/etc/systemd/system/growlight.service`
+for you. Useful commands:
 
 ```bash
-sudo systemctl enable --now growlight
+sudo systemctl status growlight
+sudo systemctl restart growlight
+journalctl -u growlight -f
 ```
 
 ### Deploy updates
@@ -145,8 +138,12 @@ sudo systemctl enable --now growlight
 cd ~/growlight && git pull && sudo systemctl restart growlight
 ```
 
-Then hard-refresh the dashboard (Ctrl-Shift-R) so the browser picks up new
-JS/CSS.
+Static assets are versioned by file mtime, so the browser picks up new JS and CSS
+on its own; no hard refresh needed.
+
+If a pull leaves one file behind, the service can end up running a mix of old and
+new code. `git status` should be clean before a pull, and the journal is the
+place to confirm the restart came up without a traceback.
 
 ---
 
@@ -285,8 +282,26 @@ Read endpoints are open; mutating ones require a session when a password is set.
 | POST | `/api/dryness_cal` | Capture a wet/dry moisture anchor |
 | POST | `/api/probe_cal` | Capture a tray probe's wet/dry anchor |
 | POST | `/api/probe_tempcomp` | Estimate/apply a probe's temperature-drift coefficient |
+| POST | `/api/fan` | Fan mode: `auto`, `on`, or `off` |
+| POST | `/api/schedule` | Adjust the light window (used by the chart drag handles) |
 | POST | `/api/light` | Manual light hold (auto/on/off) + manual brightness |
+| POST | `/api/tray_layout` | Add, remove, rename or resize a tray (confirm required if cells would be lost) |
 | POST | `/api/trays` | Save the planting map (what's sown in each cell) |
+
+### Schedule modes
+
+| Mode | Behaviour |
+| --- | --- |
+| `solar` | Follows local sunrise/sunset with offsets (tracks the season) |
+| `fixed` | The same clock times daily; an off time before the on time runs overnight |
+| `duration` | A constant day length anchored to the off time: lights-off stays put, lights-on moves |
+
+Set it under Settings > Schedule. In `fixed` and `duration` modes the day-curve
+chart gets draggable handles on the lights-on and lights-off edges (logged-in
+only): drag to adjust, snapped to five minutes. In `fixed` mode each edge sets
+its own clock time; in `duration` mode the right edge moves the anchor and the
+left edge changes the day length. Dragging commits via `POST /api/schedule`. Sunrise and sunset are still computed and shown
+on the dashboard in every mode. Ramps apply the same way in all three.
 
 ### Discord alerts
 

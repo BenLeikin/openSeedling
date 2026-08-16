@@ -41,7 +41,89 @@ function draw(){
     <line x1="${x(now)}" y1="${T}" x2="${x(now)}" y2="${y(0)}" stroke="#b3543a" stroke-width="2"/>
     <circle class="nowdot" cx="${x(now)}" cy="${y(curve(now,on,off,S.ramp,S.max))}" r="6"
             fill="#b3543a" stroke="#fff" stroke-width="2"/>
-    <text x="${L}" y="${y(100)-4}" font-size="11" fill="#3f7d45">${S.max}%</text>`;
+    <text x="${L}" y="${y(100)-4}" font-size="11" fill="#3f7d45">${S.max}%</text>
+    ${schedHandles(x,y,on,off,T,H,B)}`;
+  bindSchedDrag();
+}
+// the on/off edges are draggable in the modes where those are real settings
+function schedDraggable(){
+  return canEdit && S && (S.schedule_mode==='fixed'||S.schedule_mode==='duration');
+}
+function schedHandles(x,y,on,off,T,H,B){
+  if(!schedDraggable())return '';
+  const top=T, bot=H-B;
+  const h=(m,id,label)=>`
+    <g class="schandle" data-edge="${id}" style="cursor:ew-resize">
+      <line x1="${x(m)}" y1="${top}" x2="${x(m)}" y2="${bot}"
+            stroke="#27432e" stroke-width="1.5" stroke-dasharray="4 3"/>
+      <rect x="${x(m)-7}" y="${top-14}" width="14" height="14" rx="3" fill="#27432e"/>
+      <text x="${x(m)}" y="${top-3}" text-anchor="middle" font-size="10" fill="#fff">${label}</text>
+      <rect class="schit" x="${x(m)-14}" y="${top}" width="28" height="${bot-top}"
+            fill="transparent"/>
+    </g>`;
+  // in duration mode the start edge sets the day length, the end edge moves the anchor
+  return h(on,'on',S.schedule_mode==='duration'?'\u21c6':'\u25b8')+h(off,'off','\u25c2');
+}
+let schedDrag=null;
+function bindSchedDrag(){
+  const svg=document.getElementById('chart');
+  if(!svg||svg.dataset.schedBound)return;
+  svg.dataset.schedBound='1';
+  const W=640,L=34,R=12;
+  const xToMin=ev=>{
+    const r=svg.getBoundingClientRect();
+    const px=(ev.clientX-r.left)/r.width*W;          // viewBox units
+    const m=(px-L)/(W-L-R)*1440;
+    return Math.max(0,Math.min(1439,Math.round(m/5)*5));   // snap to 5 min
+  };
+  svg.addEventListener('pointerdown',ev=>{
+    const g=ev.target.closest('.schandle');
+    if(!g||!schedDraggable())return;
+    schedDrag={edge:g.dataset.edge};
+    svg.setPointerCapture&&svg.setPointerCapture(ev.pointerId);
+    ev.preventDefault();
+  });
+  svg.addEventListener('pointermove',ev=>{
+    if(!schedDrag)return;
+    const m=xToMin(ev);
+    // live preview: move the local window and redraw without waiting for a save
+    if(schedDrag.edge==='on')S.on=minsToDate(S.on,m);
+    else S.off=minsToDate(S.off,m);
+    schedDrag.value=m;
+    draw();
+    const info=document.getElementById('lightinfo');
+    if(info)info.textContent=`${fmt(S.on)} \u2192 ${fmt(S.off)} `
+      +`(${durStr(Math.max(0,S.off-S.on))})`;
+  });
+  const finish=async ev=>{
+    if(!schedDrag)return;
+    const edge=schedDrag.edge, m=schedDrag.value;
+    schedDrag=null;
+    if(m==null){refresh();return;}
+    const hhmm=`${String(Math.floor(m/60)).padStart(2,'0')}:${String(m%60).padStart(2,'0')}`;
+    const body={};
+    if(S.schedule_mode==='fixed'){
+      body[edge==='on'?'fixed_on':'fixed_off']=hhmm;
+    }else{                                    // duration: end anchors, start sets length
+      if(edge==='off')body.duration_end=hhmm;
+      else body.duration_hours=Math.max(0,(S.off-S.on)/3600000);
+    }
+    try{
+      const r=await fetch('/api/schedule',{method:'POST',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      const j=await r.json().catch(()=>({}));
+      const info=document.getElementById('lightinfo');
+      if(info&&!j.ok)info.textContent=j.error||'could not update the schedule';
+    }catch(e){}
+    refresh();
+  };
+  svg.addEventListener('pointerup',finish);
+  svg.addEventListener('pointercancel',finish);
+}
+function minsToDate(ref,m){
+  const d=new Date(ref);
+  d.setHours(Math.floor(m/60),m%60,0,0);
+  return d;
 }
 
 // ---- lighting-stage graphics: graphic follows the actual phase ----
@@ -132,8 +214,6 @@ function render(){
     <dt>&#128164; Lights off</dt><dd>${fmt(S.off)}</dd>
     <dt>&#127804; Photoperiod</dt><dd>${Math.floor(dayLen/60)}h ${Math.round(dayLen%60)}m</dd>
     <dt>&#9202; Ramp length</dt><dd>${S.ramp} min</dd>`;
-  document.getElementById('cfg').textContent=
-    `GPIO${S.gpio} \u00b7 ${S.freq} Hz PWM \u00b7 updates every ${S.loop}s`;
   draw();
 }
 
@@ -141,7 +221,7 @@ let lightMode='auto', dragging=false;
 function showLightMode(mode, bright){
   mode = mode || 'auto';
   lightMode = mode;
-  document.querySelectorAll('.lcbtn').forEach(b=>
+  document.querySelectorAll('.lcbtn:not(.fanbtn)').forEach(b=>
     b.classList.toggle('on', b.dataset.mode===mode));
   const info=document.getElementById('lightinfo');
   if(info)info.textContent = (mode==='on'||mode==='off')
@@ -312,19 +392,28 @@ function fillForm(cfg){
   for(const k of ['latitude','longitude','timezone','max_bright','ramp_min',
                   'sunrise_offset_min','sunset_offset_min',
                   'capture_interval_min','capture_brightness','roi',
-                  'lux_to_ppfd_k','alert_sustain_min','alert_cooldown_hours',
+                  'lux_to_ppfd_k','canopy_factor','duration_hours','humidity_low','humidity_high','fan_humidity_on','fan_min_speed','alert_sustain_min','alert_cooldown_hours',
                   'alert_dry_pct','alert_humidity_high'])
     if(f.elements[k] && document.activeElement!==f.elements[k])
       f.elements[k].value=cfg[k];
+  {// schedule mode: populate its fields and show only that mode's block
+   const sm=f.elements['schedule_mode'];
+   if(sm&&document.activeElement!==sm)sm.value=cfg.schedule_mode||'solar';
+   for(const k of ['fixed_on','fixed_off','duration_end'])
+     if(f.elements[k]&&document.activeElement!==f.elements[k])
+       f.elements[k].value=cfg[k]||'';
+   showScheduleMode(sm?sm.value:'solar');}
+  {const fw=f.elements['fan_with_light'];
+   if(fw&&document.activeElement!==fw)fw.checked=cfg.fan_with_light!==false;}
   {const ae=f.elements['alerts_enabled'];
    if(ae&&document.activeElement!==ae)ae.checked=cfg.alerts_enabled!==false;
-   const cold=f.elements['alert_soil_low_f'];
-   if(cold&&document.activeElement!==cold){
-     const fv=+cfg.alert_soil_low_f||0;
-     cold.value=fv?Math.round(tFromF(fv)):0;
+   const lo=f.elements['soil_temp_low_f'];
+   if(lo&&document.activeElement!==lo){
+     const fv=+cfg.soil_temp_low_f||0;
+     lo.value=fv?Math.round(tFromF(fv)):0;
    }
-   const cl=document.getElementById('alcoldlbl');
-   if(cl)cl.innerHTML=tUnit();}
+   const ll=document.getElementById('threshlolbl');
+   if(ll)ll.innerHTML=tUnit();}
   {const u=f.elements['units'];
    if(u&&document.activeElement!==u){u.value=cfg.units||'imperial';units=u.value;}
    const th=f.elements['soil_temp_high_f'];
@@ -503,7 +592,7 @@ function camMoisture(cell, b){
   if(dry<=wet) return null;
   return Math.max(0, Math.min(100, 100*(dry-b)/(dry-wet)));
 }
-let chartHours=168;
+let chartHours=24;
 
 let units='imperial';
 function isMetric(){return units==='metric';}
@@ -576,6 +665,10 @@ function renderSensors(j){
   if(j.settings&&j.settings.units)units=j.settings.units;
   if(j.settings&&j.settings.soil_temp_high_f!=null)
     soilTempHigh=+j.settings.soil_temp_high_f;
+  if(j.settings&&j.settings.soil_temp_low_f!=null)
+    soilTempLow=+j.settings.soil_temp_low_f;
+  if(j.settings&&j.settings.humidity_high!=null)humHigh=+j.settings.humidity_high;
+  if(j.settings&&j.settings.humidity_low!=null)humLow=+j.settings.humidity_low;
   if(j.settings){
     sampleMin=+j.settings.sample_interval_min||5;
     capMin=+j.settings.capture_interval_min||30;
@@ -634,7 +727,8 @@ function renderSensors(j){
      if(envg){
        let extra='';
        if(lightMetrics.ppfd!=null)
-         extra+=`<span class="schip" title="lux \u00f7 ${lightMetrics.k} (fixture spectrum factor)">`
+         extra+=`<span class="schip" title="at canopy \u00b7 lux \u00f7 ${lightMetrics.k}`
+           +`${lightMetrics.canopy&&lightMetrics.canopy!==1?` \u00d7 ${lightMetrics.canopy} canopy factor`:''}">`
            +`PPFD <b>${Math.round(lightMetrics.ppfd)}</b><span class="u">\u00b5mol</span></span>`;
        if(lightMetrics.dli!=null){
          const d=lightMetrics.dli, cls=(d>=6&&d<=12)?'ok':(d<6?'low':'high');
@@ -667,7 +761,8 @@ const CHART_SECTIONS=[
   {id:'growth', title:'Growth',           match:k=>k.startsWith('growth:')},
   {id:'other',  title:'Other',            match:k=>true},
 ];
-let seriesData={}, chartPlots={}, soilTempHigh=90;
+let seriesData={}, chartPlots={}, soilTempHigh=85, soilTempLow=80;
+let humHigh=60, humLow=40;
 function chartUnitFor(s){
   if(s.startsWith('temp:'))return tUnit();
   if(s.startsWith('humidity')||s.startsWith('moisture:')||s.startsWith('growth:'))return '%';
@@ -690,7 +785,7 @@ function convertFor(s){
   }
   return v=>v;
 }
-let lastChartLoad=0;
+let lastChartLoad=0, lastHostLoad=0;
 async function loadChart(){
   lastChartLoad=Date.now();
   const info=document.getElementById('chartinfo');
@@ -703,9 +798,12 @@ async function loadChart(){
     renderChartGrid();
   }catch(e){if(info)info.textContent='charts unavailable';}
 }
+let expandedCharts=new Set();
 function renderChartGrid(){
   const grid=document.getElementById('chartgrid');
   if(!grid)return;
+  // remember which cards are open: the grid is rebuilt on every reload
+  document.querySelectorAll('.ccard.expanded').forEach(c=>expandedCharts.add(c.id));
   const keys=Object.keys(seriesData).filter(k=>!k.startsWith('float:')).sort();
   if(!keys.length){
     const haveNow=Object.keys(sensorData||{}).length>0;
@@ -728,9 +826,11 @@ function renderChartGrid(){
       +`<div class="cgrid">`;
     for(const k of mine){
       const m=sensorMeta(k,0);
-      h+=`<div class="ccard">
+      h+=`<div class="ccard" id="cc-${cssId(k)}">
             <div class="chead"><span>${m.label}<span class="cunit">${chartUnitFor(k)}</span></span>
-              <span class="cstats" id="cs-${cssId(k)}">&mdash;</span></div>
+              <span class="cstats" id="cs-${cssId(k)}">&mdash;</span>
+              <button type="button" class="cexpand" data-key="${cssId(k)}"
+                      title="Expand this chart" aria-label="Expand ${m.label} chart">\u2922</button></div>
             <svg class="cmini" id="cv-${cssId(k)}" viewBox="0 0 320 110"
                  preserveAspectRatio="none" role="img" aria-label="${m.label} history"></svg>
           </div>`;
@@ -738,6 +838,14 @@ function renderChartGrid(){
     h+='</div></div>';
   }
   grid.innerHTML=h;
+  for(const id of expandedCharts){
+    const c=document.getElementById(id);
+    if(c){
+      c.classList.add('expanded');
+      const b=c.querySelector('.cexpand');
+      if(b){b.textContent='\u2921';b.title='Shrink this chart';}
+    }
+  }
   chartPlots={};
   for(const k of keys)drawMini(k);
 }
@@ -746,7 +854,17 @@ function drawMini(key){
   const svg=document.getElementById('cv-'+cssId(key));
   const stat=document.getElementById('cs-'+cssId(key));
   if(!svg)return;
-  const W=320,H=110,P=6,B=16;         // B: bottom room for time labels
+  const card=document.getElementById('cc-'+cssId(key));
+  const big=!!(card&&card.classList.contains('expanded'));
+  // match the viewBox to the element's real pixel size: one unit = one CSS
+  // pixel, so text renders at its natural shape at any card width. A fixed
+  // viewBox stretched to fit would smear the labels (badly so on a phone).
+  const r=svg.getBoundingClientRect();
+  const W=Math.max(200,Math.round(r.width)||320);
+  const H=Math.max(80,Math.round(r.height)||(big?300:110));
+  const P=big?12:6, B=big?24:16;
+  svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
+  const FS=big?12:10, FS2=big?13:11;   // now honest px sizes
   const conv=convertFor(key), unit=chartUnitFor(key);
   const data=(seriesData[key]||[]).map(([t,v])=>[t,conv(v)])
                                   .filter(d=>d[1]!=null&&!isNaN(d[1]));
@@ -758,9 +876,20 @@ function drawMini(key){
   const x0=Math.min(...xs), x1=Math.max(...xs);
   let y0=Math.min(...ys), y1=Math.max(...ys);
   const pct=unit==='%';
-  // warning line on soil temp charts (chile germination upper limit)
-  const hiLine=(key.startsWith('temp:soil')&&soilTempHigh>0)?tFromF(soilTempHigh):null;
-  if(hiLine!=null){y0=Math.min(y0,hiLine);y1=Math.max(y1,hiLine);}  // keep it on-chart
+  // target band: soil temp uses the germination window, humidity its own
+  // comfort range. Both draw through the same code below.
+  const isSoil=key.startsWith('temp:soil');
+  const isHum=key==='humidity';
+  let hiLine=null, loLine=null, hiTxt='', loTxt='';
+  if(isSoil){
+    if(soilTempHigh>0){hiLine=tFromF(soilTempHigh);hiTxt=`${Math.round(tFromF(soilTempHigh))}${tUnit()}`;}
+    if(soilTempLow>0){loLine=tFromF(soilTempLow);loTxt=`${Math.round(tFromF(soilTempLow))}${tUnit()}`;}
+  }else if(isHum){
+    if(humHigh>0){hiLine=humHigh;hiTxt=`${humHigh}%`;}
+    if(humLow>0){loLine=humLow;loTxt=`${humLow}%`;}
+  }
+  if(hiLine!=null){y0=Math.min(y0,hiLine);y1=Math.max(y1,hiLine);}
+  if(loLine!=null){y0=Math.min(y0,loLine);y1=Math.max(y1,loLine);}
   if(pct){y0=Math.min(y0,0);y1=Math.max(y1,100);}   // % charts on a fixed scale
   if(y0===y1){y0-=1;y1+=1;}
   const pad=(y1-y0)*0.08; if(!pct){y0-=pad;y1+=pad;}
@@ -790,30 +919,56 @@ function drawMini(key){
             vector-effect="non-scaling-stroke" opacity="0.85"/>`;
     }
   }
-  if(hiLine!=null){
-    const hy=sy(hiLine);
-    if(hy>=P&&hy<=H-B){
-      h+=`<rect x="${P}" y="${P}" width="${W-2*P}" height="${Math.max(0,hy-P).toFixed(1)}"
-            fill="rgba(181,50,47,0.07)"/>`;
-      h+=`<line x1="${P}" y1="${hy.toFixed(1)}" x2="${W-P}" y2="${hy.toFixed(1)}"
-            stroke="#b5322f" stroke-width="1.2" stroke-dasharray="5 4"
-            vector-effect="non-scaling-stroke"/>`;
-      h+=`<text x="${W-P-2}" y="${(hy-3).toFixed(1)}" text-anchor="end" font-size="9"
-            fill="#b5322f">too warm ${Math.round(tFromF(soilTempHigh))}${tUnit()}</text>`;
+  if(hiLine!=null||loLine!=null){
+    const clamp=v=>Math.max(P,Math.min(H-B,v));
+    // the target band between the two bounds, so "in range" reads at a glance
+    if(hiLine!=null&&loLine!=null){
+      const top=clamp(sy(hiLine)), bot=clamp(sy(loLine));
+      if(bot>top)
+        h+=`<rect x="${P}" y="${top.toFixed(1)}" width="${W-2*P}"
+              height="${(bot-top).toFixed(1)}" fill="rgba(74,124,89,0.10)"/>`;
+    }
+    if(hiLine!=null){
+      const hy=sy(hiLine);
+      if(hy>=P&&hy<=H-B){
+        h+=`<rect x="${P}" y="${P}" width="${W-2*P}" height="${Math.max(0,hy-P).toFixed(1)}"
+              fill="rgba(181,50,47,0.07)"/>`;
+        h+=`<line x1="${P}" y1="${hy.toFixed(1)}" x2="${W-P}" y2="${hy.toFixed(1)}"
+              stroke="#b5322f" stroke-width="1.2" stroke-dasharray="5 4"
+              vector-effect="non-scaling-stroke"/>`;
+        h+=`<text x="${W-P-2}" y="${(hy-3).toFixed(1)}" text-anchor="end" font-size="${FS}"
+              fill="#b5322f" font-size="${FS}">${hiTxt}</text>`;
+      }
+    }
+    if(loLine!=null){
+      const ly=sy(loLine);
+      if(ly>=P&&ly<=H-B){
+        h+=`<rect x="${P}" y="${ly.toFixed(1)}" width="${W-2*P}"
+              height="${Math.max(0,(H-B)-ly).toFixed(1)}" fill="rgba(58,110,165,0.07)"/>`;
+        h+=`<line x1="${P}" y1="${ly.toFixed(1)}" x2="${W-P}" y2="${ly.toFixed(1)}"
+              stroke="#3a6ea5" stroke-width="1.2" stroke-dasharray="5 4"
+              vector-effect="non-scaling-stroke"/>`;
+        h+=`<text x="${W-P-2}" y="${(ly+10).toFixed(1)}" text-anchor="end" font-size="${FS}"
+              fill="#3a6ea5" font-size="${FS}">${loTxt}</text>`;
+      }
     }
   }
   const fmtT=t=>{const d=new Date(t*1000);
     return chartHours<=24?d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})
                          :d.toLocaleDateString([],{month:'numeric',day:'numeric'});};
-  h+=`<text x="${P}" y="${H-4}" font-size="9" fill="#7a8a72">${fmtT(x0)}</text>`;
-  h+=`<text x="${W-P}" y="${H-4}" font-size="9" fill="#7a8a72" text-anchor="end">${fmtT(x1)}</text>`;
+  h+=`<text x="${P}" y="${H-6}" font-size="${FS}" fill="#7a8a72">${fmtT(x0)}</text>`;
+  h+=`<text x="${W-P}" y="${H-6}" font-size="${FS}" fill="#7a8a72" text-anchor="end">${fmtT(x1)}</text>`;
   h+=`<line class="hvl" y1="${P}" y2="${H-B}" stroke="#4a7c59" stroke-width="1"
         stroke-dasharray="3 3" style="display:none"/>`;
-  h+=`<circle class="hdot" r="3" fill="#2e7d32" stroke="#fff" stroke-width="1.2" style="display:none"/>`;
+  h+=`<circle class="hdot" r="${big?4.5:3}" fill="#2e7d32" stroke="#fff" stroke-width="1.2" style="display:none"/>`;
+  h+=`<g class="hlbl" style="display:none">
+        <rect rx="3" fill="#2f4030" opacity="0.92"/>
+        <text font-size="${FS2}" fill="#eafff0"></text>
+      </g>`;
   svg.innerHTML=h;
   const dec=(unit==='%')?0:(unit==='lx'?0:(unit==='inHg'?2:(unit==='hPa'?0:1)));
   const cur=ys[ys.length-1], lo=Math.min(...ys), hi=Math.max(...ys);
-  const over=hiLine!=null&&cur>hiLine;
+  const over=(hiLine!=null&&cur>hiLine)||(loLine!=null&&cur<loLine);
   const lim=(key.startsWith('dry:')||key.startsWith('growth:'))?3*capMin:3*sampleMin;
   const lastTs=xs[xs.length-1];
   const isStale=(Date.now()/1000-lastTs)>lim*60;
@@ -821,7 +976,7 @@ function drawMini(key){
   if(stat)stat.innerHTML=`<b${over?' class="hot"':''}>${cur.toFixed(dec)}</b>`
     +` \u00b7 lo ${lo.toFixed(dec)} \u00b7 hi ${hi.toFixed(dec)}`
     +(isStale?` <span class="stalebadge" title="last point ${agoStr(new Date(lastTs*1000))}">stale</span>`:'');
-  chartPlots[key]={unit,dec,
+  chartPlots[key]={unit,dec,W,H,P,B,big,
     pts:data.map(d=>({x:sx(d[0]),y:sy(d[1]),v:d[1],t:d[0]})),
     fmt:t=>new Date(t*1000).toLocaleString([],{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})};
 }
@@ -839,16 +994,34 @@ function chartMove(e){
   for(const pt of plot.pts){const d=Math.abs(pt.x-loc.x);if(d<bd){bd=d;best=pt;}}
   if(!best)return;
   const vl=svg.querySelector('.hvl'),dot=svg.querySelector('.hdot');
+  const lbl=svg.querySelector('.hlbl');
   const tip=document.getElementById('charttip');
   if(vl){vl.setAttribute('x1',best.x);vl.setAttribute('x2',best.x);vl.style.display='';}
   if(dot){dot.setAttribute('cx',best.x);dot.setAttribute('cy',best.y);dot.style.display='';}
-  if(tip){
-    tip.textContent=`${best.v.toFixed(plot.dec)}${plot.unit} \u00b7 ${plot.fmt(best.t)}`;
-    tip.style.display='';tip.style.left=(e.clientX+12)+'px';tip.style.top=(e.clientY-32)+'px';
+  // value rides on the crosshair itself, so it reads without a floating tooltip
+  if(lbl){
+    const txt=lbl.querySelector('text'), rect=lbl.querySelector('rect');
+    const s1=`${best.v.toFixed(plot.dec)}${plot.unit}`;
+    const s2=plot.fmt(best.t);
+    const label=plot.big?`${s1}  \u00b7  ${s2}`:s1;
+    txt.textContent=label;
+    const cw=label.length*(plot.big?7.6:5.6)+10, ch=plot.big?22:16;
+    // keep the box inside the plot area at either edge
+    let bx=best.x+8;
+    if(bx+cw>plot.W-plot.P)bx=best.x-cw-8;
+    const by=Math.max(plot.P, Math.min(plot.H-plot.B-ch, best.y-ch/2));
+    rect.setAttribute('x',bx); rect.setAttribute('y',by);
+    rect.setAttribute('width',cw); rect.setAttribute('height',ch);
+    txt.setAttribute('x',bx+5); txt.setAttribute('y',by+ch-(plot.big?7:5));
+    lbl.style.display='';
   }
+  if(tip&&!plot.big){
+    tip.textContent=plot.fmt(best.t);
+    tip.style.display='';tip.style.left=(e.clientX+12)+'px';tip.style.top=(e.clientY-32)+'px';
+  }else if(tip){tip.style.display='none';}
 }
 function chartLeave(){
-  document.querySelectorAll('svg.cmini .hvl, svg.cmini .hdot')
+  document.querySelectorAll('svg.cmini .hvl, svg.cmini .hdot, svg.cmini .hlbl')
     .forEach(el=>el.style.display='none');
   const tip=document.getElementById('charttip');
   if(tip)tip.style.display='none';
@@ -967,7 +1140,7 @@ async function checkTempComp(tray, apply){
   }catch(e){if(info)info.textContent='request failed';}
 }
 // ---- planting map: two trays, editable seed / equipment / sow date ----
-let trays={}, trayDirty={}, trayTimer=null;
+let trays={}, trayDirty={}, trayTimer=null, trayPending=0;
 function daysSince(iso){
   if(!iso)return null;
   const d=new Date(iso+'T00:00:00'), now=new Date();
@@ -979,7 +1152,9 @@ function renderTrays(j){
   const sig=JSON.stringify(t);
   const wrap=document.getElementById('trayswrap');
   if(!wrap)return;
-  // don't clobber what's being typed
+  // don't clobber what's being typed, or a click whose save is still in flight
+  // (a poll started before the POST would otherwise return pre-save data)
+  if(trayPending>0)return;
   if(wrap.dataset.sig===sig && wrap.children.length)return;
   if(document.activeElement && document.activeElement.closest('#trayswrap'))return;
   wrap.dataset.sig=sig;
@@ -989,18 +1164,64 @@ function renderTrays(j){
     const tr=trays[id]||{}, cells=tr.cells||{};
     const rows=tr.rows||3, cols=tr.cols||4;
     const filled=Object.keys(cells).length;
-    h+=`<div class="tray"><div class="tray-head"><b>${tr.label||('Tray '+id)}</b>`
-      +`<span class="tsum">${filled} of ${rows*cols} cells filled</span></div>`
+    h+=`<div class="tray"><div class="tray-head">`
+      +`<b>${esc(tr.label||('Tray '+id))}</b>`
+      +`<span class="tsum">${filled} of ${rows*cols} cells filled</span>`
+      +`</div>`
       +`<div class="tgrid" style="grid-template-columns:repeat(${cols},1fr)">`;
     for(let r=1;r<=rows;r++){
       for(let c=0;c<cols;c++){
         const cid=colL(c)+r, v=cells[cid]||{};
-        const age=daysSince(v.planted);
-        h+=`<div class="tcell${(v.seed||v.equipment||v.planted)?' filled':''}" data-tray="${id}" data-cell="${cid}">
-              <span class="tid">${cid}<span class="tage">${age==null?'':(age+'d')}</span></span>
-              <input class="tseed"  type="text" placeholder="seed"      value="${esc(v.seed||'')}">
-              <input class="tequip" type="text" placeholder="equipment" value="${esc(v.equipment||'')}">
-              <input class="tdate"  type="date" value="${esc(v.planted||'')}">
+        const sownAge=daysSince(v.planted), sprAge=daysSince(v.sprouted);
+        const toSprout=(v.planted&&v.sprouted)
+          ? Math.round((new Date(v.sprouted+'T00:00:00')-new Date(v.planted+'T00:00:00'))/86400000)
+          : null;
+        const filled=!!(v.seed||v.equipment||v.planted||v.sprouted||v.archived);
+        const cls=['tcell']; if(filled)cls.push('filled');
+        if(v.archived)cls.push('archived'); else if(v.sprouted)cls.push('sprouted');
+        // badge: age since sprouting once up, else age since sowing
+        const badge=v.archived?'out':(v.sprouted?(sprAge==null?'':sprAge+'d'):(sownAge==null?'':sownAge+'d'));
+        // hidden fields stay in the DOM (just not shown) so nothing is lost
+        const hid=new Set((v.hide||[]).filter(f=>!f.startsWith('!')));
+        // the optional extras stay out of the way until used or switched on
+        for(const f of ['count','source','notes'])
+          if(!v[f] && !(v.hide||[]).includes('!'+f)) hid.add(f);
+        const hcl=f=>hid.has(f)?' fhidden':'';
+        h+=`<div class="${cls.join(' ')}" data-tray="${id}" data-cell="${cid}"
+              data-sprouted="${esc(v.sprouted||'')}" data-archived="${esc(v.archived||'')}"
+              data-hide="${esc((v.hide||[]).join(','))}">
+              <span class="tid">${cid}<span class="tage">${badge}</span>
+                <button type="button" class="tfields editonly" aria-label="Choose fields for ${cid}"
+                        title="Choose which fields this cell shows">\u22ef</button></span>
+              <div class="tmenu" hidden>
+                ${[['seed','Seed'],['equipment','Equipment'],['planted','Sown date'],
+                   ['sprouted','Sprout date'],['count','Seed count'],
+                   ['source','Seed source'],['notes','Notes']].map(([f,lbl])=>
+                  `<label><input type="checkbox" data-field="${f}"${hid.has(f)?'':' checked'}> ${lbl}</label>`).join('')}
+              </div>
+              <input class="tseed${hcl('seed')}"  type="text" placeholder="seed"      value="${esc(v.seed||'')}">
+              <input class="tequip${hcl('equipment')}" type="text" placeholder="equipment" value="${esc(v.equipment||'')}">
+              <label class="tdrow trow-planted${hcl('planted')}"><span class="tdlbl">Sown</span>
+                <input class="tdate" type="date" value="${esc(v.planted||'')}"></label>
+              <label class="tdrow trow-sprouted${hcl('sprouted')}${v.sprouted?'':' fhidden'}"><span class="tdlbl up">Up</span>
+                <input class="tdate tsprdate" type="date" value="${esc(v.sprouted||'')}"></label>
+              <label class="tdrow trow-count${hcl('count')}"><span class="tdlbl">Seeds</span>
+                <input class="tcount" type="number" min="0" max="99"
+                       value="${v.count?esc(String(v.count)):''}" placeholder="0"></label>
+              <input class="tsource trow-source${hcl('source')}" type="text"
+                     placeholder="seed source / year" value="${esc(v.source||'')}">
+              <textarea class="tnotes trow-notes${hcl('notes')}" rows="2"
+                     placeholder="notes">${esc(v.notes||'')}</textarea>
+              <div class="tstat">${
+                v.archived ? `transplanted ${v.archived}`
+                : (toSprout!=null ? `${toSprout}d to sprout`
+                : (v.sprouted ? 'sprouted' : (v.planted?'not up yet':'&nbsp;')))}</div>
+              <div class="tacts editonly">
+                <button type="button" class="tsprout" data-cell="${cid}" data-tray="${id}">${
+                  v.sprouted?'Un-sprout':'Sprouted'}</button>
+                <button type="button" class="tarch" data-cell="${cid}" data-tray="${id}">${
+                  v.archived?'Restore':'Archive'}</button>
+              </div>
             </div>`;
       }
     }
@@ -1018,13 +1239,23 @@ function collectTray(id){
   document.querySelectorAll(`#trayswrap .tcell[data-tray="${id}"]`).forEach(el=>{
     const seed=el.querySelector('.tseed').value.trim();
     const equipment=el.querySelector('.tequip').value.trim();
-    const planted=el.querySelector('.tdate').value;
-    if(seed||equipment||planted)cells[el.dataset.cell]={seed,equipment,planted};
+    const planted=el.querySelector('.tdate:not(.tsprdate)').value;
+    const sprEl=el.querySelector('.tsprdate');
+    const sprouted=sprEl?sprEl.value:(el.dataset.sprouted||'');
+    const archived=el.dataset.archived||'';
+    const hide=(el.dataset.hide||'').split(',').filter(Boolean);
+    const source=(el.querySelector('.tsource')||{}).value||'';
+    const notes=(el.querySelector('.tnotes')||{}).value||'';
+    const count=parseInt((el.querySelector('.tcount')||{}).value||0,10)||0;
+    if(seed||equipment||planted||sprouted||archived||hide.length||source||notes||count)
+      cells[el.dataset.cell]={seed,equipment,planted,sprouted,archived,
+                              source:source.trim(),notes:notes.trim(),count,hide};
   });
   return cells;
 }
 async function saveTray(id){
   const info=document.getElementById('trayinfo');
+  trayPending++;
   try{
     const r=await fetch('/api/trays',{method:'POST',
       headers:{'Content-Type':'application/json'},
@@ -1033,16 +1264,94 @@ async function saveTray(id){
     if(r.status===401){if(info)info.textContent='log in to edit the map';return;}
     if(info)info.textContent = (r.ok&&j.ok)?`saved (${j.count} cells)`
                                           :('save failed: '+(j.error||r.status));
-    if(r.ok&&j.ok){
-      const wrap=document.getElementById('trayswrap');
-      if(wrap)wrap.dataset.sig='';            // let the next refresh re-render ages
+    if(r.ok&&j.ok)
       setTimeout(()=>{if(info&&/saved/.test(info.textContent))info.textContent='';},2500);
-    }
   }catch(e){if(info)info.textContent='save failed';}
+  finally{trayPending=Math.max(0,trayPending-1);}
+}
+async function trayLayout(body){
+  const info=document.getElementById('trayaddinfo')||document.getElementById('trayinfo');
+  try{
+    const r=await fetch('/api/tray_layout',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const j=await r.json().catch(()=>({}));
+    if(r.status===401){if(info)info.textContent='log in first';return;}
+    if(!j.ok&&j.needs_confirm&&!body.confirm){   // ask once, never loop
+      // never destroy planting records without saying exactly what is at stake
+      const what=j.dropped?`Cells ${j.dropped.join(', ')} fall outside the new grid`
+                          :`This tray has ${j.filled} filled cells`;
+      if(window.confirm(`${what}. Continue and discard them?`))
+        return trayLayout({...body, confirm:true});
+      if(info)info.textContent='cancelled';
+      refresh();
+      return;
+    }
+    if(!j.ok&&info){info.textContent=j.error||'failed';refresh();return;}
+    if(info)info.textContent='';
+    const w=document.getElementById('trayswrap');
+    if(w)w.dataset.sig='';
+    refresh();
+  }catch(e){if(info)info.textContent='request failed';}
+}
+function renderTrayConfig(cfg){
+  const box=document.getElementById('traycfg');
+  if(!box)return;
+  const trays=(cfg&&cfg.trays)||{};
+  const sig=JSON.stringify(Object.entries(trays).map(([id,t])=>
+    [id,t.label,t.rows,t.cols,Object.keys(t.cells||{}).length]));
+  if(box.dataset.sig===sig)return;               // don't clobber typing
+  if(document.activeElement&&document.activeElement.closest('#traycfg'))return;
+  box.dataset.sig=sig;
+  let h='';
+  for(const id of Object.keys(trays).sort()){
+    const t=trays[id]||{};
+    const filled=Object.keys(t.cells||{}).length;
+    const wired=(id==='1'||id==='2');
+    h+=`<div class="trayrow" data-tray="${id}">
+          <input class="tlabelin" type="text" value="${esc(t.label||('Tray '+id))}"
+                 data-tray="${id}" aria-label="Tray ${id} name" maxlength="40">
+          <span class="tdims">
+            <input class="tdim" type="number" min="1" max="12" value="${t.cols||3}"
+                   data-tray="${id}" data-dim="cols" aria-label="Columns">
+            <span class="tx">\u00d7</span>
+            <input class="tdim" type="number" min="1" max="12" value="${t.rows||4}"
+                   data-tray="${id}" data-dim="rows" aria-label="Rows">
+          </span>
+          <span class="tmeta">${filled} filled${wired?'':' \u00b7 no probe/pump'}</span>
+          <button type="button" class="trm" data-tray="${id}" title="Remove tray">\u2715</button>
+        </div>`;
+  }
+  h+=`<div class="trayadd"><button type="button" id="trayaddbtn">+ Add tray</button>
+        <span id="trayaddinfo" role="status"></span></div>`;
+  box.innerHTML=h;
+}
+function initTrayConfig(){
+  const box=document.getElementById('traycfg');
+  if(!box||box.dataset.bound)return;
+  box.dataset.bound='1';
+  box.addEventListener('click',ev=>{
+    if(ev.target.id==='trayaddbtn'){trayLayout({action:'add'});return;}
+    const rm=ev.target.closest('.trm');
+    if(rm)trayLayout({action:'remove',tray:rm.dataset.tray});
+  });
+  box.addEventListener('change',ev=>{
+    const d=ev.target.closest('.tdim');
+    if(d){
+      const body={action:'resize',tray:d.dataset.tray};
+      body[d.dataset.dim]=parseInt(d.value,10)||1;
+      box.dataset.sig='';
+      trayLayout(body);
+      return;
+    }
+    const l=ev.target.closest('.tlabelin');
+    if(l){box.dataset.sig='';
+          trayLayout({action:'resize',tray:l.dataset.tray,label:l.value});}
+  });
 }
 function initTrays(){
   const wrap=document.getElementById('trayswrap');
-  if(!wrap)return;
+  if(!wrap||wrap.dataset.bound)return;   // binding twice would make every
+  wrap.dataset.bound='1';                // toggle immediately undo itself
   const queue=e=>{
     const cell=e.target.closest('.tcell');
     if(!cell)return;
@@ -1058,6 +1367,84 @@ function initTrays(){
   };
   wrap.addEventListener('input',queue);
   wrap.addEventListener('change',queue);
+  // field menu: open one at a time, close on outside click
+  wrap.addEventListener('click',ev=>{
+    const fb=ev.target.closest('.tfields');
+    if(fb){
+      const menu=fb.closest('.tcell').querySelector('.tmenu');
+      const wasOpen=!menu.hidden;
+      wrap.querySelectorAll('.tmenu').forEach(m=>m.hidden=true);
+      menu.hidden=wasOpen;
+      ev.stopPropagation();
+      return;
+    }
+    if(!ev.target.closest('.tmenu'))
+      wrap.querySelectorAll('.tmenu').forEach(m=>m.hidden=true);
+  });
+  document.addEventListener('click',ev=>{
+    if(!ev.target.closest('#trayswrap'))
+      wrap.querySelectorAll('.tmenu').forEach(m=>m.hidden=true);
+  });
+  wrap.addEventListener('change',ev=>{
+    const cb=ev.target.closest('.tmenu input[type=checkbox]');
+    if(!cb)return;
+    const cell=cb.closest('.tcell');
+    const field=cb.dataset.field;
+    const hide=new Set((cell.dataset.hide||'').split(',').filter(Boolean));
+    if(cb.checked)hide.delete(field); else hide.add(field);
+    // remember an explicit "show" for the optional extras, which are hidden by
+    // default: without it the next render would hide an empty row again.
+    // Must happen before dataset.hide is written, or it never reaches the save.
+    if(['count','source','notes'].includes(field)){
+      if(cb.checked)hide.add('!'+field); else hide.delete('!'+field);
+    }
+    cell.dataset.hide=[...hide].join(',');
+    // toggle the matching row without re-rendering, so the menu stays put
+    const target=field==='seed'?cell.querySelector('.tseed')
+      :field==='equipment'?cell.querySelector('.tequip')
+      :cell.querySelector('.trow-'+field);
+    if(target)target.classList.toggle('fhidden',!cb.checked);
+    if(trays[cell.dataset.tray]){
+      const tc=(trays[cell.dataset.tray].cells=trays[cell.dataset.tray].cells||{});
+      tc[cell.dataset.cell]=Object.assign(
+        {seed:'',equipment:'',planted:'',sprouted:'',archived:''},
+        tc[cell.dataset.cell]||{}, {hide:[...hide]});
+    }
+    wrap.dataset.sig=JSON.stringify(trays);
+    saveTray(cell.dataset.tray);
+  });
+  wrap.addEventListener('click',ev=>{
+    const b=ev.target.closest('.tsprout,.tarch');
+    if(!b)return;
+    const cell=b.closest('.tcell');
+    const field=b.classList.contains('tsprout')?'sprouted':'archived';
+    const today=new Date();
+    const iso=`${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-`
+      +`${String(today.getDate()).padStart(2,'0')}`;
+    const val=cell.dataset[field]?'':iso;             // toggle
+    cell.dataset[field]=val;
+    // the sprout date also has a visible field once set: collectTray reads
+    // that, so clearing only the dataset would leave the old date in place
+    if(field==='sprouted'){
+      const el=cell.querySelector('.tsprdate');
+      if(el){
+        el.value=val;
+        const row=el.closest('.tdrow');
+        const hid=new Set((cell.dataset.hide||'').split(',').filter(Boolean));
+        if(row)row.classList.toggle('fhidden', !val || hid.has('sprouted'));
+      }
+    }
+    const tray=cell.dataset.tray, cid=cell.dataset.cell;
+    // mirror into the local copy: a refresh landing before the save round-trips
+    // would otherwise re-render from stale server data and undo the click
+    if(trays[tray]){
+      const tc=(trays[tray].cells=trays[tray].cells||{});
+      tc[cid]=Object.assign({seed:'',equipment:'',planted:'',sprouted:'',archived:''},
+                            tc[cid]||{}, {[field]:val});
+    }
+    wrap.dataset.sig=JSON.stringify(trays);           // keep the guard in step
+    saveTray(tray);
+  });
 }
 function initSensors(){
   const cw=document.getElementById('calwet');
@@ -1070,8 +1457,28 @@ function initSensors(){
   {const t1=document.getElementById('tc1');if(t1)t1.addEventListener('click',()=>checkTempComp('1'));
    const t2=document.getElementById('tc2');if(t2)t2.addEventListener('click',()=>checkTempComp('2'));}
   const hc=document.getElementById('chartgrid');
-  if(hc){hc.addEventListener('mousemove',chartMove);
-         hc.addEventListener('mouseleave',chartLeave);}
+  if(hc){
+    hc.addEventListener('mousemove',chartMove);
+    hc.addEventListener('mouseleave',chartLeave);
+    hc.addEventListener('pointerdown',chartMove);      // tap/click reads a point
+    {let rt=null;
+     window.addEventListener('resize',()=>{             // viewBox follows the box
+       clearTimeout(rt);
+       rt=setTimeout(()=>{for(const k in chartPlots)drawMini(k);},150);
+     });}
+    hc.addEventListener('click',ev=>{
+      const b=ev.target.closest('.cexpand');
+      if(!b)return;
+      const card=document.getElementById('cc-'+b.dataset.key);
+      if(!card)return;
+      const nowBig=card.classList.toggle('expanded');
+      if(nowBig)expandedCharts.add(card.id); else expandedCharts.delete(card.id);
+      b.textContent=nowBig?'\u2921':'\u2922';
+      b.title=nowBig?'Shrink this chart':'Expand this chart';
+      const key=Object.keys(seriesData).find(k=>cssId(k)===b.dataset.key);
+      if(key)drawMini(key);                            // redraw at the new size
+    });
+  }
   loadChart();                       // initial draw; range buttons reload
   document.querySelectorAll('#ranges button').forEach(b=>{
     b.addEventListener('click',()=>{
@@ -1262,8 +1669,12 @@ async function refresh(){
     handleGrid(j);
     renderSensors(j);
     renderTrays(j);
+    renderTrayConfig(j.settings);
     renderSweep(j);
+    renderFan(j);
     renderDayProgress(j);
+    renderLightPlan(j);
+    if(Date.now()-lastHostLoad>60000){lastHostLoad=Date.now();loadHost();}
     if(Date.now()-lastChartLoad>120000)loadChart();   // history every ~2 min
     renderWater(j);
     render();
@@ -1287,13 +1698,22 @@ document.getElementById('cfgform').addEventListener('submit',async ev=>{
   body.roi=f.elements['roi'].value.trim();
   if(f.elements['lux_to_ppfd_k'])
     body.lux_to_ppfd_k=parseFloat(f.elements['lux_to_ppfd_k'].value||0);
+  if(f.elements['canopy_factor'])
+    body.canopy_factor=parseFloat(f.elements['canopy_factor'].value||1);
+  for(const k of ['humidity_low','humidity_high','fan_humidity_on','fan_min_speed'])
+    if(f.elements[k])body[k]=parseInt(f.elements[k].value||0,10);
+  if(f.elements['schedule_mode'])body.schedule_mode=f.elements['schedule_mode'].value;
+  for(const k of ['fixed_on','fixed_off','duration_end'])
+    if(f.elements[k])body[k]=f.elements[k].value;
+  if(f.elements['duration_hours'])
+    body.duration_hours=parseFloat(f.elements['duration_hours'].value||0);
   if(f.elements['units'])body.units=f.elements['units'].value;
   for(const k of ['alert_sustain_min','alert_cooldown_hours','alert_dry_pct','alert_humidity_high'])
     if(f.elements[k])body[k]=parseInt(f.elements[k].value||0,10);
   if(f.elements['alerts_enabled'])body.alerts_enabled=f.elements['alerts_enabled'].checked;
-  if(f.elements['alert_soil_low_f']){
-    const shown=parseFloat(f.elements['alert_soil_low_f'].value||0);
-    body.alert_soil_low_f=shown?Math.round(tToF(shown)):0;
+  if(f.elements['soil_temp_low_f']){
+    const shown=parseFloat(f.elements['soil_temp_low_f'].value||0);
+    body.soil_temp_low_f=shown?Math.round(tToF(shown)):0;
   }
   if(f.elements['soil_temp_high_f']){
     const shown=parseFloat(f.elements['soil_temp_high_f'].value||0);
@@ -1516,6 +1936,90 @@ async function startSweep(){
   }catch(e){if(info)info.textContent='request failed';}
 }
 let sweepRunning=false, lastCurve=null;
+// ---- Pi health tiles ----
+function hostTile(label, value, sub, cls){
+  return `<div class="htile"><div class="hlabel">${label}</div>`
+    +`<div class="hvalue${cls?' '+cls:''}">${value}</div>`
+    +`<div class="hsub">${sub||'&nbsp;'}</div></div>`;
+}
+function upStr(sec){
+  if(sec==null)return null;
+  const d=Math.floor(sec/86400), h=Math.floor(sec%86400/3600), m=Math.floor(sec%3600/60);
+  if(d)return `${d}d ${h}h`;
+  if(h)return `${h}h ${String(m).padStart(2,'0')}m`;
+  return `${m}m`;
+}
+async function loadHost(){
+  const grid=document.getElementById('hgrid');
+  if(!grid)return;
+  try{
+    const r=await fetch('/api/host');
+    const h=await r.json();
+    let out='';
+    if(h.cpu_temp_c!=null){
+      const f=h.cpu_temp_c*9/5+32;
+      // Pi soft-throttles at 80C, hard at 85C
+      const cls=h.cpu_temp_c>=80?'bad':(h.cpu_temp_c>=70?'warn':'good');
+      out+=hostTile('CPU temp',
+        isMetric()?`${h.cpu_temp_c.toFixed(1)}\u00b0C`:`${f.toFixed(1)}\u00b0F`,
+        isMetric()?`${f.toFixed(0)}\u00b0F`:`${h.cpu_temp_c.toFixed(0)}\u00b0C`, cls);
+    }
+    if(h.load){
+      const per=h.load['1m']/(h.load.cores||1);
+      out+=hostTile('Load', h.load['1m'].toFixed(2),
+        `${h.load.cores} core${h.load.cores>1?'s':''}`, per>1?'warn':'');
+    }
+    if(h.memory)
+      out+=hostTile('Memory', h.memory.percent+'%',
+        `${h.memory.used_mb}/${h.memory.total_mb} MB`, h.memory.percent>=90?'bad':'');
+    if(h.disk)
+      out+=hostTile('Disk', h.disk.percent+'%',
+        `${h.disk.used_gb}/${h.disk.total_gb} GB`,
+        h.disk.percent>=90?'bad':(h.disk.percent>=75?'warn':''));
+    if(h.uptime_seconds!=null)
+      out+=hostTile('Uptime', upStr(h.uptime_seconds), '');
+    if(h.throttled){
+      const t=h.throttled;
+      const val=t.now.length?t.now[0]:(t.since_boot.length?'recovered':'healthy');
+      const sub=t.now.length?'happening now'
+        :(t.since_boot.length?`since boot: ${t.since_boot.join(', ')}`:'no issues');
+      out+=hostTile('Power', val, sub, t.now.length?'bad':(t.since_boot.length?'warn':'good'));
+    }
+    if(h.core_voltage!=null)
+      out+=hostTile('Core V', h.core_voltage.toFixed(4)+'V',
+        h.cpu_mhz!=null?`${h.cpu_mhz} MHz`:'');
+    else if(h.cpu_mhz!=null)
+      out+=hostTile('CPU clock', h.cpu_mhz+' MHz','');
+    if(h.host)
+      out+=hostTile('Host', h.host, h.ip||'');
+    if(h.wifi)
+      out+=hostTile('WiFi', h.wifi.percent+'%',
+        `${h.wifi.iface} ${h.wifi.dbm} dBm`, h.wifi.percent<35?'warn':'');
+    grid.innerHTML=out||'<p class="rmuted">No device stats available.</p>';
+  }catch(e){
+    grid.innerHTML='<p class="rmuted">Device stats unavailable.</p>';
+  }
+}
+function renderLightPlan(j){
+  const box=document.getElementById('lplan');
+  if(!box)return;
+  const p=j.light_plan;
+  if(!p){box.style.display='none';return;}
+  box.style.display='';
+  box.className='lplan '+p.status;
+  const dot=document.getElementById('lpdot');
+  if(dot)dot.className='lpdot '+p.status;
+  const title=document.getElementById('lptitle');
+  if(title){
+    title.textContent = p.status==='ok'
+      ? `On track \u00b7 ${p.full_day.toFixed(1)} mol/day`
+      : (p.status==='low'
+         ? `Short on light \u00b7 ${p.full_day.toFixed(1)} mol/day`
+         : `More light than needed \u00b7 ${p.full_day.toFixed(1)} mol/day`);
+  }
+  const ul=document.getElementById('lpadvice');
+  if(ul)ul.innerHTML=(p.advice||[]).map(a=>`<li>${a}</li>`).join('');
+}
 function renderDayProgress(j){
   const wrap=document.getElementById('dayprog');
   if(!wrap||!S.on||!S.off)return;
@@ -1543,12 +2047,49 @@ function renderDayProgress(j){
   const d=(day&&day.dli!=null)?day.dli:(lightMetrics&&lightMetrics.dli);
   const dfill=document.getElementById('dlifill');
   const dval=document.getElementById('dlival');
+  const pace=document.getElementById('dlipace');
   if(dfill)dfill.style.width=Math.max(0,Math.min(100,(d||0)/16*100)).toFixed(1)+'%';
+
+  // pace marker: where the total should be right now to finish at the 6 mol
+  // floor, so a mid-day number can be read as on track or behind
+  const paceTarget=6*frac;
+  const pm=document.getElementById('dlipacemark');
+  if(pm){
+    pm.style.left=Math.max(0,Math.min(100,paceTarget/16*100)).toFixed(1)+'%';
+    pm.style.display=(frac>0&&frac<1)?'':'none';
+  }
   if(dval){
     if(d==null){dval.textContent='building today\u2019s total';}
     else{
-      const band=d<6?'below target so far':(d<=12?'in target':'above target');
+      const band=d<6?'below target':(d<=12?'in target':'above target');
       dval.innerHTML=`<b>${d.toFixed(1)}</b> mol \u00b7 ${band}`;
+    }
+  }
+  if(pace){
+    const fc=day&&day.forecast_remaining;
+    if(d==null||frac<=0){pace.textContent='';}
+    else if(frac>=1){
+      pace.textContent='day complete';
+      pace.className='dlipace';
+    }else if(fc!=null){
+      // schedule-aware: today's total = banked + what the remaining ramp and
+      // full-brightness hours will deliver, from the measured light curve
+      const proj=d+fc;
+      const verdict=proj<6?'behind':(proj<=12?'on track':'ahead');
+      pace.innerHTML=`forecast <b>${proj.toFixed(1)}</b> \u00b7 ${verdict}`;
+      pace.className='dlipace '+(proj<6?'low':(proj<=12?'ok':'high'));
+      pace.title=`${d.toFixed(1)} banked + ${fc.toFixed(1)} from the rest of `
+        +'today\u2019s schedule (measured light curve)';
+    }else if(frac<0.08){
+      pace.textContent='too early to project';
+      pace.className='dlipace';
+    }else{
+      const proj=d/frac;                       // fallback: no sweep on file yet
+      const verdict=proj<6?'behind':(proj<=12?'on track':'ahead');
+      pace.innerHTML=`projected <b>${proj.toFixed(1)}</b> \u00b7 ${verdict}`;
+      pace.className='dlipace '+(proj<6?'low':(proj<=12?'ok':'high'));
+      pace.title='rough estimate from today\u2019s average so far; '
+        +'measure the light response curve for a schedule-aware forecast';
     }
   }
   // peak intensity reached today
@@ -1568,6 +2109,60 @@ function durStr(ms){
   if(m<60)return m+' min';
   return Math.floor(m/60)+'h '+String(m%60).padStart(2,'0')+'m';
 }
+let fanDragging=false, fanDragTimer=null, fanDragPending=null;
+function renderFan(j){
+  const row=document.getElementById('fanrow');
+  const sl=document.getElementById('fanslider');
+  if(!row)return;
+  const f=j.fan;
+  if(!f||!f.hw){row.style.display='none';if(sl)sl.style.display='none';return;}
+  row.style.display='';
+  document.querySelectorAll('.fanbtn').forEach(b=>
+    b.classList.toggle('on', b.dataset.mode===f.mode));
+  const info=document.getElementById('faninfo');
+  if(info)info.textContent=f.on?`${f.speed}% \u00b7 ${f.reason}`
+                               :(f.mode==='auto'?`idle \u00b7 ${f.reason}`:'off');
+  // the slider edits manual speed in "on", auto speed in "auto"; hidden in "off"
+  if(sl){
+    sl.style.display=(f.mode==='off')?'none':'';
+    sl.classList.toggle('dim', f.mode==='off');
+    const rng=document.getElementById('fanrange'), val=document.getElementById('fanval');
+    const target=(f.mode==='on')?f.manual_speed:f.auto_speed;
+    if(rng&&!fanDragging&&document.activeElement!==rng)rng.value=target;
+    if(val&&!fanDragging)val.textContent=(rng?rng.value:target)+'%';
+    const lbl=sl.querySelector('.fanslabel');
+    if(lbl)lbl.textContent=(f.mode==='on')?'speed':'auto speed';
+  }
+}
+function pushFanSpeed(v){
+  fanDragPending=v;
+  if(fanDragTimer)return;
+  fanDragTimer=setTimeout(()=>{
+    fanDragTimer=null;
+    const val=fanDragPending; fanDragPending=null;
+    if(val!=null)sendFanSpeed(val);
+  },150);
+}
+async function sendFanSpeed(v){
+  const mode=(document.querySelector('.fanbtn.on')||{dataset:{}}).dataset.mode||'auto';
+  const body=(mode==='on')?{speed:v}:{auto_speed:v};
+  try{
+    await fetch('/api/fan',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(body)});
+  }catch(e){}
+}
+async function setFan(mode){
+  const info=document.getElementById('faninfo');
+  if(info)info.textContent='\u2026';
+  try{
+    const r=await fetch('/api/fan',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({mode})});
+    const j=await r.json().catch(()=>({}));
+    if(r.status===401&&info){info.textContent='log in first';return;}
+    if(!j.ok&&info)info.textContent=j.error||'failed';
+  }catch(e){if(info)info.textContent='request failed';}
+  refresh();
+}
 function renderSweep(j){
   const btn=document.getElementById('sweepbtn');
   const info=document.getElementById('sweepinfo');
@@ -1581,10 +2176,42 @@ function renderSweep(j){
     drawLightCurve(lastCurve, sweepRunning,
                    sweepRunning?null:(j.brightness!=null?j.brightness:null));
 }
+function showScheduleMode(mode){
+  document.querySelectorAll('.modeblock').forEach(b=>{
+    b.style.display=(b.dataset.mode===mode)?'':'none';
+  });
+}
+function initSchedule(){
+  const sm=document.querySelector('[name=schedule_mode]');
+  if(!sm)return;
+  sm.addEventListener('change',()=>showScheduleMode(sm.value));
+}
 function initLight(){
+  {const row=document.getElementById('lightctl')||document.body;
+   if(row.dataset.lightBound)return;            // double-binding would fire
+   row.dataset.lightBound='1';}                 // every click twice
   {const b=document.getElementById('sweepbtn');
    if(b)b.addEventListener('click',startSweep);}
-  document.querySelectorAll('.lcbtn').forEach(b=>
+  document.querySelectorAll('.fanbtn').forEach(b=>
+    b.addEventListener('click',()=>setFan(b.dataset.mode)));
+  {const fr=document.getElementById('fanrange'), fv=document.getElementById('fanval');
+   if(fr){
+     const start=()=>{fanDragging=true;};
+     const end=()=>{if(!fanDragging)return;fanDragging=false;
+       clearTimeout(fanDragTimer);fanDragTimer=null;
+       sendFanSpeed(+fr.value).then(()=>refresh());};
+     fr.addEventListener('pointerdown',start);
+     fr.addEventListener('keydown',start);
+     fr.addEventListener('input',()=>{
+       if(fv)fv.textContent=fr.value+'%';
+       if(fanDragging)pushFanSpeed(+fr.value);
+     });
+     fr.addEventListener('pointerup',end);
+     fr.addEventListener('pointercancel',end);
+     fr.addEventListener('change',end);
+     fr.addEventListener('blur',end);
+   }}
+  document.querySelectorAll('.lcbtn:not(.fanbtn)').forEach(b=>
     b.addEventListener('click',()=>setLight(b.dataset.mode)));
   const rng=document.getElementById('lcrange');
   const val=document.getElementById('lcval');
@@ -1620,6 +2247,6 @@ function initLight(){
     if(!dragging)setLight(null, +rng.value);
   });
 }
-[initAuth, initSensors, initGridSvg, initReport, initLight, initTrays].forEach(fn=>{  try{ fn(); }catch(e){ console.error(fn.name+' init failed:', e); }
+[initAuth, initSensors, initGridSvg, initReport, initLight, initTrays, initSchedule, initTrayConfig].forEach(fn=>{  try{ fn(); }catch(e){ console.error(fn.name+' init failed:', e); }
 });
 refresh();

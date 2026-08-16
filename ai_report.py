@@ -162,6 +162,10 @@ def build_context(d):
         L.append(f"Barometric trend: {pt['words']} ({pt['change_3h']:+} hPa over 3h)"
                  + (f", {pt['change_24h']:+} hPa over 24h" if pt.get("change_24h") is not None else "")
                  + "  [trend deltas always in hPa]")
+    gm = d.get("germination") or {}
+    if gm:
+        L.append("Germination by variety: "
+                 + "; ".join(f"{k}: {v}" for k, v in gm.items()))
     stf = d.get("soil_temp_f") or {}
     if stf:
         band = ("18-29C germination, 21-27C once sprouted"

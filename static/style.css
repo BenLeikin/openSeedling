@@ -128,6 +128,7 @@
     .aleft{grid-area:left;display:flex;flex-direction:column;gap:14px;align-self:start}
     .amedia{grid-area:media;display:flex;flex-direction:column;gap:14px;align-self:start}
     .atrays{grid-area:tray}
+    .ahost{grid-area:host}
     .asensors{grid-area:sens}
     .aset{grid-area:set}
     /* report card fills to the media column's bottom; body scrolls for overflow */
@@ -421,15 +422,9 @@ svg.cmini.cstale polyline.cline{stroke:#a8b5a0;opacity:.75}
 .emptystate code{background:#eef4e6;padding:1px 5px;border-radius:4px;font-size:12.5px}
 
 /* ---- density: the section you act on gets more room ---- */
-.csection.primary .cgrid{grid-template-columns:repeat(auto-fill,minmax(300px,1fr))}
-.csection.primary svg.cmini{height:132px}
 .csection.primary .chead{font-size:13px}
-.csection:not(.primary) svg.cmini{height:84px}
-.csection:not(.primary) .cgrid{grid-template-columns:repeat(auto-fill,minmax(210px,1fr))}
 @media (max-width:700px){
   .csection.primary .cgrid,.csection:not(.primary) .cgrid{grid-template-columns:1fr}
-  .csection.primary svg.cmini{height:120px}
-  .csection:not(.primary) svg.cmini{height:96px}
 }
 
 /* left column pulls its weight on wide screens: light + water read as one panel */
@@ -452,6 +447,7 @@ body.nocam .amedia{display:none}
       "media"
       "sens"
       "tray"
+      "host"
       "set";
   }
   .aleft{flex-direction:row;flex-wrap:wrap;align-items:stretch;gap:12px}
@@ -503,3 +499,132 @@ body.nocam .amedia{display:none}
   margin-top:7px;font-size:12px;color:var(--leaf)}
 .dprow>span{white-space:nowrap}
 .dprow b{color:var(--fir);font-size:13px}
+
+/* ---- per-cell germination state ---- */
+.tcell.sprouted{background:#e8f5e0;border-color:#a8d08a}
+.tcell.archived{background:#f2f2ee;border-color:#dcdcd4;opacity:.72}
+.tcell.archived input{color:#8a8a80}
+.tstat{font-size:10px;color:var(--leaf);line-height:1.3;min-height:13px}
+.tcell.sprouted .tstat{color:#2e6b32;font-weight:600}
+.tcell.archived .tstat{color:#7a7a72}
+.tacts{display:flex;gap:4px;margin-top:2px}
+.tacts button{margin:0;flex:1;padding:3px 4px;font-size:10px;font-weight:600;
+  background:#eef4e6;color:var(--leaf);border:1px solid var(--line);border-radius:5px;
+  box-shadow:none}
+.tacts button:hover{background:#e2eed6}
+.tcell.sprouted .tage{color:#2e6b32;font-weight:700}
+.dlipacemark{position:absolute;top:-3px;width:2px;height:14px;background:var(--fir);
+  border-radius:1px;transform:translateX(-1px);transition:left .6s ease;z-index:2}
+.dlibar{overflow:visible}
+.dlipace{font-size:11px;color:#7a8a72;white-space:nowrap}
+.dlipace b{font-size:12px}
+.dlipace.ok{color:#2e6b32}
+.dlipace.low{color:#8a6a13}
+.dlipace.high{color:#8a2d2a}
+
+/* ---- light plan under the day curve ---- */
+.lplan{margin-top:10px;padding-top:10px;border-top:1px solid var(--line);font-size:12.5px}
+.lphead{display:flex;align-items:center;gap:7px;margin-bottom:5px}
+.lphead b{font-size:13px;color:var(--fir)}
+.lpdot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--leaf)}
+.lpdot.low{background:#e0a13a}
+.lpdot.high{background:#b5322f}
+.lpdot.ok{background:#4a7c59}
+.lplan ul{margin:0;padding-left:16px;color:var(--leaf);line-height:1.5}
+.lplan li{margin-bottom:2px}
+.modeblock{margin-top:4px}
+.modeblock .fhint{margin-bottom:8px}
+
+/* ---- draggable schedule handles on the day curve ---- */
+.schandle{touch-action:none}
+.schandle rect{transition:opacity .15s ease}
+.schandle:hover rect{opacity:.85}
+#chart .schandle text{pointer-events:none;user-select:none}
+
+/* ---- bigger charts, expandable ---- */
+.cgrid{grid-template-columns:repeat(auto-fill,minmax(280px,1fr))}
+svg.cmini{height:120px}
+.csection.primary .cgrid{grid-template-columns:repeat(auto-fill,minmax(340px,1fr))}
+.csection.primary svg.cmini{height:160px}
+.csection:not(.primary) .cgrid{grid-template-columns:repeat(auto-fill,minmax(260px,1fr))}
+.csection:not(.primary) svg.cmini{height:120px}
+
+.cexpand{margin:0 0 0 6px;padding:1px 5px;font-size:12px;line-height:1;
+  background:transparent;color:var(--leaf);border:1px solid var(--line);
+  border-radius:5px;box-shadow:none;flex:none}
+.cexpand:hover{background:#eef4e6}
+.ccard.expanded{grid-column:1/-1}
+.ccard.expanded svg.cmini{height:300px}
+.csection.primary .ccard.expanded svg.cmini{height:300px}
+.chead{align-items:center}
+@media (max-width:700px){
+  svg.cmini,.csection.primary svg.cmini,.csection:not(.primary) svg.cmini{height:150px}
+  /* expanding on a phone is only worth it if it actually gains height */
+  .ccard.expanded svg.cmini{height:62vh;max-height:520px}
+}
+
+/* ---- device stats ---- */
+.hgrid{display:grid;gap:10px;grid-template-columns:repeat(auto-fill,minmax(130px,1fr))}
+.htile{background:#f6faf1;border:1px solid var(--line);border-radius:10px;padding:9px 11px}
+.hlabel{font-size:10px;font-weight:700;color:var(--leaf);text-transform:uppercase;
+  letter-spacing:.06em;margin-bottom:3px}
+.hvalue{font-size:19px;font-weight:600;color:var(--ink);line-height:1.15;
+  font-variant-numeric:tabular-nums;word-break:break-word}
+.hvalue.good{color:#2e6b32}
+.hvalue.warn{color:#8a6a13}
+.hvalue.bad{color:#b5322f}
+.hsub{font-size:11px;color:var(--leaf);margin-top:2px}
+.tcell input.tsprdate{color:#2e6b32;border-color:#a8d08a;background:#f4fbef}
+.tdrow{display:flex;align-items:center;gap:5px;margin:0}
+.tdlbl{font-size:9px;font-weight:700;color:var(--leaf);text-transform:uppercase;
+  letter-spacing:.05em;width:30px;flex:none}
+.tdlbl.up{color:#2e6b32}
+.tdrow .tdate{flex:1;min-width:0}
+
+/* ---- per-cell field menu ---- */
+.tcell{position:relative}
+.tcell .tid{gap:6px}
+.tfields{margin:0;padding:0 3px;font-size:12px;line-height:1;background:transparent;
+  color:var(--leaf);border:0;box-shadow:none;cursor:pointer;opacity:.55}
+.tcell:hover .tfields,.tfields:focus-visible{opacity:1}
+.tmenu{position:absolute;top:20px;right:6px;z-index:20;background:#fff;
+  border:1px solid var(--line);border-radius:8px;padding:6px 8px;
+  box-shadow:0 4px 14px rgba(46,64,42,.16);display:flex;flex-direction:column;gap:3px}
+/* a class rule with display:flex outranks the browser default for [hidden],
+   so the attribute needs saying explicitly or every menu renders open */
+.tmenu[hidden]{display:none}
+.tmenu label{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--fir);
+  white-space:nowrap;cursor:pointer}
+.tmenu input[type=checkbox]{width:auto;margin:0;transform:scale(1.05)}
+.fhidden{display:none !important}
+.tcell input.tcount{width:100%}
+.tcell input.tsource{font-size:11px;color:var(--leaf)}
+.tcell textarea.tnotes{width:100%;margin:0;padding:3px 5px;font-size:11px;
+  border:1px solid var(--line);border-radius:5px;background:#fff;color:var(--fir);
+  resize:vertical;font-family:inherit;line-height:1.35}
+.tcell textarea.tnotes:focus{border-color:var(--leaf);outline:none;
+  box-shadow:0 0 0 3px rgba(74,124,89,.15)}
+body.readonly .tcell textarea{background:#f6faf1;border-color:transparent;pointer-events:none}
+.fanrow{margin-top:8px;padding-top:8px;border-top:1px solid var(--line)}
+#faninfo{font-size:12px;color:var(--leaf);margin-left:auto;text-align:right}
+.fanslider{margin-top:6px}
+.fanslabel{font-size:11px;color:var(--leaf);width:66px;flex:none}
+
+/* ---- tray sizing controls ---- */
+.tray-head{flex-wrap:wrap}
+.tsize{display:inline-flex;align-items:center;gap:3px;margin-left:auto}
+.tsize .tdim{width:44px;margin:0;padding:2px 4px;font-size:12px;text-align:center}
+.tsize .tx{font-size:11px;color:var(--leaf)}
+.trm{margin:0 0 0 6px;padding:2px 7px;font-size:11px;background:transparent;
+  color:var(--leaf);border:1px solid var(--line);border-radius:5px;box-shadow:none}
+.trm:hover{background:#fdeceb;color:#8a2d2a;border-color:#e8b6b3}
+.trayadd{margin-top:12px;display:flex;align-items:center;gap:10px}
+.trayadd button{margin:0;padding:5px 14px;font-size:13px;background:#eef4e6;
+  color:var(--leaf);border:1px solid var(--line);box-shadow:none}
+.trayadd button:hover{background:#e2eed6}
+#trayaddinfo{font-size:12px;color:var(--leaf)}
+#traycfg{display:flex;flex-direction:column;gap:7px}
+.trayrow{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.trayrow .tlabelin{flex:1 1 140px;min-width:110px;margin:0;padding:5px 8px;font-size:14px}
+.tdims{display:inline-flex;align-items:center;gap:4px;flex:none}
+.tmeta{font-size:11px;color:var(--leaf);flex:1 1 auto;white-space:nowrap}

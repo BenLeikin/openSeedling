@@ -42,6 +42,7 @@ import notify
 import ai_report
 import discord_alert
 import alerts
+import hoststats
 
 # ------------------- defaults (overridden by config.json) -------------------
 DEFAULTS = {
@@ -52,20 +53,37 @@ DEFAULTS = {
     "ramp_min": 30,            # minutes
     "light_override": "auto",  # auto = follow the sun schedule; on|off = manual hold
     "manual_bright": 100,      # brightness held when light_override is "on"
+    "fan_mode": "auto",        # auto | on | off
+    "fan_speed": 100,          # manual speed held when fan_mode is "on"
+    "fan_auto_speed": 70,      # speed used by auto mode
+    "fan_min_speed": 25,       # below this a fan often stalls; 0 disables the floor
+    "fan_with_light": True,    # auto: run during the photoperiod
+    "fan_humidity_on": 65,     # auto: also run above this RH (0 disables)
     "alerts_enabled": True,     # Discord threshold alerts (needs discord_webhook)
     "alert_sustain_min": 10,    # a condition must hold this long before firing
     "alert_cooldown_hours": 6,  # reminder interval while a problem persists
-    "alert_soil_low_f": 60,     # 0 disables
     "alert_dry_pct": 15,        # calibrated trays only
     "alert_humidity_high": 80,  # 0 disables
     "units": "imperial",       # "imperial" (F, inHg) or "metric" (C, hPa);
                                #   storage stays Celsius/hPa either way
+    "humidity_low": 40,        # comfort band drawn on the humidity chart;
+    "humidity_high": 60,       #   display only, the alert uses its own setting
+    "canopy_factor": 1.0,      # sensor plane -> canopy multiplier. The sensor
+                               #   sits at soil level; measure lux at canopy and
+                               #   divide by the soil reading to get this. 1.0 =
+                               #   sensor is already at canopy height.
     "lux_to_ppfd_k": 60,       # lux -> PPFD divisor; set for your fixture's
                                #   spectrum (0 = hide PPFD/DLI). ~60 suits a
                                #   white-dominant mixed red/blue/white panel.
-    "soil_temp_high_f": 90,    # warning line on the soil temp chart; 0 disables.
-                               #   Chiles germinate best ~85F and drop off above
-                               #   ~90-95F; seedlings prefer 70-80F once up.
+    "soil_temp_high_f": 85,    # target band for the soil temp chart and alerts.
+    "soil_temp_low_f": 80,     #   Chile germination is best 80-85F; drop the
+                               #   band to about 70-80F once seedlings are up.
+                               #   Either bound at 0 disables that side.
+    "schedule_mode": "solar",  # solar | fixed | duration
+    "fixed_on": "06:00",       # fixed mode: lights on
+    "fixed_off": "20:00",      # fixed mode: lights off
+    "duration_hours": 14,      # duration mode: day length...
+    "duration_end": "20:00",   #   ...anchored to this off time
     "sunrise_offset_min": 0,   # negative starts before sunrise
     "sunset_offset_min": 0,    # positive runs past sunset
     "camera_enabled": False,   # master switch for all camera features (photos,
@@ -133,6 +151,22 @@ THUMB_DIR.mkdir(exist_ok=True)
 # --- pump actuators (gpiozero, guarded so off-Pi / unwired stays safe) ---
 # Pump GPIOs (BCM). Override without editing code by setting GROWLIGHT_PUMP_PINS,
 # e.g. GROWLIGHT_PUMP_PINS="1:24,2:26" in the systemd unit, then restart.
+FAN_PIN = 20                     # BCM; physical 38. Low-side switched via a
+                                 #   D4184 with a flyback across the fan.
+# Speed control is software PWM: GPIO20 has no hardware PWM channel (those are
+# 18 and 19, and 18 drives the light). Software PWM is fine for a fan at these
+# duty cycles, but cheap fans can whine audibly or stall below ~30%, which is
+# why fan_min_speed exists.
+_fan = None
+FAN_PWM_HZ = 100
+try:
+    from gpiozero import PWMOutputDevice as _PWMOut
+    _fan = _PWMOut(FAN_PIN, frequency=FAN_PWM_HZ, initial_value=0)
+except Exception as _e:
+    print(f"fan GPIO{FAN_PIN} unavailable ({_e}); fan control disabled")
+FAN_HW = _fan is not None
+fan_state = {"on": False, "reason": "off", "speed": 0}
+
 PUMP_PINS = {"1": 24, "2": 26}   # tray -> BCM (physical 18, 37)
 _pp = os.environ.get("GROWLIGHT_PUMP_PINS", "").strip()
 if _pp:
@@ -158,9 +192,12 @@ pump_state = {t: _blank_pump() for t in PUMP_PINS}
 pump_lock = threading.Lock()   # also serializes the two pumps: one at a time
 
 settings = dict(DEFAULTS)
+_file_keys = set()
 if CONFIG_PATH.exists():
     try:
-        settings.update(json.loads(CONFIG_PATH.read_text()))
+        _saved = json.loads(CONFIG_PATH.read_text())
+        _file_keys = set(_saved)
+        settings.update(_saved)
     except Exception as e:
         print(f"config.json unreadable ({e}), using defaults")
 
@@ -190,6 +227,19 @@ def _migrate_trays():
         except Exception as e:
             print(f"tray migration not persisted ({e})")
 _migrate_trays()
+
+# the soil low bound used to live under an alerts-only key; adopt it once so
+# the chart and the alerts can never disagree. Checked against the file's own
+# keys, since DEFAULTS always supplies soil_temp_low_f after the merge.
+if "alert_soil_low_f" in settings:
+    _old = settings.pop("alert_soil_low_f")
+    if _file_keys and "soil_temp_low_f" not in _file_keys:
+        settings["soil_temp_low_f"] = _old
+    try:
+        CONFIG_PATH.write_text(json.dumps(settings, indent=2))
+    except Exception:
+        pass
+
 
 settings_lock = threading.Lock()
 wake = threading.Event()
@@ -241,11 +291,50 @@ def set_brightness(percent):
     pwm.change_duty_cycle(percent)
 
 
+def _clock(day, tz, hhmm, fallback="06:00"):
+    """'HH:MM' on `day` as an aware datetime."""
+    try:
+        h, m = str(hhmm or fallback).split(":")
+        h, m = int(h), int(m)
+    except (ValueError, AttributeError):
+        h, m = int(fallback[:2]), int(fallback[3:])
+    return datetime(day.year, day.month, day.day,
+                    max(0, min(23, h)), max(0, min(59, m)), tzinfo=tz)
+
+
 def sun_window(cfg, day, tz):
+    """The light window for `day`, in whichever scheduling mode is configured.
+
+    solar     - follow local sunrise/sunset with offsets (the original behaviour)
+    fixed     - explicit on and off clock times
+    duration  - a day length anchored to the off time, so lights-off stays put
+                and lights-on moves to give the requested hours
+
+    Always returns the real sunrise/sunset too, so the dashboard can show them
+    regardless of mode. A window that ends before it starts is treated as
+    crossing midnight.
+    """
     loc = LocationInfo(latitude=cfg["latitude"], longitude=cfg["longitude"])
     s = sun(loc.observer, date=day, tzinfo=tz)
-    on_time  = s["sunrise"] + timedelta(minutes=cfg["sunrise_offset_min"])
-    off_time = s["sunset"]  + timedelta(minutes=cfg["sunset_offset_min"])
+    mode = cfg.get("schedule_mode", "solar")
+
+    if mode == "fixed":
+        on_time = _clock(day, tz, cfg.get("fixed_on"), "06:00")
+        off_time = _clock(day, tz, cfg.get("fixed_off"), "20:00")
+        if off_time <= on_time:
+            off_time += timedelta(days=1)      # window crosses midnight
+    elif mode == "duration":
+        try:
+            hours = float(cfg.get("duration_hours", 14))
+        except (TypeError, ValueError):
+            hours = 14.0
+        hours = max(0.0, min(24.0, hours))
+        off_time = _clock(day, tz, cfg.get("duration_end"), "20:00")
+        on_time = off_time - timedelta(hours=hours)
+    else:
+        on_time = s["sunrise"] + timedelta(minutes=cfg["sunrise_offset_min"])
+        off_time = s["sunset"] + timedelta(minutes=cfg["sunset_offset_min"])
+
     return s["sunrise"], s["sunset"], on_time, off_time
 
 
@@ -589,16 +678,67 @@ def gather_report_data():
                 bits.append(v["seed"])
             if v.get("equipment"):
                 bits.append(f"[{v['equipment']}]")
+            sown = spr = None
             if v.get("planted"):
                 try:
-                    d = datetime.strptime(v["planted"], "%Y-%m-%d").date()
-                    bits.append(f"sown {v['planted']} ({(now.date() - d).days}d ago)")
+                    sown = datetime.strptime(v["planted"], "%Y-%m-%d").date()
                 except ValueError:
-                    pass
+                    sown = None
+            if v.get("sprouted"):
+                try:
+                    spr = datetime.strptime(v["sprouted"], "%Y-%m-%d").date()
+                except ValueError:
+                    spr = None
+            if v.get("archived"):
+                bits.append(f"TRANSPLANTED {v['archived']}")
+            elif spr and sown:
+                bits.append(f"sprouted in {(spr - sown).days}d, "
+                            f"{(now.date() - spr).days}d old")
+            elif spr:
+                bits.append(f"sprouted {v['sprouted']}")
+            elif sown:
+                bits.append(f"sown {v['planted']} ({(now.date() - sown).days}d ago, "
+                            "not yet sprouted)")
+            if v.get("count"):
+                bits.append(f"({v['count']} seeds)")
+            if v.get("notes"):
+                bits.append(f"- {v['notes']}")
             if bits:
                 rows.append(f"{cid}: {' '.join(bits)}")
         if rows:
             planting[t.get("label", f"Tray {tid}")] = rows
+
+    # per-variety germination: rate and average days, the numbers worth keeping
+    germ = {}
+    for tid, t in sorted((cfg.get("trays") or {}).items()):
+        for cid, v in (t.get("cells") or {}).items():
+            seed = (v.get("seed") or "").strip()
+            if not seed or not v.get("planted"):
+                continue
+            g = germ.setdefault(seed, {"sown": 0, "up": 0, "days": [],
+                                       "seeds": 0, "sources": set()})
+            g["sown"] += 1
+            g["seeds"] += int(v.get("count") or 0)
+            if v.get("source"):
+                g["sources"].add(v["source"])
+            if v.get("sprouted"):
+                g["up"] += 1
+                try:
+                    d0 = datetime.strptime(v["planted"], "%Y-%m-%d").date()
+                    d1 = datetime.strptime(v["sprouted"], "%Y-%m-%d").date()
+                    g["days"].append((d1 - d0).days)
+                except ValueError:
+                    pass
+    germ_out = {}
+    for seed, g in sorted(germ.items()):
+        line = f"{g['up']}/{g['sown']} cells up"
+        if g["seeds"]:
+            line += f" ({g['seeds']} seeds sown)"
+        if g["days"]:
+            line += f", avg {sum(g['days']) / len(g['days']):.1f}d to sprout"
+        if g["sources"]:
+            line += f", seed from {', '.join(sorted(g['sources']))}"
+        germ_out[seed] = line
     bright = round(st.get("brightness") or 0)
     return {
         "date": now.strftime("%Y-%m-%d %H:%M"),
@@ -618,6 +758,7 @@ def gather_report_data():
         "light_metrics": {"ppfd": ppfd_from_lux((snap.get("lux") or (None, None))[1]),
                           "dli": dli_today()},
         "planting": planting,
+        "germination": germ_out,
         "units": {"temp": temp_unit(), "press": press_unit()},
         "float": flabel,
         "pump_today_s": round(pump_state.get("today_seconds", 0.0), 1),
@@ -791,6 +932,47 @@ def sample_loop():
         time.sleep(interval * 60)
 
 
+def set_fan(speed, reason):
+    """Drive the fan at `speed` percent (0 = off) and remember why. Airflow
+    does two jobs for seedlings: it dries the surface between waterings
+    (damping-off is the main killer after germination) and the movement
+    thickens stems. A non-zero speed is raised to fan_min_speed, since a fan
+    commanded below its stall point hums without actually turning."""
+    if not FAN_HW:
+        return
+    speed = max(0.0, min(100.0, float(speed or 0)))
+    if speed > 0:
+        with settings_lock:
+            floor = float(settings.get("fan_min_speed", 0) or 0)
+        speed = max(speed, floor)
+    try:
+        _fan.value = speed / 100.0
+    except Exception as e:
+        print(f"fan control error: {e}")
+        return
+    with state_lock:
+        changed = round(fan_state.get("speed", 0)) != round(speed)
+        fan_state.update(on=speed > 0, reason=reason, speed=round(speed))
+    if changed:
+        print(f"fan {round(speed)}% ({reason})")
+
+
+def fan_should_run(cfg, now, on_time, off_time):
+    """Decide the fan's state in auto mode. Returns (on, reason)."""
+    rh = None
+    try:
+        rh = (db.latest().get("humidity") or (None, None))[1]
+    except Exception:
+        pass
+    hum_on = cfg.get("fan_humidity_on", 0)
+    if hum_on and rh is not None and rh >= hum_on:
+        return True, f"humidity {rh:.0f}%"
+    if cfg.get("fan_with_light", True) and on_time and off_time:
+        if on_time <= now <= off_time:
+            return True, "photoperiod"
+    return False, "idle"
+
+
 def run_alerts(readings):
     """Evaluate the alert rules against this tick's readings and push anything
     that changed state. Never raises: a failure here must not stop sampling."""
@@ -803,7 +985,7 @@ def run_alerts(readings):
             "sustain_seconds": cfg.get("alert_sustain_min", 10) * 60,
             "cooldown_seconds": cfg.get("alert_cooldown_hours", 6) * 3600,
             "soil_temp_high_f": cfg.get("soil_temp_high_f", 0),
-            "soil_temp_low_f": cfg.get("alert_soil_low_f", 60),
+            "soil_temp_low_f": cfg.get("soil_temp_low_f", 0),
             "probe_dry_pct": cfg.get("alert_dry_pct", 15),
             "humidity_high": cfg.get("alert_humidity_high", 80),
         }
@@ -866,6 +1048,15 @@ def control_loop():
             b = 0
         if not capturing and not sweep_state["running"]:
             set_brightness(b)      # a sweep owns the light while it runs
+
+        mode = cfg.get("fan_mode", "auto")
+        if mode == "on":
+            set_fan(cfg.get("fan_speed", 100), "manual")
+        elif mode == "off":
+            set_fan(0, "manual")
+        else:
+            want, why = fan_should_run(cfg, now, on_time, off_time)
+            set_fan(cfg.get("fan_auto_speed", 70) if want else 0, why)
         with state_lock:
             state.update(brightness=b, on=on_time, off=off_time,
                          sunrise=sunrise, sunset=sunset, override=ov)
@@ -1347,8 +1538,10 @@ def probe_tempcomp():
     coefficient from logged data. Run it over a warm, no-watering window."""
     data = request.get_json(silent=True) or {}
     tray = str(data.get("tray", ""))
-    if tray not in ("1", "2"):
-        return jsonify(ok=False, error="tray must be 1 or 2"), 200
+    if tray not in sensors.PROBE_CHANNELS:
+        return jsonify(ok=False,
+                       error=f"no probe wired for tray {tray} "
+                             f"(probes: {', '.join(sorted(sensors.PROBE_CHANNELS))})"), 200
     try:
         hours = max(6, min(720, int(data.get("hours", 48))))
     except (TypeError, ValueError):
@@ -1372,14 +1565,18 @@ def probe_tempcomp():
 @require_auth
 def api_trays():
     """Save what's planted in each cell. Body: {"tray": "1"|"2", "cells":
-    {"A1": {"seed": str, "equipment": str, "planted": "YYYY-MM-DD"}, ...}}.
-    Empty cells are dropped so the map only holds what's actually there."""
+    {"A1": {"seed": str, "equipment": str, "planted": "YYYY-MM-DD",
+            "sprouted": "YYYY-MM-DD", "archived": "YYYY-MM-DD"}, ...}}.
+    `sprouted` records emergence (so days-to-germinate is measurable) and
+    `archived` marks a cell transplanted out. Empty cells are dropped."""
     data = request.get_json(silent=True) or {}
     tray = str(data.get("tray", ""))
     cells = data.get("cells")
     label = data.get("label")
-    if tray not in ("1", "2"):
-        return jsonify(ok=False, error="tray must be 1 or 2"), 200
+    with settings_lock:
+        known = set(settings.get("trays") or {})
+    if tray not in known:
+        return jsonify(ok=False, error=f"no such tray: {tray}"), 200
     if not isinstance(cells, dict):
         return jsonify(ok=False, error="cells must be an object"), 200
     clean = {}
@@ -1388,20 +1585,114 @@ def api_trays():
             continue
         seed = str(v.get("seed", "")).strip()[:60]
         equip = str(v.get("equipment", "")).strip()[:60]
-        planted = str(v.get("planted", "")).strip()[:10]
-        if planted and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", planted):
-            planted = ""
-        if seed or equip or planted:
-            clean[cid] = {"seed": seed, "equipment": equip, "planted": planted}
+
+        def _date(field):
+            d = str(v.get(field, "") or "").strip()[:10]
+            return d if re.fullmatch(r"\d{4}-\d{2}-\d{2}", d) else ""
+
+        planted, sprouted, archived = _date("planted"), _date("sprouted"), _date("archived")
+        source = str(v.get("source", "")).strip()[:60]
+        notes = str(v.get("notes", "")).strip()[:200]
+        try:
+            count = max(0, min(99, int(v.get("count") or 0)))
+        except (TypeError, ValueError):
+            count = 0
+        # which fields this cell shows; display-only, so an empty equipment
+        # row can be hidden on the cells that will never have one
+        _fields = ("seed", "equipment", "planted", "sprouted",
+                   "source", "count", "notes")
+        hide = [f for f in (v.get("hide") or [])
+                if f in _fields or (f.startswith("!") and f[1:] in _fields)][:14]
+        if (seed or equip or planted or sprouted or archived or hide
+                or source or notes or count):
+            clean[cid] = {"seed": seed, "equipment": equip, "planted": planted,
+                          "sprouted": sprouted, "archived": archived,
+                          "source": source, "count": count, "notes": notes,
+                          "hide": hide}
     with settings_lock:
         trays = settings.setdefault("trays", {})
-        t = trays.setdefault(tray, {"label": f"Tray {tray}", "rows": 3,
-                                    "cols": 4, "cells": {}})
+        t = trays.setdefault(tray, {"label": f"Tray {tray}", "rows": 4,
+                                    "cols": 3, "cells": {}})
         t["cells"] = clean
         if label is not None:
             t["label"] = str(label).strip()[:40] or f"Tray {tray}"
         CONFIG_PATH.write_text(json.dumps(settings, indent=2))
     return jsonify(ok=True, tray=tray, count=len(clean))
+
+
+MAX_TRAYS, MAX_DIM = 8, 12
+
+
+def _cell_ids(rows, cols):
+    return {f"{chr(65 + c)}{r}" for r in range(1, rows + 1) for c in range(cols)}
+
+
+@app.route("/api/tray_layout", methods=["POST"])
+@require_auth
+def api_tray_layout():
+    """Add, remove, rename or resize a tray.
+
+    Body: {"action": "add"} | {"action": "remove", "tray": id}
+        | {"action": "resize", "tray": id, "rows": n, "cols": n, "label": str}
+
+    Resizing keeps every cell that still fits the new grid. Cells that fall
+    outside it are reported as `dropped`, and are only discarded when the
+    caller passes confirm=true, so a mis-tap cannot silently delete planting
+    records.
+    """
+    data = request.get_json(silent=True) or {}
+    action = str(data.get("action", "resize"))
+    with settings_lock:
+        trays = settings.setdefault("trays", {})
+
+        if action == "add":
+            if len(trays) >= MAX_TRAYS:
+                return jsonify(ok=False, error=f"at most {MAX_TRAYS} trays"), 200
+            nid = next(str(i) for i in range(1, MAX_TRAYS + 2) if str(i) not in trays)
+            trays[nid] = {"label": f"Tray {nid}", "rows": 4, "cols": 3, "cells": {}}
+            CONFIG_PATH.write_text(json.dumps(settings, indent=2))
+            return jsonify(ok=True, tray=nid, added=True)
+
+        tray = str(data.get("tray", ""))
+        if tray not in trays:
+            return jsonify(ok=False, error="no such tray"), 200
+
+        if action == "remove":
+            if len(trays) <= 1:
+                return jsonify(ok=False, error="keep at least one tray"), 200
+            filled = len(trays[tray].get("cells") or {})
+            if filled and not data.get("confirm"):
+                return jsonify(ok=False, needs_confirm=True, filled=filled,
+                               error=f"tray {tray} has {filled} filled cells"), 200
+            trays.pop(tray)
+            CONFIG_PATH.write_text(json.dumps(settings, indent=2))
+            return jsonify(ok=True, removed=tray)
+
+        # resize / rename
+        t = trays[tray]
+        rows = t.get("rows", 4)
+        cols = t.get("cols", 3)
+        try:
+            if "rows" in data:
+                rows = max(1, min(MAX_DIM, int(data["rows"])))
+            if "cols" in data:
+                cols = max(1, min(MAX_DIM, int(data["cols"])))
+        except (TypeError, ValueError):
+            return jsonify(ok=False, error="rows and cols must be numbers"), 200
+
+        keep = _cell_ids(rows, cols)
+        cells = t.get("cells") or {}
+        dropped = sorted(c for c in cells if c not in keep)
+        if dropped and not data.get("confirm"):
+            return jsonify(ok=False, needs_confirm=True, dropped=dropped,
+                           error=f"{len(dropped)} filled cells fall outside "
+                                 f"a {cols}x{rows} grid"), 200
+        t["rows"], t["cols"] = rows, cols
+        t["cells"] = {k: v for k, v in cells.items() if k in keep}
+        if "label" in data:
+            t["label"] = str(data["label"]).strip()[:40] or f"Tray {tray}"
+        CONFIG_PATH.write_text(json.dumps(settings, indent=2))
+    return jsonify(ok=True, tray=tray, rows=rows, cols=cols, dropped=dropped)
 
 
 @app.route("/api/render", methods=["POST"])
@@ -1511,6 +1802,11 @@ def status():
                                  if k.startswith("probe:") else v)}
                    for k, (ts, v) in snap.items()
                    if cam_on or not (k.startswith("dry:") or k.startswith("growth:"))}
+    day = day_light_summary()
+    if day:
+        # what the rest of today's schedule will deliver, from the measured curve
+        day["forecast_remaining"] = dli_forecast(cfg, datetime.now(tz),
+                                                 s["on"], s["off"])
     return jsonify(
         now=datetime.now(tz).isoformat(),
         brightness=s["brightness"],
@@ -1519,6 +1815,12 @@ def status():
         on=s["on"].isoformat(), off=s["off"].isoformat(),
         sunrise=s["sunrise"].isoformat(), sunset=s["sunset"].isoformat(),
         ramp=cfg["ramp_min"], max=cfg["max_bright"],
+        schedule_mode=cfg.get("schedule_mode", "solar"),
+        fan={"hw": FAN_HW, "on": fan_state["on"], "reason": fan_state["reason"],
+             "mode": cfg.get("fan_mode", "auto"),
+             "speed": fan_state.get("speed", 0),
+             "manual_speed": cfg.get("fan_speed", 100),
+             "auto_speed": cfg.get("fan_auto_speed", 70)},
         gpio=GPIO_PIN, freq=PWM_FREQ, loop=LOOP_SECONDS,
         photo_count=count,
         latest_photo_time=latest_time.isoformat() if latest_time else None,
@@ -1536,9 +1838,11 @@ def status():
         sweep={"running": sweep_state["running"], "pct": sweep_state["pct"],
                "error": sweep_state["error"]},
         light_curve=cfg.get("light_curve"),
-        day_light=day_light_summary(),
+        day_light=day,
+        light_plan=light_plan(cfg, s["on"], s["off"]),
         light_metrics=(lambda lx: {
             "k": lux_k(),
+            "canopy": canopy_factor(),
             "ppfd": ppfd_from_lux(lx),
             "dli": dli_today(),
         } if lx is not None and lux_k() else None)(
@@ -1565,7 +1869,9 @@ def pump_test():
     data = request.get_json(silent=True) or {}
     tray = str(data.get("tray", "1"))
     if tray not in PUMP_PINS:
-        return jsonify(ok=False, error="tray must be 1 or 2"), 200
+        return jsonify(ok=False,
+                       error=f"no pump wired for tray {tray} "
+                             f"(pumps: {', '.join(sorted(PUMP_PINS))})"), 200
     if tray not in _pumps:
         return jsonify(ok=False, error=f"pump {tray} hardware not available"), 200
     try:
@@ -1638,6 +1944,16 @@ def pressure_tendency():
     return out
 
 
+def canopy_factor():
+    """Multiplier from the sensor plane to canopy height. Light falls off with
+    distance, so a sensor at soil level under-reads what the leaves receive."""
+    with settings_lock:
+        try:
+            return max(0.1, min(10.0, float(settings.get("canopy_factor", 1.0))))
+        except (TypeError, ValueError):
+            return 1.0
+
+
 def lux_k():
     """Lux -> PPFD divisor for this fixture's spectrum. Lux is weighted for
     human vision and undercounts the deep red and royal blue a grow panel
@@ -1650,11 +1966,14 @@ def lux_k():
             return 60.0
 
 
-def ppfd_from_lux(lux):
+def ppfd_from_lux(lux, at_canopy=True):
+    """PPFD in umol/m2/s. By default reported at canopy height, since that is
+    what the plants actually experience; pass at_canopy=False for the raw
+    sensor plane."""
     k = lux_k()
     if not k or lux is None:
         return None
-    return round(lux / k, 1)
+    return round(lux * (canopy_factor() if at_canopy else 1.0) / k, 1)
 
 
 def dli_today():
@@ -1680,7 +1999,7 @@ def dli_today():
         if dt <= 0 or dt > 1800:      # gap: don't fill it in
             continue
         total += ((v0 + v1) / 2 / k) * dt
-    return round(total / 1_000_000, 2)      # micromol -> mol
+    return round(total * canopy_factor() / 1_000_000, 2)   # micromol -> mol
 
 
 def run_light_sweep(step=5, settle=2.0):
@@ -1782,10 +2101,179 @@ def day_light_summary():
             lit_s += dt
     return {
         "dli": dli_today(),
-        "peak_lux": round(peak, 1),
-        "peak_ppfd": round(peak / k, 1) if k else None,
+        "peak_lux": round(peak, 1),                       # sensor plane
+        "peak_ppfd": ppfd_from_lux(peak),                  # canopy
+        "canopy_factor": canopy_factor(),
         "lit_minutes": round(lit_s / 60),
     }
+
+
+def dli_forecast(cfg, now, on_time, off_time):
+    """Project today's final DLI by integrating the *scheduled* brightness over
+    the rest of the photoperiod and converting through the measured light
+    response curve. Far better than extrapolating the average so far, which
+    misreads the morning ramp as a dim day and midday as a bright one.
+
+    Returns the forecast remaining mol/m2, or None when it can't be computed
+    (no sweep on file, no lux factor, or the light is already done for today).
+    """
+    k = lux_k()
+    curve = (cfg.get("light_curve") or {}).get("points")
+    if not k or not curve or now >= off_time:
+        return None
+
+    pts = sorted(curve)
+    cf = canopy_factor()
+
+    def lux_at(pct):
+        """Interpolate the measured curve at a brightness percentage."""
+        if pct <= pts[0][0]:
+            return pts[0][1]
+        if pct >= pts[-1][0]:
+            return pts[-1][1]
+        for i in range(1, len(pts)):
+            if pts[i][0] >= pct:
+                x0, y0 = pts[i - 1]
+                x1, y1 = pts[i]
+                if x1 == x0:
+                    return y1
+                return y0 + (y1 - y0) * (pct - x0) / (x1 - x0)
+        return pts[-1][1]
+
+    # walk the remaining schedule in one-minute steps; the ramps are linear so
+    # this is exact to well under the sensor's own noise
+    start = max(now, on_time)
+    total = 0.0
+    step = timedelta(minutes=1)
+    t = start
+    while t < off_time:
+        pct = brightness_for(cfg, t, on_time, off_time)
+        total += (lux_at(pct) * cf / k) * 60.0   # umol/m2 for this minute
+        t += step
+    return round(total / 1_000_000, 2)
+
+
+DLI_TARGET_LOW, DLI_TARGET_HIGH = 6.0, 12.0
+
+
+def light_plan(cfg, on_time, off_time):
+    """What the current schedule delivers on a full day, and what to change if
+    that misses the seedling DLI window. Uses the measured light curve, so the
+    advice is grounded in this fixture rather than a rule of thumb."""
+    full = dli_forecast(cfg, on_time, on_time, off_time)
+    if full is None:
+        return None
+    k = lux_k()
+    pts = sorted((cfg.get("light_curve") or {}).get("points") or [])
+    peak_lux = pts[-1][1] if pts else 0
+    mx = float(cfg.get("max_bright", 100))
+    # what one more hour at the current peak brightness is worth
+    per_hour = (peak_lux * canopy_factor() / k) * 3600 / 1_000_000 if k else 0
+    hours = (off_time - on_time).total_seconds() / 3600
+
+    plan = {"full_day": full, "per_hour": round(per_hour, 2),
+            "hours": round(hours, 1), "status": "ok", "advice": []}
+
+    if full < DLI_TARGET_LOW:
+        plan["status"] = "low"
+        deficit = DLI_TARGET_LOW - full
+        if per_hour > 0:
+            add_h = deficit / per_hour
+            if hours + add_h <= 18:
+                plan["advice"].append(
+                    f"Extend the photoperiod about {add_h:.1f}h "
+                    f"(to ~{hours + add_h:.0f}h) to reach {DLI_TARGET_LOW:.0f} mol.")
+            else:
+                plan["advice"].append(
+                    "Even an 18h day would not close the gap at this intensity.")
+        if mx < 100:
+            plan["advice"].append(
+                f"Max brightness is {mx:.0f}%; raising it to 100% would add "
+                f"roughly {(100 / mx - 1) * full:.1f} mol.")
+        else:
+            plan["advice"].append(
+                "Brightness is already maxed, so the other lever is lowering the "
+                "fixture: halving the distance roughly quadruples intensity.")
+    elif full > DLI_TARGET_HIGH:
+        plan["status"] = "high"
+        excess = full - DLI_TARGET_HIGH
+        if per_hour > 0:
+            plan["advice"].append(
+                f"About {excess / per_hour:.1f}h more light than seedlings need; "
+                "shorten the photoperiod or dim slightly.")
+    else:
+        plan["advice"].append(
+            f"This schedule delivers {full:.1f} mol/day, inside the "
+            f"{DLI_TARGET_LOW:.0f}-{DLI_TARGET_HIGH:.0f} seedling window.")
+    return plan
+
+
+@app.route("/api/fan", methods=["POST"])
+@require_auth
+def api_fan():
+    """Set the fan mode: auto (schedule + humidity), on, or off."""
+    data = request.get_json(silent=True) or {}
+    mode = str(data.get("mode", "")).strip()
+    if mode and mode not in ("auto", "on", "off"):
+        return jsonify(ok=False, error="mode must be auto, on or off"), 200
+    with settings_lock:
+        if mode:
+            settings["fan_mode"] = mode
+        if "speed" in data:
+            try:
+                settings["fan_speed"] = max(0, min(100, int(float(data["speed"]))))
+            except (TypeError, ValueError):
+                pass
+        if "auto_speed" in data:
+            try:
+                settings["fan_auto_speed"] = max(0, min(100, int(float(data["auto_speed"]))))
+            except (TypeError, ValueError):
+                pass
+        mode = settings.get("fan_mode", "auto")
+        CONFIG_PATH.write_text(json.dumps(settings, indent=2))
+    wake.set()                      # apply on the next loop pass immediately
+    return jsonify(ok=True, mode=mode)
+
+
+@app.route("/api/schedule", methods=["POST"])
+@require_auth
+def api_schedule():
+    """Update just the schedule window. Separate from /api/settings so the
+    chart's drag handles can commit a change without resubmitting every
+    unrelated setting. Only meaningful in fixed and duration modes."""
+    data = request.get_json(silent=True) or {}
+    with settings_lock:
+        mode = settings.get("schedule_mode", "solar")
+        if mode == "solar":
+            return jsonify(ok=False, error="switch to fixed or duration mode "
+                                           "to drag the schedule"), 200
+        changed = {}
+        for k in ("fixed_on", "fixed_off", "duration_end"):
+            if k in data:
+                v = str(data[k] or "").strip()
+                if re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", v):
+                    settings[k] = v
+                    changed[k] = v
+        if "duration_hours" in data:
+            try:
+                h = max(0.0, min(24.0, float(data["duration_hours"])))
+                settings["duration_hours"] = round(h, 2)
+                changed["duration_hours"] = settings["duration_hours"]
+            except (TypeError, ValueError):
+                pass
+        if changed:
+            CONFIG_PATH.write_text(json.dumps(settings, indent=2))
+    if changed:
+        wake.set()                      # recompute the window immediately
+        print(f"schedule updated from chart: {changed}")
+    return jsonify(ok=True, changed=changed, mode=mode)
+
+
+@app.route("/api/host")
+def api_host():
+    """Pi health. Separate from /api/status so the 15s poll stays cheap:
+    vcgencmd shells out, and none of this changes fast."""
+    return jsonify(hoststats.all_stats())
 
 
 @app.route("/api/series_all")
@@ -1816,7 +2304,8 @@ def series_all():
         out[k] = pts
     k = lux_k()
     if k and "lux" in out:
-        out["ppfd"] = [[ts, round(v / k, 1)] for ts, v in out["lux"]]
+        cf = canopy_factor()      # charted at canopy, matching the chips
+        out["ppfd"] = [[ts, round(v * cf / k, 1)] for ts, v in out["lux"]]
     return jsonify(hours=hours, series=out)
 
 
@@ -1841,7 +2330,7 @@ def update_settings():
         new["roi"] = str(data.get("roi", "")).strip()
         for k, lo, hi in (("alert_sustain_min", 1, 120),
                           ("alert_cooldown_hours", 1, 72),
-                          ("alert_soil_low_f", 0, 120),
+                          ("soil_temp_low_f", 0, 150),
                           ("alert_dry_pct", 0, 90),
                           ("alert_humidity_high", 0, 100)):
             if k in data:
@@ -1849,10 +2338,48 @@ def update_settings():
                     new[k] = max(lo, min(hi, int(data[k] or 0)))
                 except (TypeError, ValueError):
                     pass
+        if data.get("fan_mode") in ("auto", "on", "off"):
+            new["fan_mode"] = data["fan_mode"]
+        if "fan_with_light" in data:
+            new["fan_with_light"] = bool(data["fan_with_light"])
+        for k in ("fan_speed", "fan_auto_speed", "fan_min_speed"):
+            if k in data:
+                try:
+                    new[k] = max(0, min(100, int(data[k] or 0)))
+                except (TypeError, ValueError):
+                    pass
+        if "fan_humidity_on" in data:
+            try:
+                new["fan_humidity_on"] = max(0, min(100, int(data["fan_humidity_on"] or 0)))
+            except (TypeError, ValueError):
+                pass
         if "alerts_enabled" in data:
             new["alerts_enabled"] = bool(data["alerts_enabled"])
         if data.get("units") in ("imperial", "metric"):
             new["units"] = data["units"]
+        if data.get("schedule_mode") in ("solar", "fixed", "duration"):
+            new["schedule_mode"] = data["schedule_mode"]
+        for k in ("fixed_on", "fixed_off", "duration_end"):
+            if k in data:
+                v = str(data[k] or "").strip()
+                if re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", v):
+                    new[k] = v
+        if "duration_hours" in data:
+            try:
+                new["duration_hours"] = max(0.0, min(24.0, float(data["duration_hours"] or 0)))
+            except (TypeError, ValueError):
+                pass
+        for k in ("humidity_low", "humidity_high"):
+            if k in data:
+                try:
+                    new[k] = max(0, min(100, int(data[k] or 0)))
+                except (TypeError, ValueError):
+                    pass
+        if "canopy_factor" in data:
+            try:
+                new["canopy_factor"] = max(0.1, min(10.0, float(data["canopy_factor"] or 1)))
+            except (TypeError, ValueError):
+                pass
         if "lux_to_ppfd_k" in data:
             try:
                 new["lux_to_ppfd_k"] = max(0.0, min(200.0, float(data["lux_to_ppfd_k"] or 0)))
