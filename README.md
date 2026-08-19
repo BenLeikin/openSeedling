@@ -17,50 +17,168 @@ the watering controls, and the daily AI plant-health report.*
 
 ## What it does
 
-- **Sun-synced lighting.** Tracks local sunrise/sunset and drives the light with
-  smooth fade-in/fade-out ramps via 1 kHz hardware PWM. Offsets, max brightness,
-  and ramp length are all adjustable; a header graphic shows the current stage
-  (moon at night drawn to the real lunar phase, sunrise, full sun, sunset).
-- **Timelapse.** Captures a frame at a fixed interval during the photoperiod,
-  holding the light at a constant brightness so every frame is exposed the same.
-  Plays back in the browser frame-by-frame and renders an MP4 on-device.
-- **Camera vision.** A canopy coverage index per tray (excess-green pixel share),
-  logged and charted as a growth curve. Earlier versions measured per cell, but
-  once seedlings spill over cell lines the per-cell attribution is fiction; tray
-  boundaries are physical, so tray totals stay honest. Camera-based soil-dryness
-  estimation was retired for the same reason: a closed canopy hides the soil.
-- **Reservoir sensing.** Two non-contact level sensors on the outside of the
-  source bucket give full / ok / empty. Empty hard-refuses every pump run so the
-  pumps can never run dry, and fires a Discord alert until the bucket is refilled.
-- **Watering.** A submersible pump with a float switch can fill the tray to a set
-  level. Heavily guarded: per-dose, cooldown, and daily caps, one pump at a time,
-  refusal on an empty reservoir, and a fill that caps out without the float
-  tripping alerts and switches automatic watering off. Auto-watering is off by
-  default and should stay off until the probes are calibrated.
-- **Daily AI report.** Sends the latest photo plus the sensor data, per-variety
-  germination stats, and the planting map to the Claude API and gets back a
-  structured plant-health report: germination, growth stage, notable-cell notes,
-  a variety check (flags a cell whose seedling looks inconsistent with what the
-  map says was sown there; it never guesses species), light/water assessment,
-  concerns, and recommendations.
-- **Alerts.** Pushes report summaries (and anything else you wire up) to your
-  phone via ntfy and/or a Discord channel.
-- **Dashboard.** Live-editable settings, sensor charts, the timelapse player, and
-  the report card. Read-only until you log in.
+### Light
+
+- Three schedule modes: **solar** (local sunrise/sunset with offsets), **fixed**
+  (clock times; an off before on runs overnight), and **duration** (constant day
+  length anchored to lights-off). Smooth fade ramps via 1 kHz hardware PWM in
+  every mode.
+- Draggable lights-on/lights-off handles directly on the day-curve chart
+  (fixed and duration modes), snapped to 5 minutes.
+- Auto / On / Off override with a live brightness slider.
+- **Light response sweep**: steps 0-100% while reading the lux sensor, producing
+  the fixture's measured brightness-to-lux curve. PWM dimming is not linear;
+  this measures how not-linear yours is.
+- **PPFD and DLI** derived from lux through a configurable spectrum factor (K)
+  and a canopy factor (the sensor sits at soil level; the canopy is brighter).
+- **Schedule-aware DLI forecast**: integrates the remaining scheduled brightness
+  through the measured light curve, and a light-plan panel gives a verdict (on
+  track / short / too much) with advice computed from the fixture's real output.
+- A day-progress bar and an animated header that tracks the current stage:
+  a moon drawn to the real lunar phase at night, sunrise, full sun, sunset.
+
+### Sensors and charts
+
+- Logs air temp / humidity / pressure, soil temp, lux, and per-tray soil
+  moisture to SQLite (WAL), with raw samples rolled up to hourly past 30 days.
+- A chart grid with every sensor at once, grouped Soil / Environment / Canopy;
+  24 h default with 7 d and 30 d ranges, per-chart expand, and a hover/tap
+  crosshair with the value on the line.
+- Target bands on soil temperature and humidity; barometric tendency with a
+  plain-language reading and trend line.
+- Staleness marking: chips dim and charts get a badge when a reading is older
+  than 3x its expected cadence.
+- Probe calibration from the dashboard (wet/dry anchors per tray), optional
+  temperature compensation, and a red **recal** badge when a live reading sits
+  outside its own anchors, because a mis-captured wet anchor silently pegs the
+  tray at 100% and blinds the dry alert otherwise.
+
+### Water
+
+- Per-tray pump, float switch, and moisture probe. Timed doses and
+  fill-to-float with a time cap, per-dose / cooldown / daily limits, and
+  one-pump-at-a-time enforcement.
+- **Reservoir level** from two non-contact sensors on the outside of the source
+  bucket: full / ok / empty / fault. Empty hard-refuses every pump run so the
+  pumps can never run dry; fault (high sensor wet, low dry) flags a dead or
+  slipped sensor.
+- A fill that hits its cap without the float tripping alerts to Discord and
+  switches automatic watering off.
+- `auto_water` is off by default and should stay off until the probes are
+  calibrated.
+
+### Fan
+
+- Auto / On / Off with PWM speed control, a separate auto-mode speed, and a
+  minimum-speed floor (cheap fans stall below ~25%). Auto mode runs during the
+  photoperiod and/or above a humidity threshold, and the dashboard says which
+  rule is driving it.
+
+### Camera and timelapse
+
+- USB (v4l2) and rpicam backends, selectable. Manual exposure, white balance,
+  and focus by default: auto anything makes the timelapse flicker, and auto
+  white balance drifts badly under magenta grow light.
+- **Focus sweep**: walks `focus_absolute` coarse then fine, scores each stop by
+  Laplacian sharpness on a live capture, and pins the sharpest. The align
+  preview shows a live sharpness number for manual tweaking.
+- Captures at a fixed interval during the photoperiod with the light held at a
+  constant brightness, so every frame is exposed identically. Each capture
+  grabs a burst and keeps the last frame (the first UVC frame is routinely dark
+  or torn).
+- Perspective rectification from four draggable grid corners (with optional
+  auto-detect). Photos are stored rotated but **not** flattened; flattening is
+  applied when an image is served, so the corners stay re-draggable against the
+  real scene forever. The rectified view is cached per photo and geometry.
+- Frame-by-frame scrubber with a sensor overlay: scrub to any frame and see the
+  soil temp, air temp, humidity, and lux at the moment it was taken. On-device
+  MP4 render with explicit pixel-format and color tags so hardware decoders
+  don't draw black.
+- Camera health tracking: failure counts, last-good time, real error text,
+  surfaced as a banner and a grayscale snapshot while failing. A master switch
+  hides all camera UI and pauses the AI report.
+- Manual captures are filename-tagged; the daily report always prefers the
+  latest scheduled frame so an off-schedule dark shot never becomes its input.
+
+### Canopy tracking
+
+- Canopy coverage per tray (share of plant pixels via the excess-green index,
+  2G - R - B, which survives the magenta light where hue-based detection reads
+  leaves as magenta). Logged and charted as a growth curve. Runs as a
+  subprocess so OpenCV's memory is released between captures.
+- Per-cell measurement and camera-based soil-dryness estimation existed and
+  were deliberately retired: seedlings spill across cell lines, and a closed
+  canopy hides the soil. Trays are physical boundaries; cells are not.
+
+### Planting map
+
+- Two trays (count and size adjustable) with per-cell records: seed, equipment,
+  sown / sprouted / archived dates, seed count, seed source, notes.
+  One-tap "Sprouted" and "Archive" buttons stamp today's date.
+- **Per-variety germination stats** (rate and average days to sprout) computed
+  from the map and fed to the AI report.
+
+### Alerts (Discord and ntfy)
+
+- A real state machine, not level checks: a rule fires once after a sustain
+  window, reminds on a cooldown while it persists, and posts a recovery notice
+  when it clears. Analog rules clear with hysteresis margins and a clear-side
+  sustain, so a value hovering at a threshold can neither spam nor flap.
+- Rules: soil too warm / too cold, tray dry (calibrated probes only), humidity
+  high, daily light integral under the floor (judged once, just after
+  lights-off), reservoir empty, reservoir sensor fault, fill failure, camera
+  failure, and sensors that stopped reporting (aged out as removed after three
+  silent days).
+
+### Daily AI report
+
+- Sends the latest scheduled photo plus the environment, canopy trend,
+  germination stats, planting map, pump runtime, fan state, barometric trend,
+  and light metrics to the Claude API and renders a structured report:
+  summary, overall health, growth stage, notable-cell notes, a **variety
+  check** (flags a cell whose seedling looks inconsistent with what the map
+  says was sown there; it never guesses species), light/water assessments,
+  concerns, and recommendations. Runs daily at a set time or on demand; waits
+  for NTP sync at boot so the clockless Pi never fires a spurious report.
+
+### Device and platform
+
+- Pi health tiles: CPU temp, load, memory, disk, uptime, power/throttling
+  flags, core voltage, host/IP, wifi signal.
+- Read-only dashboard until login; secrets are redacted from every
+  unauthenticated response. Settings saves are per-field validated: valid
+  fields apply and invalid ones come back by name, so one bad field never
+  silently discards a form.
+- Every pin is env-overridable and every sensor optional: anything not wired is
+  probed once, disabled gracefully, and its UI hides. Static assets are
+  versioned by mtime, so deploys never need a hard refresh.
 
 ---
 
 ## Hardware
 
-| Part | Detail |
+Model numbers where the part has one; some parts are commodity classes sold
+under a dozen brands, and any unit of that class works.
+
+| Part | Model / detail |
 | --- | --- |
-| Computer | Raspberry Pi Zero 2 W (64-bit Raspberry Pi OS) |
-| Light | 5 V USB LED grow light, ground switched low-side through an XY-MOS D4184 MOSFET |
-| Camera | 8MP USB UVC webcam (120-degree lens) on a micro-USB OTG adapter. The Pi Camera Module was abandoned: the Zero's CSI ribbon connector was too unreliable |
-| Pump | 5 V USB submersible pump through a second D4184 + 1N5819 flyback diode, on its own 5 V supply with a common ground |
-| Float | Normally-open float switch in the destination tray |
-| Reservoir level | 2x XKC-Y23A-**NPN** non-contact sensors strapped to the outside of the source bucket (low = minimum-safe height, high = near the rim). They sense through the wall; nothing touches the water. Buy the NPN version, not -V |
-| Sensors | BME280 (air temp/RH/pressure, I2C 0x76), BH1750 (lux, 0x23), DS18B20 (soil temp, 1-Wire), 2x capacitive soil probes into an ADS1115 (0x48). All 3.3 V only |
+| Computer | Raspberry Pi Zero 2 W, 64-bit Raspberry Pi OS |
+| Light | 5 V USB LED grow panel, mixed red/blue/white spectrum, low-side switched through a D4184 MOSFET module. Spectrum factor K=60 lx per umol/m2/s measured for this panel; set yours from a sweep |
+| Camera | 8MP USB UVC webcam, Realtek `0bda:5785`, 120-degree lens, MJPEG up to 3264x2448 (used at 2048x1536), on a micro-USB OTG adapter. The Pi Camera Module 3 was abandoned: the Zero's CSI ribbon connector was too unreliable |
+| ADC | ADS1115 16-bit I2C ADC, address `0x48` (ADDR to GND) |
+| Soil moisture | 2x HW-390-class capacitive probes on ADS1115 A0/A1, powered from 3.3 V so output can't exceed the ADC supply |
+| Air sensor | BME280 (temp / RH / pressure), I2C `0x76`. A BMP280 also works; the code detects BME vs BMP by chip ID and drops humidity gracefully |
+| Light sensor | BH1750 lux sensor, I2C `0x23` |
+| Soil temp | DS18B20 1-Wire probe module (onboard 4.7 k pull-up), auto-discovered by serial |
+| MOSFETs | 3x D4184 (XY-MOS) modules: two pumps and the fan, each with a 1N5819 flyback diode across the load |
+| Pumps | 2x 5 V USB submersible pumps on a **separate** 5 V supply, common ground with the Pi. Only one runs at a time (they share the supply); enforced in software |
+| Floats | 2x normally-open float switches, one per tray, wired so rising water OPENS the switch (open = "full" = stop, which is also the broken-wire state, so a cut wire fails safe) |
+| Reservoir level | 2x XKC-Y23A-**NPN** non-contact sensors strapped outside the source bucket (low = minimum-safe height, high = near the rim). Sense through ~13 mm of non-metal wall; nothing touches the water. Buy the NPN version, not -V |
+| Fan | 5 V case fan on the pump supply, software PWM with a minimum-speed floor (cheap fans stall below ~25%) |
+| Companion (not Pi-controlled) | Heat mat on a VIVOSUN thermostat. Independent by design: the Pi only verifies it via its own DS18B20 in a different cell, so a controller crash can't cook the trays |
+
+All sensors run on 3.3 V only, never 5 V. All grounds (Pi, pump supply, light
+supply) must be tied together.
 
 ### Pinout (BCM)
 
@@ -199,10 +317,19 @@ editable from the dashboard Settings panel; the rest are edited in the file.
 | `latitude` / `longitude` / `timezone` | Thousand Oaks, CA | Location for sun times |
 | `max_bright` | 100 | Peak brightness (%) |
 | `ramp_min` | 30 | Fade-in/out length (minutes) |
-| `sunrise_offset_min` / `sunset_offset_min` | 0 | Shift the on/off times |
+| `sunrise_offset_min` / `sunset_offset_min` | 0 | Shift the on/off times (solar mode) |
+| `schedule_mode` | `solar` | `solar`, `fixed`, or `duration` |
+| `fixed_on` / `fixed_off` | 06:00 / 20:00 | Clock times for fixed mode |
+| `duration_hours` / `duration_end` | 15.5 / 21:30 | Day length + lights-off anchor for duration mode |
+| `lux_to_ppfd_k` / `canopy_factor` | 60 / 1.0 | Lux-to-PPFD spectrum factor and soil-to-canopy brightness ratio; both feed the DLI numbers |
+| `units` | `imperial` | Display only; storage is always Celsius / hPa and switching never converts data |
 | `capture_enabled` | false | Timelapse on/off |
 | `capture_interval_min` | 30 | Minutes between frames |
 | `capture_brightness` | 100 | Brightness held during each photo |
+| `camera_backend` | `usb` | `usb` (v4l2) or `rpicam` |
+| `cam_rotate` | 0 | Rotation baked in at capture (0/90/180/270) for an upside-down mount |
+| `usb_*` | | USB camera controls: device, size, warmup frames, exposure, gain, white balance, focus, and the auto/manual toggle for each |
+| `camera_enabled` | true | Master switch: hides all camera UI and pauses the AI report |
 | `roi` | "" | Crop as `x,y,w,h` fractions, blank = full frame |
 | `cam_width` / `cam_height` | 2304 / 1296 | Capture resolution at full field of view. The Module 3 sensor is 4608x2592, but a full 12MP capture runs the Pi Zero 2 W out of memory, so the default is the 2304x1296 binned mode (same view, ~3MP). Keep the sensor's 16:9 aspect or the frame gets cropped. Raise to 4608x2592 only on a Pi with more RAM |
 | `sample_interval_min` | 5 | Sensor logging interval |
@@ -219,6 +346,11 @@ editable from the dashboard Settings panel; the rest are edited in the file.
 | `ai_notify` | true | Push the report summary |
 | `ai_notes` | (grow description) | Context handed to the AI; list what you planted here to sharpen species guesses |
 | `alert_dli_low` | 4 | Daily light integral floor (mol/m2/day), judged just after lights-off; 0 disables |
+| `alerts_enabled` | false | Master switch for threshold alerts |
+| `alert_sustain_min` / `alert_cooldown_hours` | 10 / 6 | Sustain window before a rule fires; reminder interval while it persists |
+| `soil_temp_low_f` / `soil_temp_high_f` | 80 / 85 | Soil temp band: chart target band and the alert thresholds. Shipped defaults are the chile **germination** band; drop to ~70-80 once seedlings are up, or the low alert nags all day |
+| `alert_dry_pct` / `alert_humidity_high` | 15 / 80 | Dry-tray and high-humidity alert thresholds |
+| `fan_mode` / `fan_speed` / `fan_auto_speed` / `fan_min_speed` / `fan_humidity_on` | auto / 100 / 70 / 25 / 65 | Fan behaviour: mode, manual and auto speeds, stall floor, humidity trigger |
 | `probe_cal` | {} | Per-tray ADC wet/dry anchors for the soil probes, set from the dashboard. A live reading outside its anchors shows a red "recal" badge: the percentage is pegged and the dry alert is blind until the anchor is recaptured |
 | `probe_names` | Tray 1 / Tray 2 | Labels for the two probes (A0 = tray 1, A1 = tray 2) |
 
