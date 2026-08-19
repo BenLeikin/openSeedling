@@ -614,3 +614,14 @@ Runtime files (`config.json`, `growlight.db`, `timelapse/`, `.secret`,
   capture resolution is too large for available memory, which happens on the Pi
   Zero 2 W (512MB) at the sensor's full 4608x2592. Lower `cam_width`/`cam_height`
   to 2304x1296; the preview proves that size works on the hardware.
+
+---
+
+## License
+
+MIT. See [LICENSE](LICENSE).
+
+This project drives mains-adjacent hardware (grow lights, pumps, heat mats) and
+puts water near electronics. The MIT warranty disclaimer is not boilerplate
+here: build and run it at your own risk, and don't leave an automatic waterer
+unattended until you have watched it behave.
