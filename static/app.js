@@ -309,10 +309,27 @@ function renderPhoto(j){  const card=document.getElementById('photocard');
   }
   img.style.display='';
   card.style.display='';
-  img.src='/photo/latest?'+ (j.latest_photo_time||Date.now());
+  // Show the flattened view by default: that is the corrected, top-down image
+  // and what the analysis works from. Only while the grid is unlocked (i.e.
+  // you are dragging corners) does it fall back to the raw frame, because you
+  // cannot place corners on an image that has already been rectified.
+  const stamp=j.latest_photo_time||Date.now();
+  const editing=gridEditable();
+  const flat=!editing && grid && grid.corners && grid.corners.length===4;
+  img.dataset.flat=flat?'1':'';
+  if(flat){
+    img.onerror=()=>{                       // no corners yet, or rectify failed
+      if(img.dataset.flat){img.dataset.flat='';img.src='/photo/latest?'+stamp;}
+    };
+    img.src='/rectified.jpg?t='+encodeURIComponent(stamp);
+  }else{
+    img.onerror=null;
+    img.src='/photo/latest?'+stamp;
+  }
   const when=j.latest_photo_time?new Date(j.latest_photo_time):null;
   document.getElementById('photoinfo').textContent=
-    (when?`Taken ${when.toLocaleString()}`:'')+` \u00b7 ${j.photo_count} photos so far`;
+    (when?`Taken ${when.toLocaleString()}`:'')+` \u00b7 ${j.photo_count} photos so far`
+    + (img.dataset.flat?' \u00b7 flattened':' \u00b7 raw frame (unlock grid to place corners)');
 }
 async function capturePhoto(){
   const btn=document.getElementById('capturebtn');
@@ -362,6 +379,12 @@ async function alignTick(){
       const img=document.getElementById('photo');
       img.style.display='';
       img.src='/preview.jpg?'+j.ts;     // busy/error: keep the last frame
+      const info=document.getElementById('photoinfo');
+      // sharpness score: bigger is sharper for this scene; walk the focus
+      // setting and keep whatever maximizes it
+      if(info&&j.sharpness!=null)
+        info.textContent='Live preview \u00b7 sharpness '+Math.round(j.sharpness)
+          +' (higher = sharper)';
     }
   }catch(e){}
   if(aligning)alignTimer=setTimeout(alignTick,1200);
@@ -392,8 +415,10 @@ function fillForm(cfg){
   for(const k of ['latitude','longitude','timezone','max_bright','ramp_min',
                   'sunrise_offset_min','sunset_offset_min',
                   'capture_interval_min','capture_brightness','roi',
-                  'lux_to_ppfd_k','canopy_factor','duration_hours','humidity_low','humidity_high','fan_humidity_on','fan_min_speed','alert_sustain_min','alert_cooldown_hours',
-                  'alert_dry_pct','alert_humidity_high'])
+                  'lux_to_ppfd_k','canopy_factor','duration_hours','cam_rotate','usb_device',
+                  'usb_width','usb_height','usb_exposure_time_absolute','usb_gain',
+                  'usb_focus_absolute','usb_white_balance_temperature','humidity_low','humidity_high','fan_humidity_on','fan_min_speed','alert_sustain_min','alert_cooldown_hours',
+                  'alert_dry_pct','alert_humidity_high','alert_dli_low'])
     if(f.elements[k] && document.activeElement!==f.elements[k])
       f.elements[k].value=cfg[k];
   {// schedule mode: populate its fields and show only that mode's block
@@ -403,6 +428,19 @@ function fillForm(cfg){
      if(f.elements[k]&&document.activeElement!==f.elements[k])
        f.elements[k].value=cfg[k]||'';
    showScheduleMode(sm?sm.value:'solar');}
+  {const cb=f.elements['camera_backend'];
+   if(cb&&document.activeElement!==cb)cb.value=cfg.camera_backend||'rpicam';
+   // only show the UVC controls when a USB camera is selected
+   document.querySelectorAll('.usbonly').forEach(el=>
+     el.style.display=(cb&&cb.value==='usb')?'':'none');
+   for(const [name] of USB_AUTO){
+     const el=f.elements[name];
+     if(el&&document.activeElement!==el)el.checked=!!cfg[name];
+   }
+   syncUsbAuto();}
+  {const cr=f.elements['cam_rectify'];
+   if(cr&&document.activeElement!==cr)cr.checked=cfg.cam_rectify!==false;
+}
   {const fw=f.elements['fan_with_light'];
    if(fw&&document.activeElement!==fw)fw.checked=cfg.fan_with_light!==false;}
   {const ae=f.elements['alerts_enabled'];
@@ -434,12 +472,41 @@ function frameLabel(n){
   const m=n.match(/^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})/);
   return m?`${m[2]}/${m[3]} ${m[4]}:${m[5]}`:n;
 }
+function frameTs(n){
+  // filename encodes local capture time; _m suffix (manual) parses the same
+  const m=n.match(/^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/);
+  if(!m)return null;
+  return Math.floor(new Date(+m[1],+m[2]-1,+m[3],+m[4],+m[5],+m[6]).getTime()/1000);
+}
+let ctxTimer=null;
+function loadFrameContext(name){
+  // debounced: fires only when scrubbing pauses, never per-frame in playback
+  const el=document.getElementById('pctx');
+  if(!el)return;
+  clearTimeout(ctxTimer);
+  ctxTimer=setTimeout(async()=>{
+    const ts=frameTs(name);
+    if(ts==null){el.textContent='';return;}
+    try{
+      const r=await fetch('/api/frame_context?ts='+ts);
+      const j=await r.json();
+      const d=j.readings||{};
+      const bits=[];
+      if(d.soil_c!=null)bits.push(`soil ${tDisp(d.soil_c).toFixed(1)}${tUnit()}`);
+      if(d.air_c!=null)bits.push(`air ${tDisp(d.air_c).toFixed(1)}${tUnit()}`);
+      if(d.humidity!=null)bits.push(`${d.humidity.toFixed(0)}% RH`);
+      if(d.lux!=null)bits.push(`${Math.round(d.lux).toLocaleString()} lx`);
+      el.textContent=bits.length?' \u00b7 '+bits.join(' \u00b7 '):'';
+    }catch(e){el.textContent='';}
+  },350);
+}
 function showFrame(){
   if(!frames.length)return;
   document.getElementById('vframe').src='/thumb/'+frames[fidx];
   document.getElementById('scrub').value=fidx;
   document.getElementById('pframe').textContent=
     `${frameLabel(frames[fidx])} \u00b7 ${fidx+1}/${frames.length}`;
+  loadFrameContext(frames[fidx]);
   (new Image()).src='/thumb/'+frames[(fidx+1)%frames.length];
 }
 function stopPlay(){
@@ -469,6 +536,8 @@ async function loadFrames(){
   }catch(e){}
 }
 document.getElementById('playbtn').addEventListener('click',togglePlay);
+{const rt=document.getElementById('resettlbtn');
+ if(rt)rt.addEventListener('click',()=>resetTimelapse(false));}
 document.getElementById('renderbtn').addEventListener('click',async()=>{
   const info=document.getElementById('renderinfo');
   const dl=document.getElementById('dlbtn');
@@ -572,8 +641,8 @@ function initAuth(){
 // ---------------- sensors: readout, chart, overlay ----------------
 let sensorData={};
 let sampleMin=5, capMin=30, capOn=false, camHealth=null, presTrend=null, lightMetrics=null;
-let dryCal={};                 // per-cell {wet,dry} brightness anchors
 let probeCal={}, probeNames={}, probeDefaultCal=null;   // per-tray anchors, labels, fallback
+let probeFlags={};             // per-tray below_wet/above_dry from the server
 function probePct(c, v){
   if(!c || c.wet==null || c.dry==null || (c.dry-c.wet)<0.05) return null;
   return Math.max(0, Math.min(100, 100*(c.dry-v)/(c.dry-c.wet)));
@@ -583,14 +652,6 @@ function probeMoisture(t, v){
   if(p!=null) return {pct:p, approx:false};
   const d=probePct(probeDefaultCal, v);
   return d==null ? null : {pct:d, approx:true};
-}
-const DRY_SPAN_DEFAULT=15;     // provisional wet->dry brightness span pre-calibration
-function camMoisture(cell, b){
-  const c=dryCal[cell];
-  if(!c || c.wet==null) return null;          // not calibrated -> no %
-  const wet=c.wet, dry=(c.dry!=null?c.dry:wet+DRY_SPAN_DEFAULT);
-  if(dry<=wet) return null;
-  return Math.max(0, Math.min(100, 100*(dry-b)/(dry-wet)));
 }
 let chartHours=24;
 
@@ -606,6 +667,7 @@ function pDisp(hpa){return isMetric()?hpa:hpa*0.0295299830714;}
 function pUnit(){return isMetric()?'hPa':'inHg';}
 function pDec(){return isMetric()?0:2;}
 // key -> {group, label, value, unit}
+
 function sensorMeta(key, val){
   if(key==='temp:air')   return {group:'Environment', label:'Air',      value:tDisp(val).toFixed(1), unit:tUnit()};
   if(key==='humidity')   return {group:'Environment', label:'Humidity', value:val.toFixed(0),       unit:'%'};
@@ -620,45 +682,38 @@ function sensorMeta(key, val){
   if(key==='temp:soil')  return {group:'Soil',        label:'Soil temp',value:tDisp(val).toFixed(1), unit:tUnit()};
   if(key.startsWith('temp:soil_'))
                          return {group:'Soil',        label:'Soil temp '+key.split('_')[1], value:tDisp(val).toFixed(1), unit:tUnit()};
-  if(key.startsWith('moisture:')){
-    const cell=key.slice(9);
-    const nm=(grid&&grid.names&&grid.names[cell])?grid.names[cell]:cell;
-    return {group:'Moisture', label:nm, value:val.toFixed(0), unit:'%'};
-  }
-  if(key.startsWith('growth_px:')){
-    const cell=key.slice(10);
-    const nm=(grid&&grid.names&&grid.names[cell])?grid.names[cell]:cell;
-    return {group:'Growth', label:nm+' area', value:Math.round(val).toLocaleString(), unit:'px'};
-  }
-  if(key.startsWith('growth:')){
-    const cell=key.slice(7);
-    const nm=(grid&&grid.names&&grid.names[cell])?grid.names[cell]:cell;
-    return {group:'Growth', label:nm, value:val.toFixed(1), unit:'%'};
+  if(key.startsWith('canopy:')){
+    const t=key.slice(7);
+    const nm=(probeNames[t]?probeNames[t]:'Tray '+t)+' canopy';
+    return {group:'Growth', label:nm, value:val.toFixed(1), unit:'%',
+            title:'share of plant pixels across the whole tray'};
   }
   if(key.startsWith('probe:')){
     const t=key.slice(6);
     const nm=probeNames[t]||('Tray '+t);
     const m=probeMoisture(t, val);
+    // server-side flag: the live reading sits outside this tray's anchors, so
+    // the percentage is pegged and the dry alert is blind until recalibration
+    const flag=probeFlags[t];
+    const warn=flag?` <span class="calwarn" title="${flag==='below_wet'
+      ?'reading is wetter than the wet anchor; recapture the wet point'
+      :'reading is drier than the dry anchor; recapture the dry point'}">recal ${
+      flag==='below_wet'?'wet':'dry'}</span>`:'';
     if(m) return {group:'Soil', label:nm,
-                  value:(m.approx?'~':'')+m.pct.toFixed(0), unit:'%',
+                  value:(m.approx?'~':'')+m.pct.toFixed(0), unit:'%', suffix:warn,
                   title:val.toFixed(3)+'V'+(m.approx?' - estimated, not yet calibrated':'')};
-    return {group:'Soil', label:nm, value:val.toFixed(3), unit:'V'};
-  }
-  if(key.startsWith('dry:')){
-    const cell=key.slice(4);
-    const nm=(grid&&grid.names&&grid.names[cell])?grid.names[cell]:cell;
-    const m=camMoisture(cell, val);
-    if(m!=null) return {group:'Moisture (cam)', label:nm, value:m.toFixed(0), unit:'%'};
-    // uncalibrated: show raw surface-brightness index (higher = drier)
-    return {group:'Dryness', label:nm, value:val.toFixed(0), unit:''};
+    return {group:'Soil', label:nm, value:val.toFixed(3), unit:'V', suffix:warn};
   }
   return {group:'Other', label:key, value:String(val), unit:''};
 }
+// Per-cell camera readings, laid out to match the physical trays. Canopy and
+// surface dryness live in the same square because they describe the same cell;
+// separate wrapped lists made it impossible to see which cell was which.
 function renderSensors(j){
   sensorData=j.sensors||{};
-  dryCal=(j.settings&&j.settings.dryness_cal)||{};
   probeCal=(j.settings&&j.settings.probe_cal)||{};
   probeNames=(j.settings&&j.settings.probe_names)||{};
+  probeFlags=j.probe_cal_flags||{};
   if(j.probe_default_cal)probeDefaultCal=j.probe_default_cal;
   presTrend=j.pressure_tendency||null;
   lightMetrics=j.light_metrics||null;
@@ -685,8 +740,9 @@ function renderSensors(j){
   // grouped readout
   const groups={};
   for(const k of keys){
-    if(k.startsWith('growth_px:'))continue;   // raw counts are chart-only
-    if(k.startsWith('float:'))continue;       // shown in the water controls instead
+    if(k.startsWith('float:')||k.startsWith('reservoir:'))continue; // shown in the water controls instead
+    if(k.startsWith('growth')||k.startsWith('dry:')||k.startsWith('moisture:'))
+      continue;                               // drawn as tray grids below
     const v=sensorData[k].value;
     const missing = v==null || (typeof v==='number'&&isNaN(v));
     const m=sensorMeta(k, missing?0:v);
@@ -701,7 +757,7 @@ function renderSensors(j){
     h+=`<div class="sgroup"><h3>${g}</h3>`;
     for(const m of groups[g]){
       {const ts=sensorData[m.key0]&&sensorData[m.key0].ts;
-       const lim=(m.key0&&(m.key0.startsWith('dry:')||m.key0.startsWith('growth:')))?3*capMin:3*sampleMin;
+       const lim=(m.key0&&m.key0.startsWith('canopy:'))?3*capMin:3*sampleMin;
        const isStale=ts&&(Date.now()/1000-ts)>lim*60;
        if(isStale){m.stale=true;m.title=(m.title?m.title+' \u00b7 ':'')
          +'last reading '+agoStr(new Date(ts*1000));}}
@@ -711,7 +767,7 @@ function renderSensors(j){
     }
     h+='</div>';
   }
-  if(!h){
+  if(!h.trim()){
     h='<div class="emptystate">'
       +'<b>No sensors reporting yet.</b>'
       +'<p>Wire the ADS1115, BME/BMP280, BH1750 or DS18B20 to the I2C pins, then check '
@@ -738,8 +794,6 @@ function renderSensors(j){
        if(extra)envg.insertAdjacentHTML('beforeend',extra);
      }
    }}
-  const dc=document.getElementById('drycal');
-  if(dc)dc.style.display = keys.some(k=>k.startsWith('dry:')) ? '' : 'none';
   const pcctl=document.getElementById('probecal');
   if(pcctl)pcctl.style.display = keys.some(k=>k.startsWith('probe:')) ? '' : 'none';
   const ptc=document.getElementById('probetc');
@@ -747,7 +801,7 @@ function renderSensors(j){
                               && keys.some(k=>k.startsWith('temp:soil'))) ? '' : 'none';
   // collapse the whole calibration section if nothing in it applies
   {const cw=document.querySelector('.calwrap');
-   if(cw)cw.style.display=[dc,pcctl,ptc].some(el=>el&&el.style.display!=='none')?'':'none';}
+   if(cw)cw.style.display=[pcctl,ptc].some(el=>el&&el.style.display!=='none')?'':'none';}
   if(grid)drawGrid();   // refresh per-cell overlay
 }
 // ---- chart grid: every sensor visible at once, grouped by section ----
@@ -757,18 +811,16 @@ const CHART_SECTIONS=[
    match:k=>k.startsWith('temp:soil')||k.startsWith('probe:')},
   {id:'env',    title:'Environment',
    match:k=>k==='temp:air'||k==='humidity'||k==='lux'||k==='ppfd'||k==='pressure'},
-  {id:'cam',    title:'Camera moisture',  match:k=>k.startsWith('dry:')||k.startsWith('moisture:')},
-  {id:'growth', title:'Growth',           match:k=>k.startsWith('growth:')},
+  {id:'growth', title:'Canopy',           match:k=>k.startsWith('canopy:')},
   {id:'other',  title:'Other',            match:k=>true},
 ];
 let seriesData={}, chartPlots={}, soilTempHigh=85, soilTempLow=80;
 let humHigh=60, humLow=40;
 function chartUnitFor(s){
   if(s.startsWith('temp:'))return tUnit();
-  if(s.startsWith('humidity')||s.startsWith('moisture:')||s.startsWith('growth:'))return '%';
+  if(s.startsWith('humidity')||s.startsWith('canopy:'))return '%';
   if(s.startsWith('probe:')){const t=s.slice(6);
     return (probeCal[t]&&probeCal[t].wet!=null)||probeDefaultCal?'%':'V';}
-  if(s.startsWith('dry:')){const c=dryCal[s.slice(4)];return (c&&c.wet!=null)?'%':'';}
   if(s.startsWith('lux'))return 'lx';
   if(s==='pressure')return pUnit();
   if(s==='ppfd')return '\u00b5mol/m\u00b2/s';
@@ -779,10 +831,6 @@ function convertFor(s){
   if(s==='pressure')return v=>pDisp(v);
   if(s.startsWith('probe:')){const t=s.slice(6);
     return v=>{const m=probeMoisture(t,v);return m==null?v:m.pct;};}
-  if(s.startsWith('dry:')){const cell=s.slice(4);
-    const cal=dryCal[cell];
-    if(cal&&cal.wet!=null)return v=>camMoisture(cell,v);
-  }
   return v=>v;
 }
 let lastChartLoad=0, lastHostLoad=0;
@@ -804,7 +852,7 @@ function renderChartGrid(){
   if(!grid)return;
   // remember which cards are open: the grid is rebuilt on every reload
   document.querySelectorAll('.ccard.expanded').forEach(c=>expandedCharts.add(c.id));
-  const keys=Object.keys(seriesData).filter(k=>!k.startsWith('float:')).sort();
+  const keys=Object.keys(seriesData).filter(k=>!k.startsWith('float:')&&!k.startsWith('reservoir:')).sort();
   if(!keys.length){
     const haveNow=Object.keys(sensorData||{}).length>0;
     grid.innerHTML='<div class="emptystate">'
@@ -969,7 +1017,7 @@ function drawMini(key){
   const dec=(unit==='%')?0:(unit==='lx'?0:(unit==='inHg'?2:(unit==='hPa'?0:1)));
   const cur=ys[ys.length-1], lo=Math.min(...ys), hi=Math.max(...ys);
   const over=(hiLine!=null&&cur>hiLine)||(loLine!=null&&cur<loLine);
-  const lim=(key.startsWith('dry:')||key.startsWith('growth:'))?3*capMin:3*sampleMin;
+  const lim=key.startsWith('canopy:')?3*capMin:3*sampleMin;
   const lastTs=xs[xs.length-1];
   const isStale=(Date.now()/1000-lastTs)>lim*60;
   svg.classList.toggle('cstale', isStale);
@@ -1029,7 +1077,11 @@ function chartLeave(){
 function floatLabel(v){
   return v===null ? 'no sensor' : (v>=1 ? 'not full' : 'full');
 }
+let pumpActive=false;   // float state only changes while a pump runs; the 15s
+                        // status poll covers the idle case, so don't hammer
+                        // /api/float at 1.5s from every open tab
 async function pollFloat(){
+  if(!pumpActive)return;
   try{
     const r=await fetch('/api/float');
     if(!r.ok)return;
@@ -1044,7 +1096,30 @@ function renderWater(j){
   const w=j.water;const box=document.getElementById('waterctl');
   if(!w||!w.trays){box.style.display='none';return;}
   box.style.display='';
+  {// source reservoir level row, above the tray rows
+   const res=w.reservoir||{};
+   let row=document.getElementById('resrow');
+   if(res.wired&&res.state){
+     if(!row){
+       row=document.createElement('div');
+       row.className='waterctl'; row.id='resrow';
+       row.innerHTML='<span class="wtray">Reservoir</span>'
+         +'<span class="schip">Level <b id="resstate">--</b></span>'
+         +'<span id="resnote" class="fhint"></span>';
+       box.prepend(row);
+     }
+     const st=document.getElementById('resstate');
+     const note=document.getElementById('resnote');
+     const labels={full:'full',ok:'ok',empty:'EMPTY',fault:'sensor fault'};
+     st.textContent=labels[res.state]||res.state;
+     st.className=res.state==='empty'?'resbad'
+                 :(res.state==='fault'?'reswarn':'resok');
+     note.textContent=res.state==='empty'?'pump runs refused until refilled'
+                     :(res.state==='fault'?'high sensor wet, low sensor dry - check mounting':'');
+   } else if(row){row.remove();}
+  }
   const anyRunning=Object.values(w.trays).some(t=>t.running);
+  pumpActive=anyRunning;
   for(const t of Object.keys(w.trays).sort()){
     const tw=w.trays[t];
     let row=document.getElementById('wrow'+t);
@@ -1083,6 +1158,7 @@ function renderWater(j){
 async function waterAct(tray, body, msg){
   const info=document.getElementById('pumpinfo'+tray);
   if(info)info.textContent=msg;
+  pumpActive=true;   // watch the float live from the moment the run starts
   try{
     const r=await fetch('/api/pump',{method:'POST',
       headers:{'Content-Type':'application/json'},
@@ -1092,17 +1168,6 @@ async function waterAct(tray, body, msg){
     if(!j.ok&&info)info.textContent=j.error||('HTTP '+r.status);
     // progress/result arrives via the status poll (running/last) + live float
   }catch(e){if(info)info.textContent='request failed';}
-}
-async function calibrate(point){
-  const info=document.getElementById('calinfo');info.textContent='saving...';
-  try{
-    const r=await fetch('/api/dryness_cal',{method:'POST',
-      headers:{'Content-Type':'application/json'},body:JSON.stringify({point})});
-    const j=await r.json().catch(()=>({}));
-    if(r.ok&&j.ok){info.textContent=`${point} set (${j.cells} cells)`;refresh();}
-    else info.textContent = r.status===401?'log in to calibrate'
-                          :('failed: '+(j.error||('HTTP '+r.status)));
-  }catch(e){info.textContent='calibration failed';}
 }
 async function calibrateProbe(tray, point){
   const info=document.getElementById('probecalinfo');if(info)info.textContent='sampling\u2026 (~2s)';
@@ -1217,10 +1282,14 @@ function renderTrays(j){
                 : (toSprout!=null ? `${toSprout}d to sprout`
                 : (v.sprouted ? 'sprouted' : (v.planted?'not up yet':'&nbsp;')))}</div>
               <div class="tacts editonly">
-                <button type="button" class="tsprout" data-cell="${cid}" data-tray="${id}">${
-                  v.sprouted?'Un-sprout':'Sprouted'}</button>
-                <button type="button" class="tarch" data-cell="${cid}" data-tray="${id}">${
-                  v.archived?'Restore':'Archive'}</button>
+                <button type="button" class="tsprout" data-cell="${cid}" data-tray="${id}"
+                        title="${v.sprouted?'Mark as not sprouted':'Mark sprouted today'}"
+                        ><span class="blong">${v.sprouted?'Un-sprout':'Sprouted'}</span><span
+                         class="bshort">${v.sprouted?'\u21b6':'\u2713'}</span></button>
+                <button type="button" class="tarch" data-cell="${cid}" data-tray="${id}"
+                        title="${v.archived?'Restore this cell':'Mark transplanted out'}"
+                        ><span class="blong">${v.archived?'Restore':'Archive'}</span><span
+                         class="bshort">${v.archived?'\u21ba':'\u2913'}</span></button>
               </div>
             </div>`;
       }
@@ -1232,8 +1301,13 @@ function renderTrays(j){
    const hint=document.getElementById('trayhint');
    if(hint)hint.style.display=filled?'none':'';}
 }
-function esc(s){return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;')
-  .replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+// Single definition on purpose: a second `function esc` later in the file
+// would silently win for the whole scope and (if weaker) let a quote in a
+// seed name break out of an HTML attribute.
+function esc(s){
+  return String(s==null?'':s).replace(/&/g,'&amp;').replace(/"/g,'&quot;')
+    .replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
 function collectTray(id){
   const cells={};
   document.querySelectorAll(`#trayswrap .tcell[data-tray="${id}"]`).forEach(el=>{
@@ -1447,10 +1521,6 @@ function initTrays(){
   });
 }
 function initSensors(){
-  const cw=document.getElementById('calwet');
-  if(cw)cw.addEventListener('click',()=>calibrate('wet'));
-  const cd=document.getElementById('caldry');
-  if(cd)cd.addEventListener('click',()=>calibrate('dry'));
   const pmap={probewet1:['1','wet'],probedry1:['1','dry'],probewet2:['2','wet'],probedry2:['2','dry']};
   for(const id in pmap){const b=document.getElementById(id);
     if(b)b.addEventListener('click',()=>calibrateProbe(pmap[id][0],pmap[id][1]));}
@@ -1497,35 +1567,31 @@ function bil(C,u,v){
   const b=[(1-u)*C[3][0]+u*C[2][0],(1-u)*C[3][1]+u*C[2][1]];
   return [(1-v)*t[0]+v*b[0],(1-v)*t[1]+v*b[1]];
 }
-function esc(s){return (s||'').replace(/[<>&]/g,'');}
-function moistColor(p){const h=35+(210-35)*(Math.max(0,Math.min(100,p))/100);
-  return `hsla(${h.toFixed(0)},60%,50%,0.28)`;}
 function gridEditable(){return canEdit && grid && !grid.locked;}
 function drawGrid(){
   const svg=document.getElementById('gridsvg');
   if(!grid||!svg)return;
   svg.style.display=grid.show?'':'none';
   if(!grid.show){svg.innerHTML='';return;}
-  const C=grid.corners,R=grid.rows,K=grid.cols,S=1000;
+  // On the flattened view the image IS the tray rectangle, so the cells are
+  // even splits of the frame; the saved corners describe the raw frame and
+  // would land in the wrong places here.
+  const photo=document.getElementById('photo');
+  const flat=!!(photo && photo.dataset.flat);
+  const C=flat?[[0,0],[1,0],[1,1],[0,1]]:grid.corners;
+  const R=grid.rows,K=grid.cols,S=1000;
   let h='';
   for(let r=0;r<R;r++)for(let c=0;c<K;c++){
     const p=[bil(C,c/K,r/R),bil(C,(c+1)/K,r/R),bil(C,(c+1)/K,(r+1)/R),bil(C,c/K,(r+1)/R)];
     const pts=p.map(q=>(q[0]*S).toFixed(1)+','+(q[1]*S).toFixed(1)).join(' ');
     const k=cellKey(r,c);
-    const mo=sensorData['moisture:'+k];
-    const fill=mo?moistColor(mo.value):'rgba(127,176,105,0.12)';
+    const fill='rgba(127,176,105,0.12)';
     h+=`<polygon class="gc" data-k="${k}" points="${pts}" fill="${fill}" stroke="#eafff0" stroke-width="2"/>`;
     const ctr=bil(C,(c+0.5)/K,(r+0.5)/R);
     const cx=(ctr[0]*S).toFixed(1); let yy=ctr[1]*S-3;
     h+=`<text x="${cx}" y="${yy.toFixed(1)}" class="glbl" text-anchor="middle">${k}</text>`;
     const nm=grid.names[k];
     if(nm){yy+=22;h+=`<text x="${cx}" y="${yy.toFixed(1)}" class="gnm" text-anchor="middle">${esc(nm)}</text>`;}
-    if(mo){yy+=21;h+=`<text x="${cx}" y="${yy.toFixed(1)}" class="gmoist" text-anchor="middle">${mo.value.toFixed(0)}%</text>`;}
-    const gr=sensorData['growth:'+k];
-    if(gr){yy+=21;h+=`<text x="${cx}" y="${yy.toFixed(1)}" class="ggrow" text-anchor="middle">\u{1F331} ${gr.value.toFixed(0)}%</text>`;}
-    const dr=sensorData['dry:'+k];
-    if(dr){const dm=camMoisture(k,dr.value);yy+=21;
-      h+=`<text x="${cx}" y="${yy.toFixed(1)}" class="gdry" text-anchor="middle">\u{1F4A7} ${dm!=null?dm.toFixed(0)+'%':dr.value.toFixed(0)}</text>`;}
   }
   if(gridEditable())for(let i=0;i<4;i++)
     h+=`<circle class="gh" data-i="${i}" cx="${(C[i][0]*S).toFixed(1)}" cy="${(C[i][1]*S).toFixed(1)}" r="16"/>`;
@@ -1671,6 +1737,7 @@ async function refresh(){
     renderTrays(j);
     renderTrayConfig(j.settings);
     renderSweep(j);
+    renderFocus(j);
     renderFan(j);
     renderDayProgress(j);
     renderLightPlan(j);
@@ -1700,6 +1767,15 @@ document.getElementById('cfgform').addEventListener('submit',async ev=>{
     body.lux_to_ppfd_k=parseFloat(f.elements['lux_to_ppfd_k'].value||0);
   if(f.elements['canopy_factor'])
     body.canopy_factor=parseFloat(f.elements['canopy_factor'].value||1);
+  if(f.elements['cam_rotate'])body.cam_rotate=parseInt(f.elements['cam_rotate'].value||0,10);
+  if(f.elements['camera_backend'])body.camera_backend=f.elements['camera_backend'].value;
+  if(f.elements['usb_device'])body.usb_device=f.elements['usb_device'].value.trim();
+  for(const k of ['usb_auto_focus','usb_auto_exposure_on','usb_auto_white_balance'])
+    if(f.elements[k])body[k]=f.elements[k].checked;
+  for(const k of ['usb_width','usb_height','usb_exposure_time_absolute','usb_gain',
+                  'usb_focus_absolute','usb_white_balance_temperature'])
+    if(f.elements[k])body[k]=parseInt(f.elements[k].value||0,10);
+  if(f.elements['cam_rectify'])body.cam_rectify=f.elements['cam_rectify'].checked;
   for(const k of ['humidity_low','humidity_high','fan_humidity_on','fan_min_speed'])
     if(f.elements[k])body[k]=parseInt(f.elements[k].value||0,10);
   if(f.elements['schedule_mode'])body.schedule_mode=f.elements['schedule_mode'].value;
@@ -1710,6 +1786,8 @@ document.getElementById('cfgform').addEventListener('submit',async ev=>{
   if(f.elements['units'])body.units=f.elements['units'].value;
   for(const k of ['alert_sustain_min','alert_cooldown_hours','alert_dry_pct','alert_humidity_high'])
     if(f.elements[k])body[k]=parseInt(f.elements[k].value||0,10);
+  if(f.elements['alert_dli_low'])
+    body.alert_dli_low=parseFloat(f.elements['alert_dli_low'].value||0);
   if(f.elements['alerts_enabled'])body.alerts_enabled=f.elements['alerts_enabled'].checked;
   if(f.elements['soil_temp_low_f']){
     const shown=parseFloat(f.elements['soil_temp_low_f'].value||0);
@@ -1730,7 +1808,14 @@ document.getElementById('cfgform').addEventListener('submit',async ev=>{
     const r=await fetch('/api/settings',{method:'POST',
       headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     const j=await r.json();
-    if(r.ok){msg.textContent='Saved \u{1F331}';msg.className='ok';setTimeout(refresh,800);}
+    const errs=j.errors&&Object.keys(j.errors);
+    if(r.ok&&j.ok){msg.textContent='Saved \u{1F331}';msg.className='ok';setTimeout(refresh,800);}
+    else if(errs&&errs.length){
+      // everything valid was saved; say exactly which fields were rejected
+      msg.textContent='Saved, except: '
+        +errs.map(k=>k+' ('+j.errors[k]+')').join(', ');
+      msg.className='err';setTimeout(refresh,800);
+    }
     else{msg.textContent=j.error||'Save failed';msg.className='err';}
   }catch(e){msg.textContent='Save failed';msg.className='err';}
 });
@@ -1783,8 +1868,17 @@ function renderReport(j){
   h+=rList('Recommendations',r.recommendations);
   if(r.per_cell&&r.per_cell.length)
     h+=`<div class="rsec"><h4>Cell notes</h4><ul>${r.per_cell.map(c=>`<li><b>${esc(c.cell||'')}</b> ${esc(c.note||'')}</li>`).join('')}</ul></div>`;
-  if(r.species&&r.species.length)
-    h+=`<div class="rsec"><h4>Species guesses</h4><ul>${r.species.map(s=>`<li><b>${esc(s.cell||'')}</b> ${esc(s.guess||'unsure')}${s.confidence?` <span class="rconf">(${esc(s.confidence)})</span>`:''}${s.why?` &mdash; ${esc(s.why)}`:''}</li>`).join('')}</ul></div>`;
+  // Only cells that look wrong are worth showing: the planting map already
+  // records what is in every cell, so a list of confirmations is noise.
+  {const vc=(r.variety_check||[]).filter(v=>v && v.looks_consistent===false);
+   if(vc.length)
+     h+=`<div class="rsec"><h4>Possible mix-ups</h4><ul>${vc.map(v=>
+       `<li><b>${esc(v.cell||'')}</b> recorded as ${esc(v.expected||'?')}`
+       +`${v.why?` &mdash; ${esc(v.why)}`:''}</li>`).join('')}</ul></div>`;
+   // tolerate reports generated before this change
+   if(!r.variety_check && r.species && r.species.length)
+     h+=`<div class="rsec"><h4>Species guesses</h4><ul>${r.species.map(sp=>
+       `<li><b>${esc(sp.cell||'')}</b> ${esc(sp.guess||'unsure')}</li>`).join('')}</ul></div>`;}
   if(r.confidence)h+=`<p class="rconf">Confidence: ${esc(r.confidence)}${j.parse_error?' \u00b7 (reply was not structured JSON)':''}</p>`;
   body.innerHTML=h;
 }
@@ -1834,6 +1928,27 @@ async function saveAi(){
   const m=Math.min(59,Math.max(0,parseInt(parts[1],10)||0));
   try{await fetch('/api/ai_settings',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({ai_enabled:en.checked,ai_report_hour:h,ai_report_minute:m})});}catch(e){}
+}
+async function resetTimelapse(confirmed){
+  const info=document.getElementById('renderinfo');
+  try{
+    const r=await fetch('/api/reset_timelapse',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(confirmed?{confirm:true,clear_readings:true}:{})});
+    const j=await r.json().catch(()=>({}));
+    if(r.status===401){if(info)info.textContent='log in first';return;}
+    if(!j.ok&&j.needs_confirm&&!confirmed){   // ask once, never loop
+      if(window.confirm(`Archive ${j.photos} photos and start a new timelapse?\n\n`
+        +`They are moved to timelapse_archive/, not deleted. Per-cell camera `
+        +`readings are cleared too, since they were measured against the old `
+        +`camera position. Probe, temperature and light history is kept.`))
+        return resetTimelapse(true);
+      return;
+    }
+    if(!j.ok){if(info)info.textContent=j.error||'failed';return;}
+    if(info)info.textContent=`archived ${j.archived} photos`;
+    refresh();
+  }catch(e){if(info)info.textContent='request failed';}
 }
 function initReport(){
   const gb=document.getElementById('genreport');if(gb)gb.addEventListener('click',genReport);
@@ -2163,6 +2278,39 @@ async function setFan(mode){
   }catch(e){if(info)info.textContent='request failed';}
   refresh();
 }
+let focusRunning=false;
+async function startFocusSweep(){
+  const info=document.getElementById('focusinfo');
+  if(focusRunning){
+    await fetch('/api/focus_sweep',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({cancel:true})});
+    return;
+  }
+  if(info)info.textContent='starting\u2026';
+  try{
+    const r=await fetch('/api/focus_sweep',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({})});
+    const j=await r.json().catch(()=>({}));
+    if(r.status===401){if(info)info.textContent='log in first';return;}
+    if(!j.ok){if(info)info.textContent=j.error||'failed';return;}
+    if(info)info.textContent=`sweeping\u2026 (~${j.estimate_seconds}s; timelapse pauses)`;
+  }catch(e){if(info)info.textContent='request failed';}
+}
+function renderFocus(j){
+  const btn=document.getElementById('focusbtn');
+  const info=document.getElementById('focusinfo');
+  const f=j.focus||{};
+  const was=focusRunning; focusRunning=!!f.running;
+  if(btn)btn.textContent=focusRunning?'Cancel':'\uD83C\uDFAF Focus sweep';
+  if(focusRunning&&info)
+    info.textContent=`sweeping\u2026 ${f.step}${f.total?'/'+f.total:''} points`;
+  if(was&&!focusRunning&&info){
+    if(f.error)info.textContent=f.error;
+    else if(f.best)info.textContent=
+      `pinned focus ${f.best.focus} (score ${f.best.score}, ${f.best.tested} points)`;
+    else info.textContent='cancelled';
+  }
+}
 function renderSweep(j){
   const btn=document.getElementById('sweepbtn');
   const info=document.getElementById('sweepinfo');
@@ -2181,6 +2329,35 @@ function showScheduleMode(mode){
     b.style.display=(b.dataset.mode===mode)?'':'none';
   });
 }
+// show a manual block only when its auto checkbox is clear
+const USB_AUTO=[['usb_auto_focus','manual-focus'],
+                ['usb_auto_exposure_on','manual-exposure'],
+                ['usb_auto_white_balance','manual-wb']];
+function syncUsbAuto(){
+  const f=document.getElementById('cfgform');
+  if(!f)return;
+  const usb=(f.elements['camera_backend']||{}).value==='usb';
+  for(const [name,cls] of USB_AUTO){
+    const on=f.elements[name] && f.elements[name].checked;
+    document.querySelectorAll('.'+cls).forEach(el=>
+      el.style.display=(usb && !on)?'':'none');
+  }
+}
+function initCameraBackend(){
+  for(const [name] of USB_AUTO){
+    const cb=document.querySelector(`[name=${name}]`);
+    if(cb && !cb.dataset.bound){cb.dataset.bound='1';
+      cb.addEventListener('change',syncUsbAuto);}
+  }
+  const cb=document.querySelector('[name=camera_backend]');
+  if(!cb||cb.dataset.bound)return;
+  cb.dataset.bound='1';
+  cb.addEventListener('change',()=>{
+    document.querySelectorAll('.usbonly').forEach(el=>
+      el.style.display=(cb.value==='usb')?'':'none');
+    syncUsbAuto();
+  });
+}
 function initSchedule(){
   const sm=document.querySelector('[name=schedule_mode]');
   if(!sm)return;
@@ -2192,6 +2369,8 @@ function initLight(){
    row.dataset.lightBound='1';}                 // every click twice
   {const b=document.getElementById('sweepbtn');
    if(b)b.addEventListener('click',startSweep);}
+  {const fb=document.getElementById('focusbtn');
+   if(fb)fb.addEventListener('click',startFocusSweep);}
   document.querySelectorAll('.fanbtn').forEach(b=>
     b.addEventListener('click',()=>setFan(b.dataset.mode)));
   {const fr=document.getElementById('fanrange'), fv=document.getElementById('fanval');
@@ -2247,6 +2426,6 @@ function initLight(){
     if(!dragging)setLight(null, +rng.value);
   });
 }
-[initAuth, initSensors, initGridSvg, initReport, initLight, initTrays, initSchedule, initTrayConfig].forEach(fn=>{  try{ fn(); }catch(e){ console.error(fn.name+' init failed:', e); }
+[initAuth, initSensors, initGridSvg, initReport, initLight, initTrays, initSchedule, initTrayConfig, initCameraBackend].forEach(fn=>{  try{ fn(); }catch(e){ console.error(fn.name+' init failed:', e); }
 });
 refresh();
