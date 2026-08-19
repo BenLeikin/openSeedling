@@ -1,4 +1,4 @@
-# Growlight
+# OpenSeedling
 
 A self-contained seedling station for the Raspberry Pi: a sun-synced grow light,
 a timelapse camera, per-tray canopy growth tracking, reservoir level sensing,
@@ -8,7 +8,12 @@ a single Flask dashboard.
 It runs on a Pi Zero 2 W controlling a cheap USB LED grow light through a MOSFET,
 and grew from "dim a light on a schedule" into a small greenhouse controller.
 
-![The Growlight dashboard](docs/dashboard.png)
+(Internally the app, service, env vars, and paths are named `growlight`, the
+project's original name. That is deliberate: renaming a running service and its
+env prefix buys nothing and breaks working deployments. OpenSeedling is the
+project; `growlight` is the unit.)
+
+![The OpenSeedling dashboard](docs/dashboard.png)
 
 *Light status and schedule, the latest snapshot with the cell grid, sensor charts,
 the watering controls, and the daily AI plant-health report.*
