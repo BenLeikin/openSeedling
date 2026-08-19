@@ -116,14 +116,21 @@ def series(sensor, hours=168):
     return sorted(merged.items())
 
 
-def latest(sensors=None):
-    """Most recent value per sensor -> {sensor: (ts, value)}."""
+def latest(sensors=None, max_age_days=7):
+    """Most recent value per sensor -> {sensor: (ts, value)}.
+
+    Bounded to the last `max_age_days`: this query runs on every status poll,
+    and an unbounded GROUP BY walks the whole 30-day raw table each time. A
+    sensor silent for over a week has no useful "latest" anyway (the stale
+    alert covers telling you it died)."""
+    since = int(time.time()) - max_age_days * 86400
     c = _c()
     rows = c.execute("""
         SELECT r.sensor, r.ts, r.value FROM readings r
-        JOIN (SELECT sensor, MAX(ts) ts FROM readings GROUP BY sensor) m
+        JOIN (SELECT sensor, MAX(ts) ts FROM readings
+              WHERE ts >= ? GROUP BY sensor) m
           ON r.sensor=m.sensor AND r.ts=m.ts
-    """).fetchall()
+    """, (since,)).fetchall()
     out = {r["sensor"]: (r["ts"], r["value"]) for r in rows}
     if sensors is not None:
         out = {k: v for k, v in out.items() if k in sensors}
@@ -150,6 +157,22 @@ def reading_near(sensor, ts, window=3600):
 
 
 # --------------------------- housekeeping ---------------------------
+
+def delete_series_prefix(prefix):
+    """Remove every reading (raw and hourly) whose sensor starts with `prefix`.
+    Returns the number of raw rows deleted."""
+    c = _c()
+    # % and _ are LIKE wildcards; escape them instead of stripping them, or a
+    # prefix like "growth_px:" becomes "growthpx:%" and matches nothing
+    esc = (prefix.replace("\\", "\\\\").replace("%", "\\%")
+                 .replace("_", "\\_")) + "%"
+    n = c.execute("DELETE FROM readings WHERE sensor LIKE ? ESCAPE '\\'",
+                  (esc,)).rowcount
+    c.execute("DELETE FROM readings_hourly WHERE sensor LIKE ? ESCAPE '\\'",
+              (esc,))
+    c.commit()
+    return n
+
 
 def downsample_and_prune():
     """Roll raw readings older than RAW_RETENTION_DAYS into hourly averages,

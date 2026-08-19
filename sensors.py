@@ -26,7 +26,16 @@ GPIO4 / pin 7):
 import glob
 import os
 import statistics
+import threading
 import time
+
+# One lock for every I2C read. The sample loop, the calibration endpoints, and
+# the light sweep all touch these devices from different threads. Blinka only
+# locks per bus transaction, but an ADS1115 read is write-config-then-read:
+# two threads interleaving can attribute tray 2's voltage to tray 1, which
+# would silently corrupt a calibration anchor. Held per read, never across
+# sleeps, so the worst-case wait is one conversion.
+_io_lock = threading.Lock()
 
 # Flip these to True as each sensor type is wired and its _read_* filled in.
 # (Moisture probes have their own PROBE_ENABLED below.)
@@ -59,6 +68,79 @@ elif (_fp or "").strip():
 FLOAT_ENABLED = True
 _float_devs = {}
 _float_init = False
+
+# --- reservoir level (XKC-Y23A NPN non-contact, through the bucket wall) ---
+# Two sensors on the SOURCE reservoir: "low" mounted at the minimum-safe
+# height, "high" near the top rim. NPN output pulls LOW on water detect, so
+# with the internal pull-up is_pressed means water at that height. Some units
+# ship inverted; set GROWLIGHT_RESERVOIR_INVERT=1 if the bench test reads
+# backwards rather than reswapping wires.
+# Pins overridable via GROWLIGHT_RESERVOIR_PINS="low:27,high:17"; empty
+# string = no reservoir sensors.
+RESERVOIR_PINS = {"low": 27, "high": 17}   # BCM (physical 13, 11), as built
+_rp = os.environ.get("GROWLIGHT_RESERVOIR_PINS")
+if _rp is not None and not _rp.strip():
+    RESERVOIR_PINS = {}
+    print("reservoir pins: none configured")
+elif (_rp or "").strip():
+    _rp = _rp.strip()
+    try:
+        RESERVOIR_PINS = {a.strip(): int(b) for a, b in
+                          (part.split(":") for part in _rp.split(","))}
+        print(f"reservoir pins from environment: {RESERVOIR_PINS}")
+    except Exception as _e:
+        print(f"GROWLIGHT_RESERVOIR_PINS unreadable ({_e}); using {RESERVOIR_PINS}")
+RESERVOIR_INVERT = bool((os.environ.get("GROWLIGHT_RESERVOIR_INVERT") or "")
+                        .strip())
+_res_devs = {}
+_res_init = False
+
+
+def _reservoirs():
+    global _res_devs, _res_init
+    if _res_init:
+        return _res_devs
+    _res_init = True
+    if not RESERVOIR_PINS:
+        return _res_devs
+    try:
+        from gpiozero import Button
+    except Exception as e:
+        print(f"reservoir sensors unavailable ({e}); reporting unknown")
+        return _res_devs
+    for which, pin in RESERVOIR_PINS.items():
+        try:
+            _res_devs[which] = Button(pin, pull_up=True, bounce_time=0.1)
+        except Exception as e:
+            print(f"reservoir {which} (GPIO{pin}) unavailable ({e}); "
+                  "reporting unknown")
+    return _res_devs
+
+
+def read_reservoir_level(which):
+    """One reservoir sensor: 1.0 water present at that height, 0.0 dry,
+    None if that sensor isn't available."""
+    dev = _reservoirs().get(str(which))
+    if dev is None:
+        return None
+    try:
+        wet = bool(dev.is_pressed)
+        if RESERVOIR_INVERT:
+            wet = not wet
+        return 1.0 if wet else 0.0
+    except Exception as e:
+        print(f"reservoir {which} read error: {e}")
+        return None
+
+
+def read_reservoirs():
+    """All wired reservoir sensors, e.g. {'reservoir:low': 1.0}."""
+    out = {}
+    for which in RESERVOIR_PINS:
+        v = read_reservoir_level(which)
+        if v is not None:
+            out[f"reservoir:{which}"] = v
+    return out
 
 
 def _floats():
@@ -122,7 +204,15 @@ def _probes():
     global _probe_chans, _probe_init
     if _probe_init:
         return _probe_chans or {}
-    _probe_init = True
+    with _io_lock:
+        if _probe_init:                 # another thread initialized while we waited
+            return _probe_chans or {}
+        _probe_init = True
+        return _probes_init_locked()
+
+
+def _probes_init_locked():
+    global _probe_chans
     try:
         import adafruit_ads1x15.ads1115 as ADS
         from adafruit_ads1x15.analog_in import AnalogIn
@@ -151,7 +241,8 @@ def read_probes(samples=8):
     out = {}
     for tray, ch in chans.items():
         try:
-            vals = [ch.voltage for _ in range(max(1, samples))]
+            with _io_lock:
+                vals = [ch.voltage for _ in range(max(1, samples))]
             out[f"probe:{tray}"] = round(statistics.median(vals), 4)
         except Exception as e:
             print(f"probe {tray} read error: {e}")
@@ -169,7 +260,8 @@ def probe_spread(tray, samples=10, delay=0.2):
     vals = []
     for _ in range(max(2, samples)):
         try:
-            vals.append(ch.voltage)
+            with _io_lock:              # per sample, so sampling isn't starved
+                vals.append(ch.voltage)
         except Exception:
             pass
         time.sleep(delay)
@@ -241,10 +333,11 @@ def _read_air():
     if _air_dev is None:
         return {}
     try:
-        out = {"temp:air": round(_air_dev.temperature, 2),
-               "pressure": round(_air_dev.pressure, 1)}
-        if _air_has_humidity:
-            out["humidity"] = round(_air_dev.relative_humidity, 1)
+        with _io_lock:
+            out = {"temp:air": round(_air_dev.temperature, 2),
+                   "pressure": round(_air_dev.pressure, 1)}
+            if _air_has_humidity:
+                out["humidity"] = round(_air_dev.relative_humidity, 1)
         return out
     except Exception as e:
         print(f"air sensor read error: {e}")
@@ -278,7 +371,8 @@ def _read_lux():
     if _lux_dev is None:
         return {}
     try:
-        return {"lux": round(_lux_dev.lux, 1)}
+        with _io_lock:
+            return {"lux": round(_lux_dev.lux, 1)}
     except Exception as e:
         print(f"lux read error: {e}")
         return {}
@@ -334,7 +428,8 @@ def read_all():
     independently and wrapped so one failed device never aborts the rest;
     failures and not-yet-wired types are simply absent from the result."""
     out = {}
-    for fn in (read_probes, read_floats, _read_air, _read_lux, _read_soil_temps):
+    for fn in (read_probes, read_floats, read_reservoirs,
+               _read_air, _read_lux, _read_soil_temps):
         try:
             out.update(fn())
         except Exception as e:

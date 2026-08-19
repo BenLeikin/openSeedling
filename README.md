@@ -232,6 +232,30 @@ settings require a session):
 Behind HTTPS keep `cookie_secure: true`; for plain-http local testing set it
 false.
 
+### USB (UVC) camera
+
+Set **Camera type** to "USB webcam" in Settings. The capture path uses
+`v4l2-ctl` rather than `rpicam-still`, and pins exposure, gain, focus and white
+balance so every frame is taken under identical conditions; auto white balance
+in particular drifts badly under magenta grow light and ruins both the video and
+the per-cell colour analysis.
+
+Two details worth knowing:
+
+* Controls are applied in two passes. A manual control stays flagged `inactive`
+  and rejects writes until its automatic counterpart is switched off, so
+  `focus_automatic_continuous=0` must land before `focus_absolute=68`.
+* Each capture grabs a short burst and keeps the last frame. The first frame
+  after opening a UVC device is routinely dark or torn.
+
+Find your camera and its supported sizes with:
+
+```bash
+v4l2-ctl --list-devices
+v4l2-ctl -d /dev/video0 --list-formats-ext
+v4l2-ctl -d /dev/video0 --list-ctrls
+```
+
 ### Camera moisture & growth
 
 `growth.py` runs as a subprocess against the latest frame. Moisture is the median
@@ -308,6 +332,8 @@ Read endpoints are open; mutating ones require a session when a password is set.
 | POST | `/api/schedule` | Adjust the light window (used by the chart drag handles) |
 | POST | `/api/light` | Manual light hold (auto/on/off) + manual brightness |
 | POST | `/api/tray_layout` | Add, remove, rename or resize a tray (confirm required if cells would be lost) |
+| POST | `/api/reset_timelapse` | Archive the current run and start fresh (confirm required) |
+| POST | `/api/rebuild_thumbs` | Regenerate thumbnails after the corners move |
 | POST | `/api/trays` | Save the planting map (what's sown in each cell) |
 
 ### Schedule modes

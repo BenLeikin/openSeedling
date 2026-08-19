@@ -259,7 +259,9 @@ body.gridlocked .gridedit{display:none}
 .csection h3{margin:0 0 8px;font-size:13px;font-weight:700;color:var(--leaf);
   text-transform:uppercase;letter-spacing:.04em}
 .cgrid{display:grid;gap:10px;
-  grid-template-columns:repeat(auto-fill,minmax(240px,1fr))}
+  /* auto-fit, not auto-fill: with few charts in a group, empty tracks
+     collapse and the real charts stretch across the row */
+  grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
 .ccard{background:#f6faf1;border:1px solid var(--line);border-radius:10px;
   padding:8px 10px 4px}
 .chead{display:flex;justify-content:space-between;align-items:baseline;gap:8px;
@@ -465,12 +467,16 @@ body.nocam .amedia{display:none}
   .afacts .grid dt,.afacts .grid dd{padding:0 14px;border-left:1px solid var(--line)}
   .afacts .grid dt:first-of-type,.afacts .grid dd:first-of-type{border-left:0;padding-left:0}
 
-  /* media row: report beside the photo, timelapse below */
+  /* media row: report beside the photo, timelapse below. The report spans
+     both rows and STRETCHES to the column bottom: a short report otherwise
+     leaves a dead hole under its card while snapshot+timelapse run long.
+     The card is a flex column with a scrolling body, so stretching only
+     adds breathing room, never distortion. */
   .amedia{display:grid;gap:14px;
     grid-template-columns:1.1fr 1fr;
     align-items:start}
-  .amedia>.areport{grid-row:span 2}
-  #reportcard{max-height:none}
+  .amedia>.areport{grid-row:span 2;align-self:stretch}
+  #reportcard{max-height:none;height:100%}
   #photo,#vframe{max-height:52vh;object-fit:contain}
 }
 
@@ -628,3 +634,85 @@ body.readonly .tcell textarea{background:#f6faf1;border-color:transparent;pointe
 .trayrow .tlabelin{flex:1 1 140px;min-width:110px;margin:0;padding:5px 8px;font-size:14px}
 .tdims{display:inline-flex;align-items:center;gap:4px;flex:none}
 .tmeta{font-size:11px;color:var(--leaf);flex:1 1 auto;white-space:nowrap}
+
+/* ---- planting map on narrow screens ----
+   The grid must keep its physical shape (a cell is a real position in the
+   tray), so it stays N columns wide and the contents shrink instead. */
+.bshort{display:none}
+@media (max-width:700px){
+  .tgrid{gap:4px}
+  .tcell{padding:4px 5px;gap:3px;min-height:0}
+  .tcell .tid{font-size:9px}
+  .tcell input,.tcell textarea{padding:2px 4px;font-size:11px}
+  .tcell input.tseed{font-size:11px}
+  .tcell input.tdate{font-size:10px}
+  .tdrow{gap:3px}
+  .tdlbl{width:22px;font-size:8px}
+  .tstat{font-size:9px;line-height:1.25}
+  /* icon-only actions: "Un-sprout" cannot fit a third of a phone screen */
+  .blong{display:none}
+  .bshort{display:inline;font-size:13px;line-height:1}
+  .tacts{gap:3px}
+  .tacts button{padding:3px 0;min-height:24px}
+  /* cells in a row share a height, so the grid reads as a grid */
+  .tgrid{align-items:stretch}
+  .tray-head{gap:6px}
+  .tray-head b{font-size:13px}
+  .tray-head .tsum{font-size:11px}
+}
+@media (max-width:420px){
+  .tcell input,.tcell textarea{font-size:10px}
+  .tcell input.tdate{font-size:9px}
+  .tdlbl{width:18px}
+}
+#rectwrap{margin-top:10px}
+#rectimg{width:100%;border-radius:10px;border:1.5px solid var(--line);display:block}
+#rectbtn.on{background:var(--leaf);color:#fff;border-color:var(--leaf)}
+.dimrow{display:flex;align-items:center;gap:5px}
+.dimrow input{width:100%}
+
+/* ---- per-cell camera readings, laid out as the trays are ---- */
+.ccells{margin-top:10px}
+.ccname{font-size:12px;font-weight:700;color:var(--leaf);margin-bottom:5px}
+.ccgrid{display:grid;gap:5px}
+.ccell{background:#f6faf1;border:1px solid var(--line);border-radius:8px;
+  padding:5px 6px;display:flex;flex-direction:column;gap:1px;min-height:52px}
+.ccell.empty{background:transparent;border-style:dashed;opacity:.45}
+.ccid{font-size:9px;font-weight:700;color:var(--leaf);letter-spacing:.04em}
+.ccg{font-size:14px;font-weight:600;color:var(--ink);font-variant-numeric:tabular-nums}
+.ccd{font-size:10px;color:var(--leaf);font-variant-numeric:tabular-nums}
+@media (max-width:700px){
+  .ccell{min-height:46px;padding:4px 5px}
+  .ccg{font-size:12px}
+  .ccd{font-size:9px}
+}
+
+/* ---- timelapse controls on narrow screens ----
+   Three buttons plus the render summary and download link cannot share one
+   row on a phone; without wrapping the text is squeezed into a one-word
+   column and overflows the card. */
+.pctrl{flex-wrap:wrap}
+#renderinfo{font-size:12px;color:var(--leaf);line-height:1.4}
+@media (max-width:700px){
+  .pctrl{gap:8px}
+  .pctrl button{flex:1 1 auto;min-width:0;padding:8px 12px;font-size:13px}
+  #renderinfo{flex:1 1 100%;order:10;margin:0}
+  #dlbtn{flex:1 1 100%;order:11;margin-left:0 !important;text-align:left}
+}
+@media (max-width:700px){
+  /* every control row that mixes buttons with status text must wrap */
+  .lcurvehead,.trayadd,.pctrl,.capctl,.lcrow{flex-wrap:wrap}
+  .lcurvehead #sweepinfo{flex:1 1 100%;margin-left:0;text-align:left}
+  .trayadd #trayaddinfo{flex:1 1 100%}
+}
+
+/* out-of-range probe calibration badge: the reading sits past an anchor, the
+   percentage is pegged, and the dry alert is blind until recalibrated */
+.calwarn{display:inline-block;margin-left:.35em;padding:0 .4em;border-radius:3px;
+  background:#b5322f;color:#fff;font-size:.72em;font-weight:600;vertical-align:1px;
+  cursor:help}
+.focusrow{display:flex;align-items:center;gap:.6em;margin-top:.3em}
+.pctx{color:#7a8a72;font-size:.85em}
+#resstate.resbad{color:#b5322f}
+#resstate.reswarn{color:#c98a1e}
+#resstate.resok{color:#2e7d32}

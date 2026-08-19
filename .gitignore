@@ -10,3 +10,11 @@ __pycache__/
 .anthropic_key
 ai_report.json
 .discord_webhook
+preview.jpg
+preview.tmp.jpg
+
+# setup.sh writes pins and secrets here
+.env
+
+# archived timelapse runs
+timelapse_archive/

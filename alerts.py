@@ -36,41 +36,58 @@ DEFAULTS = {
 
 def _rule(key):
     return _state.setdefault(key, {"active": False, "since": 0.0,
-                                   "last_sent": 0.0})
+                                   "last_sent": 0.0, "clear_since": 0.0})
 
 
-def evaluate(key, condition, now=None):
+def evaluate(key, condition, now=None, release=None, hold=None, clear_hold=0.0):
     """Feed a rule its current truth value; get back what to do about it.
 
     Returns "fire" the first time a condition has held for long enough,
     "remind" when it is still true after the cooldown, "clear" on the
     transition back to normal, or None when there is nothing to say.
+
+    `release`: the condition for clearing while active. Defaults to
+    `not condition`, but analog rules should pass a hysteresis margin
+    (clear a 90F alarm at 88F, not 89.9F) so noise at the threshold cannot
+    flap the rule.
+    `hold`: seconds the condition must persist before firing; defaults to the
+    configured sustain. Pass 0 for discrete events (a fill failure is a fact
+    the moment it happens, not a level that needs to settle).
+    `clear_hold`: seconds the release condition must persist before clearing.
+    0 keeps the old immediate-clear behavior for event rules; analog rules
+    should pass the sustain so one spurious in-range reading cannot emit a
+    Resolved notice and re-arm the alarm.
     """
     now = now if now is not None else time.time()
     st = _rule(key)
     cfg = _state.get("_cfg", DEFAULTS)
-    sustain = cfg.get("sustain_seconds", 600)
+    sustain = cfg.get("sustain_seconds", 600) if hold is None else hold
     cooldown = cfg.get("cooldown_seconds", 21600)
 
-    if condition:
-        if not st["since"]:
-            st["since"] = now                 # start the sustain clock
-        held = now - st["since"]
-        if not st["active"]:
-            if held >= sustain:
-                st.update(active=True, last_sent=now)
+    if not st["active"]:
+        if condition:
+            if not st["since"]:
+                st["since"] = now             # start the sustain clock
+            if now - st["since"] >= sustain:
+                st.update(active=True, last_sent=now, clear_since=0.0)
                 return "fire"
             return None                        # still settling
-        if now - st["last_sent"] >= cooldown:
-            st["last_sent"] = now
-            return "remind"
+        st["since"] = 0.0
         return None
 
-    # condition false
-    st["since"] = 0.0
-    if st["active"]:
-        st["active"] = False
-        return "clear"
+    # active: decide between remind and clear
+    rel = (not condition) if release is None else bool(release)
+    if rel:
+        if not st["clear_since"]:
+            st["clear_since"] = now
+        if now - st["clear_since"] >= clear_hold:
+            st.update(active=False, since=0.0, clear_since=0.0)
+            return "clear"
+        return None                            # recovering, not confirmed yet
+    st["clear_since"] = 0.0
+    if now - st["last_sent"] >= cooldown:
+        st["last_sent"] = now
+        return "remind"
     return None
 
 
@@ -103,6 +120,10 @@ def check_all(snapshot, cfg, unit_temp="F"):
 
     tu = "\u00b0C" if unit_temp == "C" else "\u00b0F"
 
+    sustain = cfg.get("sustain_seconds", DEFAULTS["sustain_seconds"])
+    TEMP_MARGIN_F = 2.0     # hysteresis: clear 2F past the threshold
+    PCT_MARGIN = 3          # ...and 3 points for the percentage rules
+
     # --- soil temperature, the one that ruins a germination run ---
     hi = cfg.get("soil_temp_high_f") or 0
     lo = cfg.get("soil_temp_low_f", DEFAULTS["soil_temp_low_f"])
@@ -112,7 +133,8 @@ def check_all(snapshot, cfg, unit_temp="F"):
         f = val * 9 / 5 + 32
         label = "Soil" if key == "temp:soil" else key.split(":", 1)[1]
         if hi:
-            act = evaluate(f"soil_hot:{key}", f > hi, now)
+            act = evaluate(f"soil_hot:{key}", f > hi, now,
+                           release=f < hi - TEMP_MARGIN_F, clear_hold=sustain)
             if act in ("fire", "remind"):
                 out.append((act, f"soil_hot:{key}", "Soil too warm",
                             f"{label} is {temp_disp(val):.1f}{tu}, above the "
@@ -123,7 +145,8 @@ def check_all(snapshot, cfg, unit_temp="F"):
                 out.append((act, f"soil_hot:{key}", "Soil temperature back to normal",
                             f"{label} is {temp_disp(val):.1f}{tu}.", "good"))
         if lo:
-            act = evaluate(f"soil_cold:{key}", f < lo, now)
+            act = evaluate(f"soil_cold:{key}", f < lo, now,
+                           release=f > lo + TEMP_MARGIN_F, clear_hold=sustain)
             if act in ("fire", "remind"):
                 out.append((act, f"soil_cold:{key}", "Soil too cold",
                             f"{label} is {temp_disp(val):.1f}{tu}, below "
@@ -139,7 +162,8 @@ def check_all(snapshot, cfg, unit_temp="F"):
     for tray, pct in (snapshot.get("_moisture") or {}).items():
         if pct is None:
             continue
-        act = evaluate(f"dry:{tray}", pct <= dry_at, now)
+        act = evaluate(f"dry:{tray}", pct <= dry_at, now,
+                       release=pct > dry_at + PCT_MARGIN, clear_hold=sustain)
         if act in ("fire", "remind"):
             out.append((act, f"dry:{tray}", "Tray drying out",
                         f"{tray} moisture is {pct}%, at or below the {dry_at}% "
@@ -152,7 +176,8 @@ def check_all(snapshot, cfg, unit_temp="F"):
     rh_hi = cfg.get("humidity_high", DEFAULTS["humidity_high"])
     rh = snapshot.get("humidity")
     if rh is not None and rh_hi:
-        act = evaluate("humidity_high", rh >= rh_hi, now)
+        act = evaluate("humidity_high", rh >= rh_hi, now,
+                       release=rh < rh_hi - PCT_MARGIN, clear_hold=sustain)
         if act in ("fire", "remind"):
             out.append((act, "humidity_high", "Humidity high",
                         f"Air is {rh:.0f}% RH, at or above {rh_hi}%. Combined "
@@ -162,14 +187,56 @@ def check_all(snapshot, cfg, unit_temp="F"):
             out.append((act, "humidity_high", "Humidity back down",
                         f"Air is {rh:.0f}% RH.", "good"))
 
+    # --- daily light total, judged just after lights-off. The caller only
+    # supplies _dli inside that window, so no evaluation (and no clear)
+    # happens outside it; a low day fires once, a good day clears.
+    dli_low = cfg.get("dli_low", DEFAULTS["dli_low"])
+    d = snapshot.get("_dli")
+    if d is not None and dli_low:
+        act = evaluate("dli_low", d < dli_low, now, hold=0)
+        if act in ("fire", "remind"):
+            out.append((act, "dli_low", "Short light day",
+                        f"Today finished at {d:.1f} mol/m2, below the "
+                        f"{dli_low:g} mol target. The light was off, dimmed, "
+                        "or blocked for part of the photoperiod; seedlings "
+                        "want 6-12 mol/day.", "warn"))
+        elif act == "clear":
+            out.append((act, "dli_low", "Light back on target",
+                        f"Today finished at {d:.1f} mol/m2.", "good"))
+
+    # --- reservoir level: empty stops watering, fault means a lying sensor ---
+    res = snapshot.get("_reservoir")
+    if res:
+        # sustained so pump slosh or a wave during a refill can't flap it;
+        # clear only once water is solidly back at the low sensor
+        act = evaluate("res_empty", res == "empty", now,
+                       release=res in ("ok", "full"), clear_hold=sustain)
+        if act in ("fire", "remind"):
+            out.append((act, "res_empty", "Reservoir empty",
+                        "No water at either reservoir sensor. Pump runs are "
+                        "refused until it is refilled.", "error"))
+        elif act == "clear":
+            out.append((act, "res_empty", "Reservoir refilled",
+                        f"Water level is back ({res}).", "good"))
+        act = evaluate("res_fault", res == "fault", now)
+        if act in ("fire", "remind"):
+            out.append((act, "res_fault", "Reservoir sensor fault",
+                        "The high sensor reads water but the low one does "
+                        "not, which is physically impossible. A sensor died, "
+                        "slipped off the wall, or needs its sensitivity pot "
+                        "adjusted.", "warn"))
+        elif act == "clear":
+            out.append((act, "res_fault", "Reservoir sensors agree again",
+                        f"Level reads {res}.", "good"))
+
     # --- reservoir / fill failure, surfaced by the caller ---
     if snapshot.get("_fill_failed"):
-        act = evaluate("fill_failed", True, now)
+        act = evaluate("fill_failed", True, now, hold=0)
         if act in ("fire", "remind"):
             out.append((act, "fill_failed", "Watering did not complete",
                         str(snapshot["_fill_failed"]), "error"))
     else:
-        act = evaluate("fill_failed", False, now)
+        act = evaluate("fill_failed", False, now, hold=0)
         if act == "clear":
             out.append((act, "fill_failed", "Watering completed normally",
                         "A fill reached the float again.", "good"))

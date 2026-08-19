@@ -54,7 +54,8 @@ if [[ -f "$ENV_FILE" ]]; then
   # An explicitly empty hardware key means the user answered "none". Record
   # that separately: an empty string cannot itself be distinguished from
   # "unset" when ask() falls back to its suggested default.
-  for _k in GROWLIGHT_PUMP_PINS GROWLIGHT_FLOAT_PINS GROWLIGHT_FAN_PIN; do
+  for _k in GROWLIGHT_PUMP_PINS GROWLIGHT_FLOAT_PINS GROWLIGHT_FAN_PIN \
+            GROWLIGHT_RESERVOIR_PINS; do
     if grep -q "^$_k=$" "$ENV_FILE" 2>/dev/null; then
       CFG["$_k"]=""; CFG["${_k}__NONE"]=1
     fi
@@ -119,9 +120,17 @@ ask GROWLIGHT_FLOAT_PINS "Float switch pins, tray:pin (or 'none')" "1:23,2:22" \
   "23 = pin 16, 22 = pin 15. Other leg to ground; rising water should OPEN the switch. 'none' if unwired."
 ask GROWLIGHT_FAN_PIN "Fan pin (or 'none')" "20" \
   "20 = pin 38. Any free GPIO; software PWM. 'none' if you have no fan."
+ask GROWLIGHT_RESERVOIR_PINS "Reservoir level pins, low:pin,high:pin (or 'none')" "low:27,high:17" \
+  "XKC-Y23A non-contact sensors on the source reservoir. low = minimum-safe height, high = near the rim. 27 = pin 13, 17 = pin 11. 'none' if unwired."
+if [[ -n "${CFG[GROWLIGHT_RESERVOIR_PINS]:-}" \
+      && ! "${CFG[GROWLIGHT_RESERVOIR_PINS]}" =~ ^(none|NONE|None|no|n|-|skip)$ ]]; then
+  ask GROWLIGHT_RESERVOIR_INVERT "Reservoir sensors inverted? (1 or blank)" "" \
+    "Leave blank for standard NPN units (output pulls low on water). Set 1 only if the bench test reads backwards."
+fi
 
 # normalise the opt-outs to an empty value
-for _k in GROWLIGHT_PUMP_PINS GROWLIGHT_FLOAT_PINS GROWLIGHT_FAN_PIN; do
+for _k in GROWLIGHT_PUMP_PINS GROWLIGHT_FLOAT_PINS GROWLIGHT_FAN_PIN \
+          GROWLIGHT_RESERVOIR_PINS; do
   case "${CFG[$_k]:-}" in
     none|NONE|None|no|n|-|skip) CFG["$_k"]=""; echo "    $_k: none" ;;
   esac
@@ -143,9 +152,12 @@ umask 077
   echo "# Edit here and 'sudo systemctl restart growlight' to apply."
   # Hardware keys are written even when empty: that is how "I have no pump"
   # persists across a re-run instead of reverting to the suggested default.
-  for k in GROWLIGHT_LIGHT_PIN GROWLIGHT_PUMP_PINS GROWLIGHT_FLOAT_PINS GROWLIGHT_FAN_PIN; do
+  for k in GROWLIGHT_LIGHT_PIN GROWLIGHT_PUMP_PINS GROWLIGHT_FLOAT_PINS \
+           GROWLIGHT_FAN_PIN GROWLIGHT_RESERVOIR_PINS; do
     echo "$k=${CFG[$k]:-}"
   done
+  [[ -n "${CFG[GROWLIGHT_RESERVOIR_INVERT]:-}" ]] \
+    && echo "GROWLIGHT_RESERVOIR_INVERT=${CFG[GROWLIGHT_RESERVOIR_INVERT]}"
   for k in ANTHROPIC_API_KEY DISCORD_WEBHOOK; do
     [[ -n "${CFG[$k]:-}" ]] && echo "$k=${CFG[$k]}"
   done

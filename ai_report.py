@@ -80,9 +80,9 @@ object and nothing else (no prose, no code fences) with exactly these fields:
   "germination": {"sprouted": <int or null>, "total_cells": <int or null>, "notes": "<string>"},
   "growth_stage": "<e.g. pre-emergence, cotyledon, first true leaves, ...>",
   "per_cell": [ {"cell": "B1", "note": "<short observation>"} ],
-  "species": [ {"cell": "B1", "guess": "<best-guess species/variety, or 'unsure'>", "confidence": "low" | "medium" | "high", "why": "<distinguishing features you used>"} ],
+  "variety_check": [ {"cell": "B1", "expected": "<what the planting map says>", "looks_consistent": true | false | null, "why": "<only if it looks wrong>"} ],
   "light": {"assessment": "too_low" | "ok" | "too_high" | "unsure", "reason": "<cite legginess/stretch or bleaching you actually see>"},
-  "water": {"assessment": "too_dry" | "ok" | "too_wet" | "unsure", "reason": "<use the dryness numbers AND what the soil looks like>"},
+  "water": {"assessment": "too_dry" | "ok" | "too_wet" | "unsure", "reason": "<use the probe moisture numbers AND what the soil looks like in the photo>"},
   "concerns": [ "<specific issue: damping-off, algae, fungus gnats, mould, leggy, wilting, etc.>" ],
   "recommendations": [ "<concrete action the grower can take today>" ],
   "confidence": "low" | "medium" | "high"
@@ -95,12 +95,13 @@ so in that field and lower "confidence" rather than inventing detail.
 array if there are none.
 - "per_cell" should list only notable cells (problems, standouts, or the largest), \
 not every cell.
-- "species": for each germinated cell, make your best-effort guess at the plant \
-species or variety from cotyledon shape, colour, and any early true leaves. \
-Cotyledon-stage ID is genuinely hard, so calibrate "confidence" honestly (mostly \
-low/medium this early), say "unsure" when you truly can't tell, and never state a \
-guess as if it were certain. If the grower's notes list what was planted, match \
-seedlings to that list rather than guessing freely.
+- "variety_check": the planting map already records what was sown in every cell, \
+so do NOT guess species. Use this field only to flag a cell whose seedling looks \
+inconsistent with what is recorded (wrong cotyledon shape for that variety, or a \
+seedling in a cell listed as empty or as equipment). Set "looks_consistent" to \
+null when the photo cannot support a judgement, and return an empty array when \
+nothing looks out of place. Cotyledon-stage ID is genuinely hard, so only flag \
+something you are reasonably sure about.
 - Keep each string concise."""
 
 
@@ -123,13 +124,11 @@ def build_context(d):
         names = g.get("names") or {}
         if names:
             L.append("Cell labels: " + ", ".join(f"{k}={v}" for k, v in names.items()))
-    cm = d.get("camera_moisture") or {}
-    if cm:
-        L.append("Camera moisture % per cell (100=just watered, lower=drier): "
-                 + ", ".join(f"{k}={v}" for k, v in sorted(cm.items())))
-    elif d.get("dryness_raw"):
-        L.append("Camera surface-brightness per cell (uncalibrated; higher=drier): "
-                 + ", ".join(f"{k}={v}" for k, v in sorted(d["dryness_raw"].items())))
+    cp = d.get("canopy") or {}
+    if cp:
+        L.append("Canopy coverage % per tray (camera-measured share of plant "
+                 "pixels; useful as a trend, understated under the magenta "
+                 "light): " + ", ".join(f"{k}={v}" for k, v in sorted(cp.items())))
     pm = d.get("probe_moisture") or {}
     if pm:
         L.append("Soil-probe moisture % per tray (direct sensor, more reliable than "
@@ -157,6 +156,9 @@ def build_context(d):
             line += (f"; daily light integral so far {lm['dli']} mol/m2/day "
                      "(seedlings want roughly 6-12)")
         L.append(line)
+    fan = d.get("fan")
+    if fan:
+        L.append(f"Fan: {fan}")
     pt = d.get("pressure_trend")
     if pt:
         L.append(f"Barometric trend: {pt['words']} ({pt['change_3h']:+} hPa over 3h)"
@@ -174,12 +176,11 @@ def build_context(d):
         L.append(f"Soil temperature {U['temp']}: "
                  + ", ".join(f"{k}={v}" for k, v in sorted(stf.items()))
                  + f" (chiles: {band}; sustained heat past that stretches seedlings)")
-    gr = d.get("growth") or {}
-    if gr:
-        L.append("Canopy index % per cell (relative, understated under magenta light): "
-                 + ", ".join(f"{k}={v}" for k, v in sorted(gr.items())))
     if d.get("float") is not None:
         L.append(f"Reservoir float: {d['float']}")
+    if d.get("reservoir"):
+        L.append(f"Source reservoir level: {d['reservoir']}"
+                 + (" (pump runs are refused)" if d["reservoir"] == "empty" else ""))
     if d.get("pump_today_s") is not None:
         L.append(f"Pump runtime today: {d['pump_today_s']}s; last: {d.get('pump_last','none')}")
     if d.get("notes"):
@@ -265,7 +266,6 @@ if __name__ == "__main__":
     print("API key present:", have_key())
     if len(sys.argv) > 1:
         demo = {"date": "today", "location": "Thousand Oaks, CA",
-                "camera_moisture": {"A1": 88, "B1": 84},
-                "growth": {"A1": 0.5, "B1": 3.4}, "float": "not full",
+                "canopy": {"Tray 1": 12.5, "Tray 2": 9.1}, "float": "not full",
                 "notes": "peat/vermiculite/perlite; mixed germination"}
         print(json.dumps(generate(sys.argv[1], demo), indent=2)[:1500])

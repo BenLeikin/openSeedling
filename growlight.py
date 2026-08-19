@@ -32,12 +32,13 @@ from zoneinfo import ZoneInfo, available_timezones
 from rpi_hardware_pwm import HardwarePWM
 from astral import LocationInfo
 from astral.sun import sun
-from flask import (Flask, jsonify, render_template, request, session,
+from flask import (Flask, Response, jsonify, render_template, request, session,
                    send_file, send_from_directory)
 from werkzeug.security import check_password_hash
 
 import db
 import sensors
+import growth as growth_mod
 import notify
 import ai_report
 import discord_alert
@@ -64,6 +65,10 @@ DEFAULTS = {
     "alert_cooldown_hours": 6,  # reminder interval while a problem persists
     "alert_dry_pct": 15,        # calibrated trays only
     "alert_humidity_high": 80,  # 0 disables
+    "alert_dli_low": 4,         # checked once daily just after lights-off:
+                                #   a day that finishes under this many mol/m2
+                                #   means the light was off, dimmed or blocked.
+                                #   0 disables.
     "units": "imperial",       # "imperial" (F, inHg) or "metric" (C, hPa);
                                #   storage stays Celsius/hPa either way
     "humidity_low": 40,        # comfort band drawn on the humidity chart;
@@ -86,6 +91,24 @@ DEFAULTS = {
     "duration_end": "20:00",   #   ...anchored to this off time
     "sunrise_offset_min": 0,   # negative starts before sunrise
     "sunset_offset_min": 0,    # positive runs past sunset
+    "camera_backend": "rpicam",   # rpicam (CSI ribbon) or usb (UVC webcam)
+    "usb_device": "/dev/video0",
+    "usb_width": 2048,
+    "usb_height": 1536,
+    "usb_warmup_frames": 4,       # frames discarded so exposure settles
+    # Auto vs manual per group. Manual is the default because a timelapse
+    # wants identical conditions in every frame; auto re-decides each shot and
+    # the video flickers.
+    "usb_auto_focus": False,
+    "usb_focus_absolute": 68,
+    "usb_auto_exposure_on": False,
+    "usb_exposure_time_absolute": 200,
+    "usb_gain": 32,
+    "usb_auto_white_balance": False,
+    "usb_white_balance_temperature": 4600,
+    "cam_rotate": 0,           # 0/90/180/270, applied to captures and analysis
+    "timelapse_flatten": True, # render the video and thumbnails flattened
+    "cam_rectify": True,       # flatten the tray plane before per-cell analysis
     "camera_enabled": False,   # master switch for all camera features (photos,
                                #   timelapse, camera vision, AI report). Off until
                                #   a working camera is connected.
@@ -109,7 +132,6 @@ DEFAULTS = {
     "pump_cooldown_min": 30,    # min wait between auto doses (soil wicks slowly)
     "pump_daily_max_seconds": 180,  # runaway backstop
     "fill_max_seconds": 60,     # hard cap on a fill-to-float run (if float never trips)
-    "dryness_cal": {},          # per-cell {wet,dry} brightness anchors -> camera moisture %
     "probe_cal": {},            # per-tray {wet,dry} raw ADC anchors -> probe moisture %
     "probe_names": {"1": "Tray 1", "2": "Tray 2"},  # ADS1115 A0 = tray 1, A1 = tray 2
     "ai_enabled": False,        # daily Claude vision report (needs an API key, see ai_report.py)
@@ -210,16 +232,34 @@ def _blank_pump():
             "today_seconds": 0.0, "day": "", "last_detail": ""}
 pump_state = {t: _blank_pump() for t in PUMP_PINS}
 pump_lock = threading.Lock()   # also serializes the two pumps: one at a time
+# a fill that ran to its cap without the float tripping: the message feeds the
+# alert state machine (fires on the next sample tick, reminds while unresolved)
+# and is cleared by the next successful fill
+fill_failure = {"msg": ""}
 
 settings = dict(DEFAULTS)
 _file_keys = set()
 if CONFIG_PATH.exists():
     try:
         _saved = json.loads(CONFIG_PATH.read_text())
+        # keys starting with "_" are runtime state that older builds persisted
+        # by accident (e.g. _seen_sensors); loading them back made a removed
+        # sensor alert forever
+        _saved = {k: v for k, v in _saved.items() if not k.startswith("_")}
         _file_keys = set(_saved)
         settings.update(_saved)
     except Exception as e:
         print(f"config.json unreadable ({e}), using defaults")
+
+
+def save_config():
+    """Persist settings to config.json. Caller must hold settings_lock.
+
+    The single place config is written, so the no-runtime-keys rule cannot be
+    forgotten at one of a dozen call sites: anything starting with "_" is
+    in-memory state and never lands on disk."""
+    data = {k: v for k, v in settings.items() if not k.startswith("_")}
+    CONFIG_PATH.write_text(json.dumps(data, indent=2))
 
 # One-time migration: trays were first laid out 4 wide x 3 deep (A1..D3); the
 # physical trays are 3 wide x 4 deep (A1..C4). Transpose saved cells so each
@@ -243,7 +283,7 @@ def _migrate_trays():
                 print(f"tray {tid}: migrated {len(newcells)} cells to 3x4 layout")
     if changed:
         try:
-            CONFIG_PATH.write_text(json.dumps(settings, indent=2))
+            save_config()
         except Exception as e:
             print(f"tray migration not persisted ({e})")
 _migrate_trays()
@@ -256,7 +296,7 @@ if "alert_soil_low_f" in settings:
     if _file_keys and "soil_temp_low_f" not in _file_keys:
         settings["soil_temp_low_f"] = _old
     try:
-        CONFIG_PATH.write_text(json.dumps(settings, indent=2))
+        save_config()
     except Exception:
         pass
 
@@ -278,6 +318,13 @@ sweep_state = {"running": False, "pct": 0, "error": "", "started": 0.0,
                                   # worker thread is still holding the light
 sweep_lock = threading.Lock()
 
+# focus sweep: walk focus_absolute, score each frame's sharpness, pin the best.
+# Replaces guessing focus values over SSH (a guessed 68 produced a week of
+# blurry photos). step counts down as coarse then fine passes run.
+focus_state = {"running": False, "step": 0, "total": 0, "best": None,
+               "error": "", "cancel": False}
+focus_lock = threading.Lock()
+
 
 def _camera_ok():
     with state_lock:
@@ -295,6 +342,7 @@ render = {"state": "idle", "msg": "", "frames": 0,
           "started": None, "elapsed": None}   # idle|running|done|error
 render_lock = threading.Lock()
 VIDEO_PATH = TIMELAPSE_DIR / "timelapse.mp4"
+ARCHIVE_DIR = Path(__file__).with_name("timelapse_archive")
 GROWTH_SCRIPT = Path(__file__).with_name("growth.py")
 
 try:
@@ -392,11 +440,36 @@ def parse_roi(s):
     return x, y, w, h
 
 
-def make_thumb(photo_path):
-    """640px thumbnail for the browser player. Cheap, one-time per photo."""
+def make_thumb(photo_path, cfg=None):
+    """640px thumbnail for the browser player. Cheap, one-time per photo.
+
+    Rectified to match the snapshot and the rendered video, so scrubbing the
+    timelapse shows the same corrected view as everything else. Falls back to a
+    plain scale if the grid corners are not set or OpenCV is unavailable.
+    """
     dst = THUMB_DIR / photo_path.name
     if dst.exists():
         return
+    if cfg is None:
+        with settings_lock:
+            cfg = dict(settings)
+    grid = (cfg.get("grid") or {})
+    corners = grid.get("corners")
+    if cfg.get("timelapse_flatten", True) and corners and len(corners) == 4:
+        try:
+            import cv2
+            img = cv2.imread(str(photo_path))
+            if img is not None:
+                warped = growth_mod.rectify(img, corners,
+                                            cols=int(grid.get("cols", 4)),
+                                            rows=int(grid.get("rows", 4)))
+                h, w = warped.shape[:2]
+                if w > 640:
+                    warped = cv2.resize(warped, (640, max(1, int(h * 640 / w))))
+                cv2.imwrite(str(dst), warped, [cv2.IMWRITE_JPEG_QUALITY, 82])
+                return
+        except Exception as e:
+            print(f"thumb rectify failed for {photo_path.name} ({e}); plain scale")
     try:
         subprocess.run(
             ["ffmpeg", "-loglevel", "error", "-y", "-i", str(photo_path),
@@ -407,7 +480,9 @@ def make_thumb(photo_path):
 
 
 def photo_inventory():
-    photos = sorted(TIMELAPSE_DIR.glob("*.jpg"))
+    # leading underscore marks render scratch, which is not a captured photo
+    photos = sorted(p for p in TIMELAPSE_DIR.glob("*.jpg")
+                    if not p.name.startswith("_"))
     if not photos:
         return 0, None, None
     latest = photos[-1]
@@ -418,6 +493,31 @@ def photo_inventory():
 
 def _today_str():
     return datetime.now(ZoneInfo(settings["timezone"])).date().isoformat()
+
+
+def reservoir_state():
+    """Combined reservoir level from the low and high sensors.
+
+    full  - water at both sensors
+    ok    - water at the low sensor only
+    empty - water at neither
+    fault - water at the high sensor but not the low one, which is physically
+            impossible: a sensor died, fell off the wall, or the sensitivity
+            pot needs adjusting
+    None  - no reservoir sensors wired
+
+    "empty" hard-refuses pump runs (checked directly at run time, no sustain)
+    because pumping from an empty source runs the pumps dry.
+    """
+    lo = sensors.read_reservoir_level("low")
+    hi = sensors.read_reservoir_level("high")
+    if lo is None and hi is None:
+        return None
+    if hi is not None and hi >= 1:
+        return "full" if (lo is None or lo >= 1) else "fault"
+    if lo is not None and lo >= 1:
+        return "ok"
+    return "empty"
 
 
 def run_pump(tray, seconds, reason="manual", force=False):
@@ -436,6 +536,8 @@ def run_pump(tray, seconds, reason="manual", force=False):
             return False, f"pump {tray} hardware not available"
         if any(st["running"] for st in pump_state.values()):
             return False, "a pump is already running"
+        if not force and reservoir_state() == "empty":
+            return False, "reservoir is empty; refusing to run the pump dry"
         st = pump_state[tray]
         if st["day"] != _today_str():
             st["day"] = _today_str()
@@ -478,6 +580,8 @@ def run_pump_until_full(tray, reason="fill", force=False):
             return False, f"pump {tray} hardware not available"
         if any(st["running"] for st in pump_state.values()):
             return False, "a pump is already running"
+        if not force and reservoir_state() == "empty":
+            return False, "reservoir is empty; refusing to run the pump dry"
         st = pump_state[tray]
         if st["day"] != _today_str():
             st["day"] = _today_str()
@@ -526,19 +630,21 @@ def run_pump_until_full(tray, reason="fill", force=False):
     except Exception:
         pass
     if tripped:
+        fill_failure["msg"] = ""             # a good fill resolves the alert
         return True, f"filled in {elapsed:.1f}s"
+    fill_failure["msg"] = (f"Tray {tray} fill ran to the {elapsed:.1f}s cap "
+                           "without the float tripping. Likely causes: source "
+                           "empty, tube off, or float stuck.")
+    # a fill that can't complete means auto-watering must not keep trying
+    with settings_lock:
+        if settings.get("auto_water"):
+            settings["auto_water"] = False
+            fill_failure["msg"] += " Auto-watering has been switched off."
+            try:
+                save_config()
+            except Exception as e:
+                print(f"auto_water disable not persisted ({e})")
     return False, f"ran to {elapsed:.1f}s cap without float trip (source empty?)"
-
-
-def _cam_moisture(cell, b, cal):
-    c = cal.get(cell) or {}
-    wet = c.get("wet")
-    if wet is None:
-        return None
-    dry = c.get("dry", wet + 15)
-    if dry <= wet:
-        return None
-    return round(max(0.0, min(100.0, 100.0 * (dry - b) / (dry - wet))))
 
 
 PROBE_DEFAULT_CAL = {"wet": 1.25, "dry": 2.95}   # typical HW-390 on 3.3V; used
@@ -581,6 +687,26 @@ def probe_moisture_any(volts, cal, soil_temp_f=None):
     if pct is not None:
         return pct, False
     return probe_moisture(volts, PROBE_DEFAULT_CAL, soil_temp_f), True
+
+
+PROBE_CAL_SLOP = 0.02   # volts past an anchor before the calibration is flagged
+
+
+def probe_cal_flag(volts, cal):
+    """'below_wet' / 'above_dry' when a live reading sits outside the tray's
+    calibration anchors, else None. A reading below the wet anchor clamps to
+    100% and silently kills the dry alert (this exact failure hid two pegged
+    probes for a week), so it is surfaced instead of absorbed."""
+    if not cal:
+        return None
+    wet, dry = cal.get("wet"), cal.get("dry")
+    if wet is None or dry is None or dry - wet < 0.05:
+        return None
+    if volts < wet - PROBE_CAL_SLOP:
+        return "below_wet"
+    if volts > dry + PROBE_CAL_SLOP:
+        return "above_dry"
+    return None
 
 
 def latest_soil_temp_f(snapshot=None):
@@ -654,25 +780,32 @@ def gather_report_data():
         st = dict(state)
     tz = ZoneInfo(cfg["timezone"])
     now = datetime.now(tz)
-    cal = cfg.get("dryness_cal") or {}
     pcal = cfg.get("probe_cal") or {}
     pnames = cfg.get("probe_names") or {}
-    cam, raw, growth, probes, soiltemp, env = {}, {}, {}, {}, {}, {}
+    canopy, probes, soiltemp, env = {}, {}, {}, {}
+    trays_cfg = cfg.get("trays") or {}
     snap = db.latest()
     stf = latest_soil_temp_f(snap)
     for k, (ts, v) in snap.items():
-        if k.startswith("dry:"):
-            cell = k[4:]
-            m = _cam_moisture(cell, v, cal)
-            (cam if m is not None else raw)[cell] = m if m is not None else round(v, 1)
-        elif k.startswith("growth:"):
-            growth[k[7:]] = round(v, 1)
+        if k.startswith("canopy:"):
+            tid = k[7:]
+            label = ((trays_cfg.get(tid) or {}).get("label")
+                     or pnames.get(tid) or f"Tray {tid}")
+            canopy[label] = round(v, 1)
         elif k.startswith("probe:"):
             t = k[6:]
-            pm, approx = probe_moisture_any(v, pcal.get(t) or {}, stf)
+            tcal = pcal.get(t) or {}
+            pm, approx = probe_moisture_any(v, tcal, stf)
             nm = pnames.get(t, f"Tray {t}")
+            flag = probe_cal_flag(v, tcal)
+            if flag:
+                nm += (" (reading beyond the wet anchor - recalibrate wet)"
+                       if flag == "below_wet"
+                       else " (reading beyond the dry anchor - recalibrate dry)")
+            elif approx:
+                nm += " (approx)"
             if pm is not None:
-                probes[nm + (" (approx)" if approx else "")] = pm
+                probes[nm] = pm
             else:
                 probes[nm] = round(v, 3)
         elif k.startswith("temp:soil"):
@@ -771,10 +904,14 @@ def gather_report_data():
                   "capture_brightness": cfg.get("capture_brightness")},
         "grid": {"rows": grid.get("rows"), "cols": grid.get("cols"),
                  "names": grid.get("names") or {}},
-        "camera_moisture": cam, "dryness_raw": raw, "growth": growth,
+        "canopy": canopy,
         "probe_moisture": probes,
         "soil_temp_f": soiltemp,
         "environment": env,
+        "fan": (f"{'on' if fan_state['on'] else 'off'}"
+                + (f" at {fan_state['speed']}% ({fan_state['reason']})"
+                   if fan_state["on"] else f" ({fan_state['reason']})")
+                + f", mode {cfg.get('fan_mode', 'auto')}") if FAN_HW else None,
         "pressure_trend": pressure_tendency(),
         "light_metrics": {"ppfd": ppfd_from_lux((snap.get("lux") or (None, None))[1]),
                           "dli": dli_today()},
@@ -782,8 +919,14 @@ def gather_report_data():
         "germination": germ_out,
         "units": {"temp": temp_unit(), "press": press_unit()},
         "float": flabel,
-        "pump_today_s": round(pump_state.get("today_seconds", 0.0), 1),
-        "pump_last": pump_state.get("last_detail") or "none",
+        "reservoir": reservoir_state(),
+        # pump_state is keyed by tray; sum across trays, latest detail wins
+        "pump_today_s": round(sum(s["today_seconds"]
+                                  for s in pump_state.values()), 1),
+        "pump_last": next((s["last_detail"] for s in
+                           sorted(pump_state.values(),
+                                  key=lambda s: s["last_run"], reverse=True)
+                           if s["last_detail"]), "none"),
         "notes": cfg.get("ai_notes", ""),
     }
 
@@ -803,8 +946,12 @@ def run_report(reason="daily"):
             cfg = dict(settings)
         if not ai_report.have_key():
             return {"ok": False, "error": "no API key on the controller"}
-        photos = sorted(TIMELAPSE_DIR.glob("*.jpg"))
-        photo = photos[-1] if photos else None
+        photos = sorted(p for p in TIMELAPSE_DIR.glob("*.jpg")
+                        if not p.name.startswith("_"))
+        # prefer scheduled frames: a manual (_m) capture can be off-schedule
+        # and dark; fall back to manual only when nothing else exists
+        sched = [p for p in photos if not p.stem.endswith("_m")]
+        photo = (sched or photos)[-1] if photos else None
         result = ai_report.generate(photo, gather_report_data(),
                                     model=cfg.get("ai_model"))
         result["reason"] = reason
@@ -994,6 +1141,11 @@ def fan_should_run(cfg, now, on_time, off_time):
     return False, "idle"
 
 
+# sensor -> last-seen unix ts; touched only by the sample thread via run_alerts
+_seen_sensors = {}
+SEEN_TTL = 3 * 86400    # a sensor silent this long is treated as removed
+
+
 def run_alerts(readings):
     """Evaluate the alert rules against this tick's readings and push anything
     that changed state. Never raises: a failure here must not stop sampling."""
@@ -1009,8 +1161,21 @@ def run_alerts(readings):
             "soil_temp_low_f": cfg.get("soil_temp_low_f", 0),
             "probe_dry_pct": cfg.get("alert_dry_pct", 15),
             "humidity_high": cfg.get("alert_humidity_high", 80),
+            "dli_low": cfg.get("alert_dli_low", 4),
         }
         snap = dict(readings)
+
+        # the day's light total, judged once the day is over: only within a
+        # window after lights-off is _dli present, so the rule fires at most
+        # once per evening and a mid-morning low total can't false-alarm
+        with state_lock:
+            off_t = state.get("off")
+        if off_t is not None and cfg.get("alert_dli_low"):
+            now_dt = datetime.now(off_t.tzinfo)
+            if off_t <= now_dt <= off_t + timedelta(minutes=45):
+                d = dli_today()
+                if d is not None:
+                    snap["_dli"] = d
 
         # tray moisture as percentages, using each tray's calibration
         pcal = cfg.get("probe_cal") or {}
@@ -1029,13 +1194,20 @@ def run_alerts(readings):
         with state_lock:
             snap["_camera_fails"] = camera["fails"] if cfg.get("camera_enabled") else 0
 
-        # sensors that have gone quiet: expected keys missing from this read
-        expected = set(cfg.get("_seen_sensors") or [])
-        snap["_stale"] = sorted(expected - set(readings)) if expected else []
-        seen = sorted(set(readings) | expected)
-        if seen != sorted(expected):
-            with settings_lock:
-                settings["_seen_sensors"] = seen
+        snap["_fill_failed"] = fill_failure["msg"]
+        snap["_reservoir"] = reservoir_state()
+
+        # sensors that have gone quiet: keys seen recently but missing from
+        # this read. Tracked in memory only (persisting it once made a removed
+        # sensor alert forever), and aged out after SEEN_TTL so unwiring a
+        # device stops the reminders after a few days instead of never.
+        now_ts = time.time()
+        for k in readings:
+            _seen_sensors[k] = now_ts
+        for k in [k for k, t in _seen_sensors.items()
+                  if now_ts - t > SEEN_TTL]:
+            _seen_sensors.pop(k, None)
+        snap["_stale"] = sorted(set(_seen_sensors) - set(readings))
 
         for action, key, title, message, level in alerts.check_all(
                 snap, acfg, "C" if cfg.get("units") == "metric" else "F"):
@@ -1047,6 +1219,13 @@ def run_alerts(readings):
         print(f"alert check error: {e}")
 
 
+# the only settings that move the light window; anything else (a planting-map
+# edit, a saved light curve) must not trigger a recompute or a log line
+SCHED_KEYS = ("latitude", "longitude", "timezone", "schedule_mode",
+              "fixed_on", "fixed_off", "duration_hours", "duration_end",
+              "sunrise_offset_min", "sunset_offset_min")
+
+
 def control_loop():
     seen = None
     sunrise = sunset = on_time = off_time = None
@@ -1055,7 +1234,7 @@ def control_loop():
             cfg = dict(settings)
         tz = ZoneInfo(cfg["timezone"])
         now = datetime.now(tz)
-        key = (now.date(), json.dumps(cfg, sort_keys=True))
+        key = (now.date(), tuple(cfg.get(k) for k in SCHED_KEYS))
         if key != seen:
             seen = key
             sunrise, sunset, on_time, off_time = sun_window(cfg, now.date(), tz)
@@ -1087,16 +1266,156 @@ def control_loop():
 
 # --------------------------- capture loop ---------------------------
 
-def take_photo(cfg, now):
+# Each entry: config flag -> (v4l2 auto control, value for auto, value for
+# manual, the manual controls it unlocks). Auto is offered because it is what
+# people expect, but note that for a timelapse it produces visible flicker:
+# the camera re-decides exposure and white balance every frame, so brightness
+# and colour shift between shots and the per-cell analysis moves with them.
+USB_AUTO_GROUPS = {
+    "usb_auto_focus": ("focus_automatic_continuous", 1, 0, ("focus_absolute",)),
+    "usb_auto_exposure_on": ("auto_exposure", 3, 1,
+                             ("exposure_time_absolute", "gain")),
+    "usb_auto_white_balance": ("white_balance_automatic", 1, 0,
+                               ("white_balance_temperature",)),
+}
+
+
+def _usb_apply_controls(cfg, dev):
+    """Push camera settings before a capture.
+
+    Applied in two passes: a manual control stays flagged `inactive` and
+    rejects writes until its automatic counterpart has been switched off, so
+    every auto flag must land before any manual value.
+    """
+    autos, manuals = [], []
+    for flag, (ctrl, on_val, off_val, dependents) in USB_AUTO_GROUPS.items():
+        auto = bool(cfg.get(flag, False))
+        autos.append(f"{ctrl}={on_val if auto else off_val}")
+        if auto:
+            continue                      # let the camera decide these
+        for dep in dependents:
+            val = cfg.get("usb_" + dep)
+            if val not in (None, ""):
+                manuals.append(f"{dep}={int(val)}")
+    for extra in ("brightness", "contrast", "saturation"):
+        val = cfg.get("usb_" + extra)
+        if val not in (None, ""):
+            manuals.append(f"{extra}={int(val)}")
+    for group in (autos, manuals):
+        if not group:
+            continue
+        args = []
+        for c in group:
+            args += ["-c", c]
+        subprocess.run(["v4l2-ctl", "-d", dev] + args,
+                       capture_output=True, timeout=10)
+
+
+def _usb_capture(cfg, out_path, width, height, warmup=None):
+    """Grab one MJPEG frame from a UVC camera via v4l2-ctl.
+
+    UVC sensors need a few frames before auto-gain settles, and the very first
+    frame after opening the device is frequently dark or torn. Capturing a
+    short burst and keeping the last frame costs a second and removes that
+    whole class of bad photo.
+    """
+    dev = cfg.get("usb_device", "/dev/video0")
+    if not Path(dev).exists():
+        return False, f"{dev} not present"
+    _usb_apply_controls(cfg, dev)
+    n = int(cfg.get("usb_warmup_frames", 4) if warmup is None else warmup)
+    n = max(1, min(20, n))
+    tmp = Path(str(out_path) + ".raw")
+    cmd = ["v4l2-ctl", "-d", dev,
+           "--set-fmt-video=width=%d,height=%d,pixelformat=MJPG" % (width, height),
+           "--stream-mmap", "--stream-count=%d" % n, "--stream-to=%s" % tmp]
+    try:
+        r = subprocess.run(cmd, capture_output=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        tmp.unlink(missing_ok=True)
+        return False, "capture timed out"
+    if r.returncode != 0 or not tmp.exists() or tmp.stat().st_size == 0:
+        tmp.unlink(missing_ok=True)
+        return False, (r.stderr.decode(errors="replace")[-200:].strip()
+                       or "v4l2-ctl returned no frames")
+    # The stream is n JPEGs back to back; keep the last, which is the settled one.
+    try:
+        data = tmp.read_bytes()
+        starts = []
+        i = data.find(b"\xff\xd8")
+        while i != -1:
+            starts.append(i)
+            i = data.find(b"\xff\xd8", i + 2)
+        if not starts:
+            tmp.unlink(missing_ok=True)
+            return False, "no JPEG frame in the stream"
+        Path(out_path).write_bytes(data[starts[-1]:])
+    finally:
+        tmp.unlink(missing_ok=True)
+    return True, None
+
+
+def _postprocess_file(path, cfg):
+    """Rotate a just-captured JPEG in place.
+
+    Rotation is baked in because it is not a matter of interpretation: the
+    camera is mounted upside down and every consumer wants it the right way up.
+    Flattening deliberately is NOT baked in -- it is applied when the image is
+    served, so the stored frame stays raw and the grid corners can always be
+    re-dragged against the real scene.
+
+    Failure is non-fatal: the original frame is kept and the reason is logged.
+    """
+    degrees = int(cfg.get("cam_rotate", 0) or 0)
+    if degrees not in (90, 180, 270):
+        return
+    try:
+        import cv2
+        img = cv2.imread(str(path))
+        if img is None:
+            return
+        if degrees in (90, 180, 270):
+            img = cv2.rotate(img, {90: cv2.ROTATE_90_CLOCKWISE,
+                                   180: cv2.ROTATE_180,
+                                   270: cv2.ROTATE_90_COUNTERCLOCKWISE}[degrees])
+        cv2.imwrite(str(path), img, [cv2.IMWRITE_JPEG_QUALITY, 90])
+    except Exception as e:
+        print(f"post-process failed ({e}); keeping the frame as captured")
+
+
+# kept for callers that only need the rotation
+def _rotate_file(path, degrees):
+    _postprocess_file(path, {"cam_rotate": degrees})
+
+
+def take_photo(cfg, now, manual=False):
+    """Capture one frame. `manual` tags the filename with an _m suffix so the
+    daily AI report can prefer scheduled frames: a manual shot at midnight is
+    a dark off-schedule photo that would otherwise become the report's input."""
     global capturing
     capturing = True
     saved = None
     try:
         set_brightness(cfg["capture_brightness"])
         time.sleep(2)  # let light and auto-exposure settle
-        fname = TIMELAPSE_DIR / f"{now:%Y%m%d_%H%M%S}.jpg"
+        suffix = "_m" if manual else ""
+        fname = TIMELAPSE_DIR / f"{now:%Y%m%d_%H%M%S}{suffix}.jpg"
         cw = int(cfg.get("cam_width", 4608))
         ch = int(cfg.get("cam_height", 2592))
+        if cfg.get("camera_backend", "rpicam") == "usb":
+            ok, err = _usb_capture(cfg, fname,
+                                   int(cfg.get("usb_width", 2048)),
+                                   int(cfg.get("usb_height", 1536)))
+            if ok:
+                _postprocess_file(fname, cfg)
+                make_thumb(fname, cfg)
+                saved = fname
+                _camera_ok()
+            else:
+                print(f"capture failed: {err}")
+                _camera_fail(err)
+            return saved
+
         cmd = ["rpicam-still", "-n", "-o", str(fname), "-t", "2000"]
         try:
             roi = parse_roi(cfg.get("roi", ""))
@@ -1115,7 +1434,8 @@ def take_photo(cfg, now):
             print(f"capture failed: {err}")
             _camera_fail(err.strip().splitlines()[-1] if err.strip() else "capture failed")
         else:
-            make_thumb(fname)
+            _postprocess_file(fname, cfg)
+            make_thumb(fname, cfg)
             saved = fname
             _camera_ok()
     except Exception as e:
@@ -1128,13 +1448,24 @@ def take_photo(cfg, now):
 
 
 def record_growth(path, cfg, now):
-    """Measure per-cell canopy coverage from a just-captured photo and log it.
-    Runs growth.py as a subprocess so OpenCV memory is freed afterwards."""
+    """Measure per-tray canopy coverage from a just-captured photo and log it.
+    Per-cell measurement was retired: seedlings spill across cell lines and the
+    attribution becomes fiction, while tray boundaries are physical. Runs
+    growth.py as a subprocess so OpenCV memory is freed afterwards."""
     grid = cfg.get("grid") or {}
     if not grid.get("corners"):
         return
+    # tray column spans, left to right, mirroring how the trays sit under the
+    # camera (tray 1 leftmost)
+    trays = [{"id": tid, "cols": int((t or {}).get("cols", 3))}
+             for tid, t in sorted((cfg.get("trays") or {}).items())]
     payload = {"corners": grid["corners"],
-               "rows": grid.get("rows", 4), "cols": grid.get("cols", 4)}
+               "rows": grid.get("rows", 4), "cols": grid.get("cols", 4),
+               "trays": trays,
+               "rectify": bool(cfg.get("cam_rectify", True)),
+               # the file is rotated at capture time, so analysis must not
+               # rotate it a second time
+               "rotate": 0}
     try:
         r = subprocess.run([sys.executable, str(GROWTH_SCRIPT), str(path),
                             json.dumps(payload)],
@@ -1181,15 +1512,59 @@ def capture_loop():
 
 # ----------------------------- video render -----------------------------
 
+def _flatten_frames_to(dest, frames, cfg):
+    """Write rectified copies of `frames` into `dest`, numbered in order.
+
+    The timelapse is rendered from flattened frames so the video matches what
+    the dashboard shows, but the originals on disk stay raw: that is what keeps
+    the grid corners re-draggable against the real scene. Frames that cannot be
+    rectified are copied through unchanged rather than dropped, so a bad frame
+    leaves a blip instead of a gap in the timeline.
+    """
+    import shutil
+    grid = cfg.get("grid") or {}
+    corners = grid.get("corners")
+    if not corners or len(corners) != 4:
+        return None
+    try:
+        import cv2
+    except Exception:
+        return None
+    dest.mkdir(parents=True, exist_ok=True)
+    for old in dest.glob("*.jpg"):
+        old.unlink()
+    cols, rows = int(grid.get("cols", 4)), int(grid.get("rows", 4))
+    for i, src in enumerate(frames):
+        out = dest / f"{i:06d}.jpg"
+        try:
+            img = cv2.imread(str(src))
+            if img is None:
+                raise ValueError("unreadable")
+            warped = growth_mod.rectify(img, corners, cols=cols, rows=rows)
+            cv2.imwrite(str(out), warped, [cv2.IMWRITE_JPEG_QUALITY, 88])
+        except Exception:
+            shutil.copyfile(src, out)
+    return dest
+
+
 def render_worker():
     import time as _t
     t0 = _t.monotonic()
-    frames = sorted(TIMELAPSE_DIR.glob("*.jpg"))
+    frames = sorted(p for p in TIMELAPSE_DIR.glob("*.jpg")
+                    if not p.name.startswith("_"))
     with render_lock:
         render.update(state="running", frames=len(frames),
                       started=datetime.now(ZoneInfo(settings["timezone"])).isoformat(),
                       elapsed=None, msg=f"Rendering {len(frames)} frames...")
+    flat_dir = None
     try:
+        with settings_lock:
+            cfg_r = dict(settings)
+        if cfg_r.get("timelapse_flatten", True):
+            with render_lock:
+                render["msg"] = f"Flattening {len(frames)} frames..."
+            flat_dir = _flatten_frames_to(TIMELAPSE_DIR / "_flat", frames, cfg_r)
+        src_glob = str((flat_dir or TIMELAPSE_DIR) / "*.jpg")
         tmp = TIMELAPSE_DIR / "_render_tmp.mp4"
         # Encode pass: small footprint so the 512MB Zero never OOMs.
         # 1280-wide, ultrafast, single thread, no faststart here (the
@@ -1198,7 +1573,7 @@ def render_worker():
         r = subprocess.run(
             ["ffmpeg", "-loglevel", "error", "-y",
              "-framerate", "24", "-pattern_type", "glob",
-             "-i", str(TIMELAPSE_DIR / "*.jpg"),
+             "-i", src_glob,
              # JPEG stills are full-range (yuvj420p/pc); browsers render that as
              # black. Remap to limited-range yuv420p and tag it. Height is forced
              # to a multiple of 16 (-16, not -2): a non-mod16 height makes the
@@ -1238,6 +1613,11 @@ def render_worker():
         with render_lock:
             render.update(state="error", elapsed=round(_t.monotonic() - t0, 1),
                           msg=str(e))
+    finally:
+        if flat_dir and flat_dir.exists():
+            # scratch only: the SD card cannot afford a second copy of the set
+            import shutil
+            shutil.rmtree(flat_dir, ignore_errors=True)
 
 
 def start_render():
@@ -1297,26 +1677,6 @@ def require_auth(fn):
     return wrapper
 
 
-@app.route("/api/dryness_cal", methods=["POST"])
-@require_auth
-def dryness_cal_set():
-    """Capture the current per-cell camera brightness as the 'wet' (100%) or
-    'dry' (0%) anchor, so the dashboard can show a camera-moisture percentage."""
-    data = request.get_json(silent=True) or {}
-    point = data.get("point")
-    if point not in ("wet", "dry"):
-        return jsonify(ok=False, error="point must be 'wet' or 'dry'"), 200
-    cells = {k[4:]: v for k, (ts, v) in db.latest().items() if k.startswith("dry:")}
-    if not cells:
-        return jsonify(ok=False, error="no camera readings yet; wait for a capture"), 200
-    with settings_lock:
-        cal = settings.setdefault("dryness_cal", {})
-        for cell, v in cells.items():
-            cal.setdefault(cell, {})[point] = v
-        CONFIG_PATH.write_text(json.dumps(settings, indent=2))
-    return jsonify(ok=True, point=point, cells=len(cells))
-
-
 @app.route("/api/probe_cal", methods=["POST"])
 @require_auth
 def probe_cal_set():
@@ -1333,7 +1693,7 @@ def probe_cal_set():
     with settings_lock:
         cal = settings.setdefault("probe_cal", {})
         cal.setdefault(tray, {})[point] = live
-        CONFIG_PATH.write_text(json.dumps(settings, indent=2))
+        save_config()
     # a wide spread means noise on the analog run; the anchor is unreliable
     return jsonify(ok=True, tray=tray, point=point, volts=live,
                    spread=spread, noisy=bool(spread and spread > 0.05))
@@ -1372,7 +1732,7 @@ def update_ai_settings():
                 pass
         if "ai_notes" in data:
             settings["ai_notes"] = str(data["ai_notes"])[:1000]
-        CONFIG_PATH.write_text(json.dumps(settings, indent=2))
+        save_config()
         out = {k: settings[k] for k in
                ("ai_enabled", "ai_notify", "ai_report_hour", "ai_report_minute", "ai_notes")}
     return jsonify(ok=True, **out)
@@ -1490,7 +1850,7 @@ def update_grid():
                 return jsonify(error="grid is locked; unlock before editing"), 409
         settings["grid"] = {"corners": corners, "rows": rows, "cols": cols,
                             "names": names, "show": show, "locked": locked}
-        CONFIG_PATH.write_text(json.dumps(settings, indent=2))
+        save_config()
     # audit trail so a future revert can be traced to who/when/what
     try:
         db.log_event("grid", f"saved corners[0]={corners[0]} "
@@ -1543,7 +1903,7 @@ def api_light():
             settings["light_override"] = mode
         if bright is not None:
             settings["manual_bright"] = bright
-        CONFIG_PATH.write_text(json.dumps(settings, indent=2))
+        save_config()
         cur_mode = settings["light_override"]
         cur_bright = settings["manual_bright"]
     wake.set()          # apply now instead of waiting for the next loop pass
@@ -1577,7 +1937,7 @@ def probe_tempcomp():
         with settings_lock:
             cal = settings.setdefault("probe_cal", {}).setdefault(tray, {})
             cal["temp_comp"] = {"coeff": res["coeff"], "ref_f": TEMP_COMP_REF_F}
-            CONFIG_PATH.write_text(json.dumps(settings, indent=2))
+            save_config()
         res["applied"] = True
     return jsonify(res)
 
@@ -1637,7 +1997,7 @@ def api_trays():
         t["cells"] = clean
         if label is not None:
             t["label"] = str(label).strip()[:40] or f"Tray {tray}"
-        CONFIG_PATH.write_text(json.dumps(settings, indent=2))
+        save_config()
     return jsonify(ok=True, tray=tray, count=len(clean))
 
 
@@ -1646,6 +2006,101 @@ MAX_TRAYS, MAX_DIM = 8, 12
 
 def _cell_ids(rows, cols):
     return {f"{chr(65 + c)}{r}" for r in range(1, rows + 1) for c in range(cols)}
+
+
+@app.route("/api/reset_timelapse", methods=["POST"])
+@require_auth
+def api_reset_timelapse():
+    """Archive the current timelapse and start a fresh one.
+
+    Photos are MOVED, not deleted: a grow run is not reproducible, so the old
+    frames go to timelapse_archive/<timestamp>/ and can be restored or removed
+    by hand once you are sure. Thumbnails and the rendered video are rebuilt
+    from scratch, and the camera-derived per-cell history is optionally cleared
+    since it was measured against the old geometry.
+    """
+    data = request.get_json(silent=True) or {}
+    if not data.get("confirm"):
+        count, _, _ = photo_inventory()
+        return jsonify(ok=False, needs_confirm=True, photos=count,
+                       error=f"{count} photos would be archived"), 200
+    stamp = datetime.now(ZoneInfo(settings["timezone"])).strftime("%Y%m%d_%H%M%S")
+    dest = ARCHIVE_DIR / stamp
+    dest.mkdir(parents=True, exist_ok=True)
+    moved = 0
+    for ph in sorted(TIMELAPSE_DIR.glob("*.jpg")):
+        if ph.name.startswith("_"):
+            continue
+        try:
+            ph.rename(dest / ph.name)
+            moved += 1
+        except Exception as e:
+            print(f"archive {ph.name} failed: {e}")
+    for t in THUMB_DIR.glob("*.jpg"):
+        t.unlink(missing_ok=True)
+    if VIDEO_PATH.exists():
+        try:
+            VIDEO_PATH.rename(dest / VIDEO_PATH.name)
+        except Exception:
+            VIDEO_PATH.unlink(missing_ok=True)
+    cleared = 0
+    if data.get("clear_readings"):
+        # camera-derived series only: probes, temperature and light stay
+        for prefix in ("canopy:", "growth:", "growth_px:", "dry:", "moisture:"):
+            try:
+                cleared += db.delete_series_prefix(prefix)
+            except Exception as e:
+                print(f"clear {prefix} failed: {e}")
+    with render_lock:
+        render.update(state="idle", frames=0, msg="", started=None, elapsed=None)
+    print(f"timelapse reset: {moved} photos archived to {dest}, "
+          f"{cleared} readings cleared")
+    return jsonify(ok=True, archived=moved, cleared=cleared, path=str(dest))
+
+
+@app.route("/api/rebuild_thumbs", methods=["POST"])
+@require_auth
+def api_rebuild_thumbs():
+    """Regenerate every thumbnail from its source photo.
+
+    Needed after the grid corners move or flattening is toggled: thumbnails are
+    built once at capture time, so existing ones keep whatever geometry was
+    current then and the scrubber would show a mix.
+    """
+    def work():
+        with settings_lock:
+            cfg = dict(settings)
+        photos = [p for p in sorted(TIMELAPSE_DIR.glob("*.jpg"))
+                  if not p.name.startswith("_")]
+        for old in THUMB_DIR.glob("*.jpg"):
+            old.unlink(missing_ok=True)
+        for i, ph in enumerate(photos):
+            make_thumb(ph, cfg)
+        print(f"rebuilt {len(photos)} thumbnails")
+    threading.Thread(target=work, daemon=True).start()
+    return jsonify(ok=True, started=True)
+
+
+@app.route("/api/purge_series", methods=["POST"])
+@require_auth
+def api_purge_series():
+    """Delete a sensor's logged history.
+
+    Needed when a schema changes: the old `moisture:` per-cell keys are no
+    longer written by anything, so they sit on the dashboard forever showing
+    whatever they last read. Deliberately explicit rather than automatic --
+    this destroys data.
+    """
+    data = request.get_json(silent=True) or {}
+    prefix = str(data.get("prefix", "")).strip()
+    if not prefix or len(prefix) < 3:
+        return jsonify(ok=False, error="prefix required (3+ chars)"), 200
+    try:
+        n = db.delete_series_prefix(prefix)
+    except Exception as e:
+        return jsonify(ok=False, error=str(e)), 200
+    print(f"purged {n} readings with prefix {prefix!r}")
+    return jsonify(ok=True, deleted=n, prefix=prefix)
 
 
 @app.route("/api/tray_layout", methods=["POST"])
@@ -1671,7 +2126,7 @@ def api_tray_layout():
                 return jsonify(ok=False, error=f"at most {MAX_TRAYS} trays"), 200
             nid = next(str(i) for i in range(1, MAX_TRAYS + 2) if str(i) not in trays)
             trays[nid] = {"label": f"Tray {nid}", "rows": 4, "cols": 3, "cells": {}}
-            CONFIG_PATH.write_text(json.dumps(settings, indent=2))
+            save_config()
             return jsonify(ok=True, tray=nid, added=True)
 
         tray = str(data.get("tray", ""))
@@ -1686,7 +2141,7 @@ def api_tray_layout():
                 return jsonify(ok=False, needs_confirm=True, filled=filled,
                                error=f"tray {tray} has {filled} filled cells"), 200
             trays.pop(tray)
-            CONFIG_PATH.write_text(json.dumps(settings, indent=2))
+            save_config()
             return jsonify(ok=True, removed=tray)
 
         # resize / rename
@@ -1712,7 +2167,7 @@ def api_tray_layout():
         t["cells"] = {k: v for k, v in cells.items() if k in keep}
         if "label" in data:
             t["label"] = str(data["label"]).strip()[:40] or f"Tray {tray}"
-        CONFIG_PATH.write_text(json.dumps(settings, indent=2))
+        save_config()
     return jsonify(ok=True, tray=tray, rows=rows, cols=cols, dropped=dropped)
 
 
@@ -1740,15 +2195,19 @@ def api_capture():
         with settings_lock:
             cfg = dict(settings)
         now = datetime.now(ZoneInfo(cfg["timezone"]))
-        path = take_photo(cfg, now)
+        path = take_photo(cfg, now, manual=True)
     finally:
         capture_lock.release()
     if not path:
         return jsonify(ok=False, error="Capture failed; check the camera and the log."), 200
     # analyze growth in the background so the response returns as soon as the
-    # photo is on disk; the dashboard can refresh the snapshot immediately
-    threading.Thread(target=record_growth, args=(path, cfg, now),
-                     daemon=True).start()
+    # photo is on disk -- but only inside the photoperiod: a night capture is
+    # lit differently and would pollute the growth/dryness series
+    with state_lock:
+        on_t, off_t = state["on"], state["off"]
+    if on_t is not None and off_t is not None and on_t <= now <= off_t:
+        threading.Thread(target=record_growth, args=(path, cfg, now),
+                         daemon=True).start()
     return jsonify(ok=True, photo=path.name)
 
 
@@ -1771,13 +2230,25 @@ def api_preview():
         pw = max(2, (cw // 2) // 2 * 2)
         ph = max(2, (ch // 2) // 2 * 2)
         tmp = PREVIEW_PATH.with_suffix(".tmp.jpg")
-        cmd = ["rpicam-still", "-n", "-o", str(tmp), "-t", "500",
-               "--width", str(pw), "--height", str(ph)]
-        r = subprocess.run(cmd, capture_output=True, timeout=20)
-        if r.returncode != 0:
-            _camera_fail(r.stderr.decode(errors="replace")[-150:] or "preview failed")
-            return jsonify(ok=False,
-                           error="camera error; check the log"), 200
+        with settings_lock:
+            backend = settings.get("camera_backend", "rpicam")
+            cfg_snapshot = dict(settings)
+        if backend == "usb":
+            # smaller and fewer warmup frames: alignment wants speed, not quality
+            ok, err = _usb_capture(cfg_snapshot, tmp, 1280, 720, warmup=2)
+            if not ok:
+                _camera_fail(err)
+                return jsonify(ok=False, error=err), 200
+            # rotation only: the corners are dragged on the unflattened scene
+            _rotate_file(tmp, int(cfg_snapshot.get("cam_rotate", 0)))
+        else:
+            cmd = ["rpicam-still", "-n", "-o", str(tmp), "-t", "500",
+                   "--width", str(pw), "--height", str(ph)]
+            r = subprocess.run(cmd, capture_output=True, timeout=20)
+            if r.returncode != 0:
+                _camera_fail(r.stderr.decode(errors="replace")[-150:] or "preview failed")
+                return jsonify(ok=False,
+                               error="camera error; check the log"), 200
         tmp.replace(PREVIEW_PATH)  # atomic, so a half-written frame is never served
         _camera_ok()
     except Exception as e:
@@ -1785,7 +2256,10 @@ def api_preview():
         return jsonify(ok=False, error=str(e)), 200
     finally:
         capture_lock.release()
-    return jsonify(ok=True, ts=int(time.time()))
+    # sharpness rides along so the align view doubles as a focus aid; the
+    # number is only comparable between frames of the same scene and light
+    return jsonify(ok=True, ts=int(time.time()),
+                   sharpness=sharpness_score(PREVIEW_PATH))
 
 
 @app.route("/preview.jpg")
@@ -1801,6 +2275,15 @@ def video():
         return "no video rendered yet", 404
     return send_file(VIDEO_PATH, mimetype="video/mp4", as_attachment=True,
                      download_name="grow_timelapse.mp4")
+
+
+# never sent to the browser: /api/status is readable without login, and the
+# frontend has no use for any of these
+SECRET_SETTINGS = ("password_hash", "discord_webhook", "ntfy_topic")
+
+
+def public_settings(cfg):
+    return {k: v for k, v in cfg.items() if k not in SECRET_SETTINGS}
 
 
 @app.route("/api/status")
@@ -1822,7 +2305,11 @@ def status():
                        "value": (compensated_volts(v, pcal.get(k[6:]) or {}, stf)
                                  if k.startswith("probe:") else v)}
                    for k, (ts, v) in snap.items()
-                   if cam_on or not (k.startswith("dry:") or k.startswith("growth:"))}
+                   # legacy per-cell camera series (dry:/growth:/moisture:) are
+                   # no longer written or shown; canopy hides with the camera
+                   if not (k.startswith("dry:") or k.startswith("growth")
+                           or k.startswith("moisture:"))
+                   and (cam_on or not k.startswith("canopy:"))}
     day = day_light_summary()
     if day:
         # what the rest of today's schedule will deliver, from the measured curve
@@ -1852,8 +2339,13 @@ def status():
         render=dict(render),
         video_time=(datetime.fromtimestamp(VIDEO_PATH.stat().st_mtime)
                     .isoformat() if VIDEO_PATH.exists() else None),
-        settings=cfg,
+        settings=public_settings(cfg),
         probe_default_cal=PROBE_DEFAULT_CAL,
+        probe_cal_flags={k[6:]: f for k, (ts, v) in snap.items()
+                         if k.startswith("probe:")
+                         and (f := probe_cal_flag(v, (pcal.get(k[6:]) or {})))},
+        focus={"running": focus_state["running"], "step": focus_state["step"],
+               "best": focus_state["best"], "error": focus_state["error"]},
         sensors=sensors_out,
         pressure_tendency=pressure_tendency(),
         sweep={"running": sweep_state["running"], "pct": sweep_state["pct"],
@@ -1873,6 +2365,8 @@ def status():
         water={
             "pump_hw": PUMP_HW,
             "auto_water": cfg.get("auto_water", False),
+            "reservoir": {"state": reservoir_state(),
+                          "wired": bool(sensors.RESERVOIR_PINS)},
             "trays": {t: {
                 "float": sensors.read_float(t),
                 "pump_hw": t in _pumps,
@@ -2063,7 +2557,7 @@ def run_light_sweep(step=5, settle=2.0):
                     "ts": int(time.time()), "step": step,
                     "settle": settle, "points": points,
                 }
-                CONFIG_PATH.write_text(json.dumps(settings, indent=2))
+                save_config()
             print(f"light sweep: {len(points)} points, "
                   f"peak {max(p[1] for p in points):.0f} lx")
         elif points:
@@ -2072,6 +2566,131 @@ def run_light_sweep(step=5, settle=2.0):
             sweep_state["running"] = False
             sweep_state["cancel"] = False
         wake.set()                                # control loop resumes at once
+
+
+def sharpness_score(path):
+    """Variance of the Laplacian over the center half of the frame: higher is
+    sharper. Center crop because the trays are centered and the frame edges
+    are bench clutter that would reward focusing on the wrong thing.
+    Returns None when the frame can't be read."""
+    try:
+        import cv2
+        img = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+        if img is None:
+            return None
+        h, w = img.shape[:2]
+        img = img[h // 4: 3 * h // 4, w // 4: 3 * w // 4]
+        return float(cv2.Laplacian(img, cv2.CV_64F).var())
+    except Exception as e:
+        print(f"sharpness score failed: {e}")
+        return None
+
+
+def run_focus_sweep():
+    """Coarse pass across the full focus range, fine pass around the winner,
+    then pin usb_focus_absolute to the sharpest value. Holds capture_lock for
+    the duration (~60-90s) so the timelapse can't interleave, and holds the
+    light at capture_brightness so every frame is scored under the same light."""
+    with settings_lock:
+        cfg = dict(settings)
+    dev = cfg.get("usb_device", "/dev/video0")
+    tmp = Path(__file__).with_name("_focus_probe.jpg")
+    results = []          # (focus, score)
+    global capturing
+    try:
+        with capture_lock:
+            capturing = True                  # control loop leaves the light alone
+            set_brightness(cfg.get("capture_brightness", 100))
+            # manual focus must be active or focus_absolute writes are rejected
+            subprocess.run(["v4l2-ctl", "-d", dev,
+                            "-c", "focus_automatic_continuous=0"],
+                           capture_output=True, timeout=10)
+
+            def score_at(fv):
+                subprocess.run(["v4l2-ctl", "-d", dev,
+                                "-c", f"focus_absolute={int(fv)}"],
+                               capture_output=True, timeout=10)
+                time.sleep(0.6)               # lens travel time
+                ok, err = _usb_capture(cfg, tmp, 1280, 720, warmup=3)
+                if not ok:
+                    raise RuntimeError(err or "capture failed")
+                s = sharpness_score(tmp)
+                if s is None:
+                    raise RuntimeError("could not score the frame")
+                return s
+
+            coarse = list(range(0, 1024, 96)) + [1023]
+            fine_span, fine_step = 96, 24
+            with focus_lock:
+                focus_state["total"] = len(coarse) + 2 * (fine_span // fine_step)
+            done = 0
+            for fv in coarse:
+                if focus_state["cancel"]:
+                    return
+                results.append((fv, score_at(fv)))
+                done += 1
+                with focus_lock:
+                    focus_state["step"] = done
+            best = max(results, key=lambda r: r[1])[0]
+            for fv in range(max(0, best - fine_span + fine_step),
+                            min(1023, best + fine_span), fine_step):
+                if focus_state["cancel"]:
+                    return
+                if any(r[0] == fv for r in results):
+                    continue
+                results.append((fv, score_at(fv)))
+                done += 1
+                with focus_lock:
+                    focus_state["step"] = done
+            best, best_score = max(results, key=lambda r: r[1])
+            with settings_lock:
+                settings["usb_focus_absolute"] = int(best)
+                settings["usb_auto_focus"] = False
+                save_config()
+            with focus_lock:
+                focus_state["best"] = {"focus": int(best),
+                                       "score": round(best_score, 1),
+                                       "tested": len(results)}
+            print(f"focus sweep: best {best} "
+                  f"(score {best_score:.0f}, {len(results)} points)")
+            db.log_event("camera", f"focus sweep pinned focus_absolute={best}")
+    except Exception as e:
+        with focus_lock:
+            focus_state["error"] = str(e)[:200]
+        print(f"focus sweep failed: {e}")
+    finally:
+        tmp.unlink(missing_ok=True)
+        capturing = False
+        with focus_lock:
+            focus_state["running"] = False
+            focus_state["cancel"] = False
+        wake.set()                            # control loop restores the light
+
+
+@app.route("/api/focus_sweep", methods=["POST"])
+@require_auth
+def api_focus_sweep():
+    """Start (or cancel) a focus sweep on the USB camera."""
+    data = request.get_json(silent=True) or {}
+    if data.get("cancel"):
+        with focus_lock:
+            focus_state["cancel"] = True
+        return jsonify(ok=True, cancelled=True)
+    with settings_lock:
+        cfg = dict(settings)
+    if not cfg.get("camera_enabled"):
+        return jsonify(ok=False, error="camera features are disabled in settings"), 200
+    if cfg.get("camera_backend") != "usb":
+        return jsonify(ok=False, error="focus sweep needs the USB camera backend"), 200
+    if not Path(cfg.get("usb_device", "/dev/video0")).exists():
+        return jsonify(ok=False, error=f"{cfg.get('usb_device')} not present"), 200
+    with focus_lock:
+        if focus_state["running"]:
+            return jsonify(ok=False, error="a focus sweep is already running"), 200
+        focus_state.update(running=True, step=0, total=0, best=None,
+                           error="", cancel=False)
+    threading.Thread(target=run_focus_sweep, daemon=True).start()
+    return jsonify(ok=True, started=True, estimate_seconds=90)
 
 
 @app.route("/api/light_sweep", methods=["POST"])
@@ -2229,6 +2848,29 @@ def light_plan(cfg, on_time, off_time):
     return plan
 
 
+@app.route("/api/frame_context")
+def frame_context():
+    """Sensor readings nearest a timelapse frame's timestamp, so scrubbing the
+    player shows what conditions were when the frame was taken. Storage units
+    (Celsius); the frontend converts for display."""
+    try:
+        ts = int(request.args.get("ts", ""))
+    except (TypeError, ValueError):
+        return jsonify(error="ts required (unix seconds)"), 400
+    out = {}
+    snap_keys = db.latest()
+    # first DS18B20 key, whatever its serial suffix is
+    soil_key = next((k for k in snap_keys if k.startswith("temp:soil")), None)
+    for key, label in ((soil_key, "soil_c"), ("temp:air", "air_c"),
+                       ("humidity", "humidity"), ("lux", "lux")):
+        if not key:
+            continue
+        v = db.reading_near(key, ts, window=1800)
+        if v is not None:
+            out[label] = round(v, 1)
+    return jsonify(ts=ts, readings=out)
+
+
 @app.route("/api/fan", methods=["POST"])
 @require_auth
 def api_fan():
@@ -2251,9 +2893,56 @@ def api_fan():
             except (TypeError, ValueError):
                 pass
         mode = settings.get("fan_mode", "auto")
-        CONFIG_PATH.write_text(json.dumps(settings, indent=2))
+        save_config()
     wake.set()                      # apply on the next loop pass immediately
     return jsonify(ok=True, mode=mode)
+
+
+_rect_cache = {"key": None, "bytes": None}
+_rect_lock = threading.Lock()
+
+
+@app.route("/rectified.jpg")
+def rectified_image():
+    """The latest photo flattened through the grid corners. This is what the
+    per-cell analysis actually sees, so it is the honest way to check corner
+    placement: if the tray edges are not straight here, the corners are wrong.
+
+    Cached per (photo, geometry): the warp is recomputed only when a new photo
+    lands or the corners move, not once per open browser tab."""
+    _, latest, _ = photo_inventory()
+    if not latest:
+        return ("no photo yet", 404)
+    with settings_lock:
+        grid = dict(settings.get("grid") or {})
+    corners = grid.get("corners")
+    if not corners or len(corners) != 4:
+        # nothing to rectify against; the page falls back to the raw frame
+        return ("no grid corners set", 404)
+    key = (str(latest), latest.stat().st_mtime,
+           json.dumps([corners, grid.get("rows"), grid.get("cols")]))
+    with _rect_lock:
+        if _rect_cache["key"] == key:
+            return Response(_rect_cache["bytes"], mimetype="image/jpeg",
+                            headers={"Cache-Control": "no-store"})
+    try:
+        import cv2
+        img = cv2.imread(str(latest))   # photos are stored already rotated
+        if img is None:
+            return ("could not read the photo", 500)
+        out = growth_mod.rectify(img, corners,
+                                 cols=int(grid.get("cols", 4)),
+                                 rows=int(grid.get("rows", 4)))
+        ok, buf = cv2.imencode(".jpg", out, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        if not ok:
+            return ("encode failed", 500)
+        data = buf.tobytes()
+        with _rect_lock:
+            _rect_cache.update(key=key, bytes=data)
+        return Response(data, mimetype="image/jpeg",
+                        headers={"Cache-Control": "no-store"})
+    except Exception as e:
+        return (f"rectify failed: {e}", 500)
 
 
 @app.route("/api/schedule", methods=["POST"])
@@ -2283,7 +2972,7 @@ def api_schedule():
             except (TypeError, ValueError):
                 pass
         if changed:
-            CONFIG_PATH.write_text(json.dumps(settings, indent=2))
+            save_config()
     if changed:
         wake.set()                      # recompute the window immediately
         print(f"schedule updated from chart: {changed}")
@@ -2314,9 +3003,12 @@ def series_all():
     with settings_lock:
         camera_on = bool(settings.get("camera_enabled"))
     for k in snap.keys():
-        if k.startswith("growth_px:") or k.startswith("float:"):
-            continue                      # pixel counts and the float aren't charted
-        if not camera_on and (k.startswith("dry:") or k.startswith("growth:")):
+        if (k.startswith("float:") or k.startswith("reservoir:")):
+            continue                      # binary states aren't charted
+        if (k.startswith("dry:") or k.startswith("growth")
+                or k.startswith("moisture:")):
+            continue                      # retired per-cell camera series
+        if not camera_on and k.startswith("canopy:"):
             continue                      # camera vision paused; hide its series
         pts = db.series(k, hours)
         if k.startswith("probe:"):
@@ -2330,119 +3022,180 @@ def series_all():
     return jsonify(hours=hours, series=out)
 
 
+# ---- per-field settings validation ----
+# Each validator returns the cleaned value or raises ValueError with a short,
+# user-facing reason. update_settings applies every valid field and reports
+# the invalid ones by name: the old all-or-nothing form silently discarded a
+# whole save when one field was bad, which twice shipped stale settings
+# (cam_rotate stuck at 0, soil band stuck at 80-85).
+
+def _v_bool(v):
+    return bool(v)
+
+
+def _v_int(lo, hi, clamp=True):
+    def f(v):
+        try:
+            n = int(float(v if v not in (None, "") else 0))
+        except (TypeError, ValueError):
+            raise ValueError("must be a number")
+        if clamp:
+            return max(lo, min(hi, n))
+        if not lo <= n <= hi:
+            raise ValueError(f"must be {lo} to {hi}")
+        return n
+    return f
+
+
+def _v_float(lo, hi, clamp=True):
+    def f(v):
+        try:
+            n = float(v if v not in (None, "") else 0)
+        except (TypeError, ValueError):
+            raise ValueError("must be a number")
+        if clamp:
+            return max(lo, min(hi, n))
+        if not lo <= n <= hi:
+            raise ValueError(f"must be {lo} to {hi}")
+        return n
+    return f
+
+
+def _v_choice(*opts):
+    def f(v):
+        if v not in opts:
+            raise ValueError("must be one of " + ", ".join(map(str, opts)))
+        return v
+    return f
+
+
+def _v_hhmm(v):
+    v = str(v or "").strip()
+    if not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", v):
+        raise ValueError("must be HH:MM")
+    return v
+
+
+def _v_timezone(v):
+    v = str(v or "").strip()
+    try:
+        ZoneInfo(v)
+    except Exception:
+        raise ValueError("unknown timezone; use an IANA name like "
+                         "America/Los_Angeles")
+    return v
+
+
+def _v_roi(v):
+    v = str(v or "").strip()
+    try:
+        parse_roi(v)
+    except ValueError:
+        raise ValueError("must be 'x,y,w,h' as fractions 0-1, or blank")
+    return v
+
+
+def _v_usb_device(v):
+    v = str(v or "").strip()
+    if not re.fullmatch(r"/dev/video\d+", v):
+        raise ValueError("must look like /dev/video0")
+    return v
+
+
+SETTINGS_VALIDATORS = {
+    "latitude": _v_float(-90, 90, clamp=False),
+    "longitude": _v_float(-180, 180, clamp=False),
+    "timezone": _v_timezone,
+    "max_bright": _v_int(1, 100, clamp=False),
+    "ramp_min": _v_int(0, 240, clamp=False),
+    "sunrise_offset_min": _v_int(-720, 720),
+    "sunset_offset_min": _v_int(-720, 720),
+    "capture_enabled": _v_bool,
+    "camera_enabled": _v_bool,
+    "usb_auto_focus": _v_bool,
+    "usb_auto_exposure_on": _v_bool,
+    "usb_auto_white_balance": _v_bool,
+    "timelapse_flatten": _v_bool,
+    "cam_rectify": _v_bool,
+    "alerts_enabled": _v_bool,
+    "fan_with_light": _v_bool,
+    "camera_backend": _v_choice("rpicam", "usb"),
+    "usb_device": _v_usb_device,
+    "usb_width": _v_int(160, 4096),
+    "usb_height": _v_int(120, 4096),
+    "usb_warmup_frames": _v_int(1, 20),
+    "usb_exposure_time_absolute": _v_int(1, 100000),
+    "usb_gain": _v_int(0, 255),
+    "usb_white_balance_temperature": _v_int(1000, 10000),
+    "usb_focus_absolute": _v_int(0, 1023),
+    "cam_rotate": _v_choice(0, 90, 180, 270),
+    "capture_interval_min": _v_int(5, 720, clamp=False),
+    "capture_brightness": _v_int(1, 100, clamp=False),
+    "roi": _v_roi,
+    "alert_sustain_min": _v_int(1, 120),
+    "alert_cooldown_hours": _v_int(1, 72),
+    "soil_temp_low_f": _v_int(0, 150),
+    "soil_temp_high_f": _v_int(0, 150),
+    "alert_dry_pct": _v_int(0, 90),
+    "alert_humidity_high": _v_int(0, 100),
+    "alert_dli_low": _v_float(0, 30),
+    "fan_mode": _v_choice("auto", "on", "off"),
+    "fan_speed": _v_int(0, 100),
+    "fan_auto_speed": _v_int(0, 100),
+    "fan_min_speed": _v_int(0, 100),
+    "fan_humidity_on": _v_int(0, 100),
+    "units": _v_choice("imperial", "metric"),
+    "schedule_mode": _v_choice("solar", "fixed", "duration"),
+    "fixed_on": _v_hhmm,
+    "fixed_off": _v_hhmm,
+    "duration_end": _v_hhmm,
+    "duration_hours": _v_float(0.0, 24.0),
+    "humidity_low": _v_int(0, 100),
+    "humidity_high": _v_int(0, 100),
+    "canopy_factor": _v_float(0.1, 10.0),
+    "lux_to_ppfd_k": _v_float(0.0, 200.0),
+}
+
+
 @app.route("/api/settings", methods=["POST"])
 @require_auth
 def update_settings():
+    """Validate and apply every recognized field in the body.
+
+    Partial bodies are fine, and one bad field no longer discards the rest:
+    valid fields are saved, invalid ones come back in `errors` by name so the
+    form can say exactly what was rejected. Unknown keys are ignored."""
     data = request.get_json(silent=True) or {}
-    new = {}
-    try:
-        new["latitude"]  = float(data["latitude"])
-        new["longitude"] = float(data["longitude"])
-        new["timezone"]  = str(data["timezone"]).strip()
-        new["max_bright"] = int(data["max_bright"])
-        new["ramp_min"]   = int(data["ramp_min"])
-        new["sunrise_offset_min"] = int(data["sunrise_offset_min"])
-        new["sunset_offset_min"]  = int(data["sunset_offset_min"])
-        new["capture_enabled"]      = bool(data["capture_enabled"])
-        if "camera_enabled" in data:
-            new["camera_enabled"] = bool(data["camera_enabled"])
-        new["capture_interval_min"] = int(data["capture_interval_min"])
-        new["capture_brightness"]   = int(data["capture_brightness"])
-        new["roi"] = str(data.get("roi", "")).strip()
-        for k, lo, hi in (("alert_sustain_min", 1, 120),
-                          ("alert_cooldown_hours", 1, 72),
-                          ("soil_temp_low_f", 0, 150),
-                          ("alert_dry_pct", 0, 90),
-                          ("alert_humidity_high", 0, 100)):
-            if k in data:
-                try:
-                    new[k] = max(lo, min(hi, int(data[k] or 0)))
-                except (TypeError, ValueError):
-                    pass
-        if data.get("fan_mode") in ("auto", "on", "off"):
-            new["fan_mode"] = data["fan_mode"]
-        if "fan_with_light" in data:
-            new["fan_with_light"] = bool(data["fan_with_light"])
-        for k in ("fan_speed", "fan_auto_speed", "fan_min_speed"):
-            if k in data:
-                try:
-                    new[k] = max(0, min(100, int(data[k] or 0)))
-                except (TypeError, ValueError):
-                    pass
-        if "fan_humidity_on" in data:
-            try:
-                new["fan_humidity_on"] = max(0, min(100, int(data["fan_humidity_on"] or 0)))
-            except (TypeError, ValueError):
-                pass
-        if "alerts_enabled" in data:
-            new["alerts_enabled"] = bool(data["alerts_enabled"])
-        if data.get("units") in ("imperial", "metric"):
-            new["units"] = data["units"]
-        if data.get("schedule_mode") in ("solar", "fixed", "duration"):
-            new["schedule_mode"] = data["schedule_mode"]
-        for k in ("fixed_on", "fixed_off", "duration_end"):
-            if k in data:
-                v = str(data[k] or "").strip()
-                if re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", v):
-                    new[k] = v
-        if "duration_hours" in data:
-            try:
-                new["duration_hours"] = max(0.0, min(24.0, float(data["duration_hours"] or 0)))
-            except (TypeError, ValueError):
-                pass
-        for k in ("humidity_low", "humidity_high"):
-            if k in data:
-                try:
-                    new[k] = max(0, min(100, int(data[k] or 0)))
-                except (TypeError, ValueError):
-                    pass
-        if "canopy_factor" in data:
-            try:
-                new["canopy_factor"] = max(0.1, min(10.0, float(data["canopy_factor"] or 1)))
-            except (TypeError, ValueError):
-                pass
-        if "lux_to_ppfd_k" in data:
-            try:
-                new["lux_to_ppfd_k"] = max(0.0, min(200.0, float(data["lux_to_ppfd_k"] or 0)))
-            except (TypeError, ValueError):
-                pass
-        if "soil_temp_high_f" in data:
-            v = data.get("soil_temp_high_f")
-            new["soil_temp_high_f"] = max(0, min(150, int(v or 0)))
-    except (KeyError, TypeError, ValueError):
-        return jsonify(error="All fields are required and must be numbers "
-                             "(timezone is text)."), 400
-    if not -90 <= new["latitude"] <= 90:
-        return jsonify(error="Latitude must be between -90 and 90."), 400
-    if not -180 <= new["longitude"] <= 180:
-        return jsonify(error="Longitude must be between -180 and 180."), 400
-    if not 1 <= new["max_bright"] <= 100:
-        return jsonify(error="Max brightness must be 1 to 100."), 400
-    if not 0 <= new["ramp_min"] <= 240:
-        return jsonify(error="Ramp must be 0 to 240 minutes."), 400
-    if not 5 <= new["capture_interval_min"] <= 720:
-        return jsonify(error="Photo interval must be 5 to 720 minutes."), 400
-    if not 1 <= new["capture_brightness"] <= 100:
-        return jsonify(error="Photo brightness must be 1 to 100."), 400
-    try:
-        parse_roi(new["roi"])
-    except ValueError:
-        return jsonify(error="Crop must be 'x,y,w,h' as fractions 0-1 "
-                             "(e.g. 0.22,0.08,0.57,0.82), or blank for "
-                             "full frame."), 400
-    try:
-        ZoneInfo(new["timezone"])
-    except Exception:
-        return jsonify(error=f"Unknown timezone '{new['timezone']}'. "
-                             "Use an IANA name like America/Los_Angeles."), 400
-    with settings_lock:
-        settings.update(new)
-        CONFIG_PATH.write_text(json.dumps(settings, indent=2))
-    wake.set()
-    return jsonify(ok=True)
+    new, errors = {}, {}
+    for k, v in data.items():
+        fn = SETTINGS_VALIDATORS.get(k)
+        if fn is None:
+            continue
+        try:
+            new[k] = fn(v)
+        except ValueError as e:
+            errors[k] = str(e) or "invalid"
+    if new:
+        with settings_lock:
+            settings.update(new)
+            save_config()
+        wake.set()
+    return jsonify(ok=not errors, saved=sorted(new), errors=errors)
 
 
 def cleanup(*_):
+    # explicit off for every actuator: a SIGTERM mid-fill must not leave a
+    # pump relying on gpiozero's atexit teardown and a gate pulldown
+    for _p in _pumps.values():
+        try:
+            _p.off()
+        except Exception:
+            pass
+    if _fan is not None:
+        try:
+            _fan.value = 0
+        except Exception:
+            pass
     set_brightness(0)
     pwm.stop()
     sys.exit(0)
