@@ -13,8 +13,15 @@
     font:16px/1.5 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
     padding:20px;max-width:680px;margin:0 auto;
   }
+  /* wrap rather than crush: logged out, the header carries the title, a
+     read-only badge, a password field, a button and the clock, which do not
+     fit one phone-width row. Without wrapping, flex shrinks the h1 (breaking
+     "OpenSeedling" under the sprout) and squeezes the badge and button into
+     two-line text. */
   header{display:flex;align-items:baseline;justify-content:space-between;
+    flex-wrap:wrap;row-gap:8px;
     padding-bottom:10px;margin-bottom:6px}
+  header h1{flex:0 0 auto;white-space:nowrap}
   h1{font-family:Georgia,'Times New Roman',serif;font-weight:600;font-size:27px}
   #clock{font-variant-numeric:tabular-nums;font-size:15px;color:var(--leaf)}
   .vine{height:14px;margin-bottom:14px;background:
@@ -167,12 +174,20 @@
 #pumpinfo{font-size:12px;color:var(--leaf)}
 
 /* ---- auth / read-only ---- */
-.hright{display:flex;align-items:center;gap:12px}
-#authbox{display:flex;align-items:center;gap:6px;font-size:13px}
+.hright{display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+  justify-content:flex-end;margin-left:auto}
+#authbox{display:flex;align-items:center;gap:6px;font-size:13px;flex-wrap:wrap}
 #authbox input[type=password]{width:120px;margin:0;padding:5px 8px}
-#authbox button{margin:0;padding:5px 12px}
+#authbox button{margin:0;padding:5px 12px;white-space:nowrap}
 .robadge{background:#e9eef3;color:#5a6b7a;border:1px solid #c9d4dd;border-radius:8px;
-  padding:3px 9px;font-size:12px}
+  padding:3px 9px;font-size:12px;white-space:nowrap}
+@media (max-width:560px){
+  /* phone, logged out: give the login row the full width under the title
+     instead of competing with it for one line */
+  .hright{flex:1 1 100%;justify-content:space-between}
+  #authbox{flex:1 1 auto}
+  #authbox input[type=password]{flex:1 1 auto;width:auto;min-width:0}
+}
 #loginerr{color:#b23b3b;font-size:12px}
 /* AI garden report */
 .reportctl{display:flex;align-items:center;flex-wrap:wrap;gap:14px;margin-bottom:14px}
