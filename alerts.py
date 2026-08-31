@@ -31,6 +31,7 @@ DEFAULTS = {
     "probe_dry_pct": 15,
     "humidity_high": 80,
     "dli_low": 4.0,              # checked once daily, near lights-off
+    "dli_high": 0.0,            # ceiling counterpart; 0 disables
 }
 
 
@@ -204,6 +205,21 @@ def check_all(snapshot, cfg, unit_temp="F"):
             out.append((act, "dli_low", "Light back on target",
                         f"Today finished at {d:.1f} mol/m2.", "good"))
 
+    # ceiling: the other half of the loop when intensity is set by hand on the
+    # fixture and the controller can only observe the result
+    dli_high = cfg.get("dli_high", DEFAULTS["dli_high"])
+    if d is not None and dli_high:
+        act = evaluate("dli_high", d > dli_high, now, hold=0)
+        if act in ("fire", "remind"):
+            out.append((act, "dli_high", "Too much light today",
+                        f"Today finished at {d:.1f} mol/m2, above the "
+                        f"{dli_high:g} mol ceiling. Turn the fixture down or "
+                        "raise it; too much light bleaches seedlings and wastes "
+                        "power.", "warn"))
+        elif act == "clear":
+            out.append((act, "dli_high", "Light back under the ceiling",
+                        f"Today finished at {d:.1f} mol/m2.", "good"))
+
     # --- reservoir level: empty stops watering, fault means a lying sensor ---
     res = snapshot.get("_reservoir")
     if res:
@@ -228,6 +244,31 @@ def check_all(snapshot, cfg, unit_temp="F"):
         elif act == "clear":
             out.append((act, "res_fault", "Reservoir sensors agree again",
                         f"Level reads {res}.", "good"))
+
+    if snapshot.get("_plug_failed"):
+        act = evaluate("plug_failed", True, now)
+        if act in ("fire", "remind"):
+            out.append((act, "plug_failed", "Light plug not responding",
+                        "The smart plug is not accepting commands, so the light "
+                        "is stuck wherever it last was. "
+                        + str(snapshot["_plug_failed"]), "error"))
+    else:
+        act = evaluate("plug_failed", False, now)
+        if act == "clear":
+            out.append((act, "plug_failed", "Light plug responding again",
+                        "Plug commands are succeeding.", "good"))
+
+    stuck = snapshot.get("_stuck") or {}
+    for key, why in sorted(stuck.items()):
+        act = evaluate(f"stuck:{key}", True, now, hold=0)
+        if act in ("fire", "remind"):
+            out.append((act, f"stuck:{key}", f"{key} is not changing", why, "warn"))
+    for key in [k[6:] for k in list(_state) if k.startswith("stuck:")]:
+        if key not in stuck:
+            act = evaluate(f"stuck:{key}", False, now, hold=0)
+            if act == "clear":
+                out.append((act, f"stuck:{key}", f"{key} is changing again",
+                            "The sensor is reporting varying values.", "good"))
 
     # --- reservoir / fill failure, surfaced by the caller ---
     if snapshot.get("_fill_failed"):

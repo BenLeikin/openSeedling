@@ -200,7 +200,15 @@ function render(){
   document.getElementById('pct').textContent=Math.round(S.brightness)+'%';
   {const ph=document.querySelector('.aphase');
    if(ph)ph.style.setProperty('--lum',(S.brightness/100).toFixed(2));}
-  showLightMode(S.light_override, S.manual_bright);
+  {// A status poll issued BEFORE the mode POST can land after it, carrying the
+   // old override and snapping the buttons back. Hold the chosen mode until
+   // the server reports it.
+   let m=S.light_override;
+   if(pendingMode!=null){
+     if(m===pendingMode)pendingMode=null;      // server agrees; release
+     else m=pendingMode;
+   }
+   showLightMode(m, S.manual_bright);}
   document.getElementById('bulb').style.setProperty('--glow',S.brightness/100);
   const[p,n,stage]=phaseOf();
   document.getElementById('phase').textContent=p;
@@ -218,18 +226,35 @@ function render(){
 }
 
 let lightMode='auto', dragging=false;
+let pendingMode=null;   // mode the user just picked, held until status agrees
 function showLightMode(mode, bright){
   mode = mode || 'auto';
   lightMode = mode;
   document.querySelectorAll('.lcbtn:not(.fanbtn)').forEach(b=>
     b.classList.toggle('on', b.dataset.mode===mode));
   const info=document.getElementById('lightinfo');
-  if(info)info.textContent = (mode==='on'||mode==='off')
-    ? 'holding '+mode+' - schedule paused' : '';
+  if(info){
+    let t=(mode==='on'||mode==='off') ? 'holding '+mode+' - schedule paused' : '';
+    if(lightBackend==='kasa'){
+      // the plug is a network dependency: say plainly when it isn't answering
+      const k=(S&&S.kasa)||{};
+      if(k.ok===false)t=(t?t+' \u00b7 ':'')+'plug not responding: '+(k.error||'');
+      else t=(t?t+' \u00b7 ':'')+'smart plug'+(k.on==null?'':(k.on?' on':' off'));
+    }
+    info.textContent=t;
+    info.className=(lightBackend==='kasa'&&S&&S.kasa&&S.kasa.ok===false)?'err':'';
+  }
   const wrap=document.getElementById('lcslider');
   const rng=document.getElementById('lcrange');
   const val=document.getElementById('lcval');
   if(!wrap||!rng)return;
+  if(lightBackend==='kasa'){
+    // the plug cannot dim: showing a brightness slider would be a control that
+    // lies about what it does
+    wrap.style.display='none';
+    return;
+  }
+  wrap.style.display='';
   const live = mode==='on';
   wrap.classList.toggle('dim', !live);
   rng.disabled = !live;
@@ -250,7 +275,14 @@ async function setLight(mode, brightness, quiet){
     const j=await r.json().catch(()=>({}));
     if(r.ok&&j.ok){
       if(quiet){lightMode=j.mode;}          // mid-drag: don't touch the slider
-      else {showLightMode(j.mode, j.brightness);refresh();}
+      else {
+        pendingMode=j.mode;
+        showLightMode(j.mode, j.brightness);
+        refresh();
+        // the plug is a network round trip made by the control loop, so the
+        // first status after the POST can still show the old plug state
+        if(lightBackend==='kasa')setTimeout(refresh, 2500);
+      }
     }
     else if(info)info.textContent = r.status===401?'log in to control the light'
                       :('failed: '+(j.error||('HTTP '+r.status)));
@@ -410,6 +442,23 @@ function stopAlign(){
   refresh();   // restore the normal snapshot and grid overlay
 }
 
+// Values the user just saved, held until a status arrives that reflects them.
+// Without this, any poll landing between the POST and the server's next status
+// repaints the form with the OLD value, so a changed dropdown visibly snaps
+// back before snapping forward again.
+let pendingSave={};
+function formHolds(key, cfg){
+  const f=document.getElementById('cfgform');
+  if(f&&f.elements[key]&&document.activeElement===f.elements[key])return true;
+  if(!(key in pendingSave))return false;
+  // eslint-disable-next-line eqeqeq
+  if(cfg && String(cfg[key])===String(pendingSave[key])){
+    delete pendingSave[key];        // server agrees; stop holding
+    return false;
+  }
+  return true;                      // still stale, keep what the user chose
+}
+
 function fillForm(cfg){
   const f=document.getElementById('cfgform');
   for(const k of ['latitude','longitude','timezone','max_bright','ramp_min',
@@ -418,14 +467,19 @@ function fillForm(cfg){
                   'lux_to_ppfd_k','canopy_factor','duration_hours','cam_rotate','usb_device',
                   'usb_width','usb_height','usb_exposure_time_absolute','usb_gain',
                   'usb_focus_absolute','usb_white_balance_temperature','humidity_low','humidity_high','fan_humidity_on','fan_min_speed','alert_sustain_min','alert_cooldown_hours',
-                  'alert_dry_pct','alert_humidity_high','alert_dli_low'])
-    if(f.elements[k] && document.activeElement!==f.elements[k])
+                  'alert_dry_pct','alert_humidity_high','alert_dli_low','alert_dli_high',
+                  'moisture_threshold_pct','pump_cooldown_min',
+                  'fill_max_seconds','pump_daily_max_seconds','pump_max_seconds',
+                  'probe_median_depth'])
+    if(f.elements[k] && !formHolds(k, cfg))
       f.elements[k].value=cfg[k];
   {// schedule mode: populate its fields and show only that mode's block
    const sm=f.elements['schedule_mode'];
-   if(sm&&document.activeElement!==sm)sm.value=cfg.schedule_mode||'solar';
+   if(sm&&!formHolds('schedule_mode',cfg))sm.value=cfg.schedule_mode||'solar';
+   const lb=f.elements['light_backend'];
+   if(lb&&!formHolds('light_backend',cfg))lb.value=cfg.light_backend||'pwm';
    for(const k of ['fixed_on','fixed_off','duration_end'])
-     if(f.elements[k]&&document.activeElement!==f.elements[k])
+     if(f.elements[k]&&!formHolds(k,cfg))
        f.elements[k].value=cfg[k]||'';
    showScheduleMode(sm?sm.value:'solar');}
   {const cb=f.elements['camera_backend'];
@@ -709,6 +763,47 @@ function sensorMeta(key, val){
 // Per-cell camera readings, laid out to match the physical trays. Canopy and
 // surface dryness live in the same square because they describe the same cell;
 // separate wrapped lists made it impossible to see which cell was which.
+function sensorLabel(key){
+  const m=sensorMeta(key, 0);
+  return m ? m.label : key;
+}
+// Sensor health, contradictions and post-fill verdicts. Collapsed by default:
+// when everything is fine this is one line, and it only demands attention when
+// something is actually wrong.
+function renderQuality(j){
+  const wrap=document.getElementById('qualitywrap');
+  const body=document.getElementById('qbody');
+  const sum=document.getElementById('qsummary');
+  if(!wrap||!body||!sum)return;
+  const q=j.quality||{};
+  const health=q.health||{};
+  const keys=Object.keys(health).sort();
+  if(!keys.length){wrap.style.display='none';return;}
+  wrap.style.display='';
+  const bad=keys.filter(k=>['poor','bad'].includes(health[k].grade));
+  const fair=keys.filter(k=>health[k].grade==='fair');
+  const notes=(q.contradictions||[]);
+  const pf=q.postfill||{};
+  const pfBad=Object.keys(pf).filter(t=>!pf[t].ok);
+  sum.textContent = bad.length ? `\u00b7 ${bad.length} need attention`
+    : (fair.length||notes.length||pfBad.length)
+      ? `\u00b7 ${fair.length+notes.length+pfBad.length} to review`
+      : '\u00b7 all good';
+  sum.className = bad.length ? 'qbad' : '';
+  let h='';
+  for(const k of keys){
+    const e=health[k];
+    h+=`<div class="qrow"><span class="qname">${esc(sensorLabel(k))}</span>`
+      +`<span class="qgrade ${esc(e.grade)}">${esc(e.grade)}</span>`
+      +`<span class="qwhy">${esc((e.why||[]).join('; '))}</span></div>`;
+  }
+  for(const n of notes)
+    h+=`<p class="qnote">${esc(n.message)}</p>`;
+  for(const t of Object.keys(pf).sort())
+    h+=`<p class="qnote ${pf[t].ok?'ok':'bad'}">${esc(pf[t].msg)}</p>`;
+  body.innerHTML=h;
+}
+
 function renderSensors(j){
   sensorData=j.sensors||{};
   probeCal=(j.settings&&j.settings.probe_cal)||{};
@@ -1096,6 +1191,40 @@ function renderWater(j){
   const w=j.water;const box=document.getElementById('waterctl');
   if(!w||!w.trays){box.style.display='none';return;}
   box.style.display='';
+  {// auto-watering arm/disarm, above everything: it is the switch that matters
+   const blockers=w.auto_blockers||{};
+   const names=Object.keys(blockers);
+   let row=document.getElementById('autowrow');
+   if(!row){
+     row=document.createElement('div');
+     row.className='waterctl'; row.id='autowrow';
+     row.innerHTML='<span class="wtray">Auto-water</span>'
+       +'<button type="button" id="autowbtn"></button>'
+       +'<span id="autowinfo" class="fhint"></span>';
+     box.prepend(row);
+     row.querySelector('#autowbtn').addEventListener('click',toggleAutoWater);
+   }
+   const btn=document.getElementById('autowbtn');
+   const info=document.getElementById('autowinfo');
+   const on=!!w.auto_water;
+   autoWaterOn=on;
+   btn.textContent=on?'Disarm':'Arm';
+   btn.className=on?'on':'';
+   btn.disabled=!on && names.length>0;
+   if(names.length){
+     // never arm on an untrustworthy probe: say exactly which tray and why
+     info.innerHTML='<b>Not ready:</b> '+names.map(t=>
+       'tray '+esc(t)+' '+esc(blockers[t].join(', '))).join(' \u00b7 ');
+     info.className='fhint autowbad';
+   }else if(on){
+     info.textContent='armed \u00b7 fills a tray when its probe reads below '
+       +(w.moisture_threshold_pct)+'%, then waits '+(w.pump_cooldown_min)+' min';
+     info.className='fhint';
+   }else{
+     info.textContent='off \u00b7 ready to arm';
+     info.className='fhint';
+   }
+  }
   {// source reservoir level row, above the tray rows
    const res=w.reservoir||{};
    let row=document.getElementById('resrow');
@@ -1155,6 +1284,23 @@ function renderWater(j){
     else if(tw.last&&!tw.running)info.textContent='last: '+tw.last;
   }
 }
+let lightBackend='pwm';  // 'kasa' means on/off only: no slider, no sweep
+let autoWaterOn=false;   // mirrors water.auto_water from the last status poll
+async function toggleAutoWater(){
+  const info=document.getElementById('autowinfo');
+  const want=!autoWaterOn;
+  if(want && !confirm('Arm auto-watering? The controller will fill a tray on its '
+     +'own when the probe reads dry.'))return;
+  try{
+    const r=await fetch('/api/auto_water',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:want})});
+    const j=await r.json().catch(()=>({}));
+    if(r.status===401){if(info)info.textContent='log in first';return;}
+    if(!j.ok&&info){info.textContent=j.error||'failed';info.className='fhint autowbad';}
+  }catch(e){if(info)info.textContent='request failed';}
+  refresh();
+}
+
 async function waterAct(tray, body, msg){
   const info=document.getElementById('pumpinfo'+tray);
   if(info)info.textContent=msg;
@@ -1714,6 +1860,12 @@ async function refresh(){
   try{
     S={...j,now:new Date(j.now),on:new Date(j.on),off:new Date(j.off),
        sunrise:new Date(j.sunrise),sunset:new Date(j.sunset)};
+    // Same hold as the form fields: until the server echoes a saved backend,
+    // keep the chosen one. Otherwise a stale poll flips the slider and sweep
+    // card back into view for one cycle and the whole card jumps.
+    lightBackend=('light_backend' in pendingSave)
+      ? pendingSave.light_backend
+      : (j.light_backend||'pwm');   // set before any renderer reads it
     fillForm(j.settings);
     {const camOn=!!(j.settings&&j.settings.camera_enabled);
      for(const id of ['photocard','videocard','reportcard']){
@@ -1734,6 +1886,7 @@ async function refresh(){
     requestAnimationFrame(fitReportHeight);
     handleGrid(j);
     renderSensors(j);
+    renderQuality(j);
     renderTrays(j);
     renderTrayConfig(j.settings);
     renderSweep(j);
@@ -1779,15 +1932,18 @@ document.getElementById('cfgform').addEventListener('submit',async ev=>{
   for(const k of ['humidity_low','humidity_high','fan_humidity_on','fan_min_speed'])
     if(f.elements[k])body[k]=parseInt(f.elements[k].value||0,10);
   if(f.elements['schedule_mode'])body.schedule_mode=f.elements['schedule_mode'].value;
+  if(f.elements['light_backend'])body.light_backend=f.elements['light_backend'].value;
   for(const k of ['fixed_on','fixed_off','duration_end'])
     if(f.elements[k])body[k]=f.elements[k].value;
   if(f.elements['duration_hours'])
     body.duration_hours=parseFloat(f.elements['duration_hours'].value||0);
   if(f.elements['units'])body.units=f.elements['units'].value;
-  for(const k of ['alert_sustain_min','alert_cooldown_hours','alert_dry_pct','alert_humidity_high'])
+  for(const k of ['alert_sustain_min','alert_cooldown_hours','alert_dry_pct','alert_humidity_high',
+                  'moisture_threshold_pct','pump_cooldown_min','fill_max_seconds',
+                  'pump_daily_max_seconds','pump_max_seconds','probe_median_depth'])
     if(f.elements[k])body[k]=parseInt(f.elements[k].value||0,10);
-  if(f.elements['alert_dli_low'])
-    body.alert_dli_low=parseFloat(f.elements['alert_dli_low'].value||0);
+  for(const k of ['alert_dli_low','alert_dli_high'])
+    if(f.elements[k])body[k]=parseFloat(f.elements[k].value||0);
   if(f.elements['alerts_enabled'])body.alerts_enabled=f.elements['alerts_enabled'].checked;
   if(f.elements['soil_temp_low_f']){
     const shown=parseFloat(f.elements['soil_temp_low_f'].value||0);
@@ -1809,12 +1965,15 @@ document.getElementById('cfgform').addEventListener('submit',async ev=>{
       headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     const j=await r.json();
     const errs=j.errors&&Object.keys(j.errors);
-    if(r.ok&&j.ok){msg.textContent='Saved \u{1F331}';msg.className='ok';setTimeout(refresh,800);}
+    // hold every accepted field until the server echoes it back
+    for(const k of (j.saved||[]))
+      if(k in body)pendingSave[k]=body[k];
+    if(r.ok&&j.ok){msg.textContent='Saved \u{1F331}';msg.className='ok';refresh();}
     else if(errs&&errs.length){
       // everything valid was saved; say exactly which fields were rejected
       msg.textContent='Saved, except: '
         +errs.map(k=>k+' ('+j.errors[k]+')').join(', ');
-      msg.className='err';setTimeout(refresh,800);
+      msg.className='err';refresh();
     }
     else{msg.textContent=j.error||'Save failed';msg.className='err';}
   }catch(e){msg.textContent='Save failed';msg.className='err';}
@@ -1982,6 +2141,8 @@ function drawLightCurve(curve, sweeping, nowPct){
   const svg=document.getElementById('lcurve');
   const wrap=document.getElementById('lcurvewrap');
   if(!svg||!wrap)return;
+  if(lightBackend==='kasa'){wrap.style.display='none';return;}  // nothing to sweep
+  wrap.style.display='';
   const pts=(curve&&curve.points)||[];
   if(!pts.length){
     svg.innerHTML=`<text x="160" y="66" text-anchor="middle" fill="#7a8a72" font-size="11">`
@@ -2053,8 +2214,14 @@ async function startSweep(){
 let sweepRunning=false, lastCurve=null;
 // ---- Pi health tiles ----
 function hostTile(label, value, sub, cls){
+  // numeric tiles are short and keep the large size; text values (hostname, IP)
+  // can be long, so step the size down by length rather than breaking mid-word
+  const plain=String(value).replace(/<[^>]*>/g,'');
+  if(!/^[\d.,:%\s-]+$/.test(plain)){
+    cls=(cls?cls+' ':'')+(plain.length>10?'long':'text');
+  }
   return `<div class="htile"><div class="hlabel">${label}</div>`
-    +`<div class="hvalue${cls?' '+cls:''}">${value}</div>`
+    +`<div class="hvalue${cls?' '+cls:''}" title="${esc(plain)}">${value}</div>`
     +`<div class="hsub">${sub||'&nbsp;'}</div></div>`;
 }
 function upStr(sec){
@@ -2369,6 +2536,11 @@ function initLight(){
    row.dataset.lightBound='1';}                 // every click twice
   {const b=document.getElementById('sweepbtn');
    if(b)b.addEventListener('click',startSweep);}
+  {const qt=document.getElementById('qtoggle'), qb=document.getElementById('qbody');
+   if(qt&&qb)qt.addEventListener('click',()=>{
+     const open=qb.hasAttribute('hidden');
+     if(open)qb.removeAttribute('hidden'); else qb.setAttribute('hidden','');
+     qt.setAttribute('aria-expanded', open?'true':'false');});}
   {const fb=document.getElementById('focusbtn');
    if(fb)fb.addEventListener('click',startFocusSweep);}
   document.querySelectorAll('.fanbtn').forEach(b=>

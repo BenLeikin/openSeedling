@@ -585,12 +585,18 @@ svg.cmini{height:120px}
 }
 
 /* ---- device stats ---- */
-.hgrid{display:grid;gap:10px;grid-template-columns:repeat(auto-fill,minmax(130px,1fr))}
+.hgrid{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(130px,1fr))}
 .htile{background:#f6faf1;border:1px solid var(--line);border-radius:10px;padding:9px 11px}
 .hlabel{font-size:10px;font-weight:700;color:var(--leaf);text-transform:uppercase;
   letter-spacing:.06em;margin-bottom:3px}
+/* Numbers are short; text values (hostname, IP) are not, and word-break split
+   "openSeedling" across two lines mid-word. Long values get a smaller size and
+   break only at real boundaries; anything that still overflows scales down
+   rather than wrapping. */
 .hvalue{font-size:19px;font-weight:600;color:var(--ink);line-height:1.15;
-  font-variant-numeric:tabular-nums;word-break:break-word}
+  font-variant-numeric:tabular-nums;overflow-wrap:anywhere;hyphens:none}
+.hvalue.text{font-size:15px;letter-spacing:-0.01em}
+.hvalue.long{font-size:13px}
 .hvalue.good{color:#2e6b32}
 .hvalue.warn{color:#8a6a13}
 .hvalue.bad{color:#b5322f}
@@ -731,3 +737,40 @@ body.readonly .tcell textarea{background:#f6faf1;border-color:transparent;pointe
 #resstate.resbad{color:#b5322f}
 #resstate.reswarn{color:#c98a1e}
 #resstate.resok{color:#2e7d32}
+.autowbad{color:#b5322f}
+#autowbtn.on{background:var(--leaf);color:#fff}
+
+/* ---- sensor health / data quality ---- */
+.qualitywrap{margin-top:10px;border-top:1px dashed var(--line);padding-top:8px}
+/* Matches the .sgroup h3 headers rather than looking like a button: it is a
+   disclosure control, not an action. The global button rule adds a shadow and
+   a dark hover fill, both of which have to be cleared explicitly. */
+.qtoggle{display:flex;align-items:center;gap:6px;width:100%;
+  background:none;border:0;box-shadow:none;margin:0;padding:2px 0;
+  font:inherit;font-size:13px;font-weight:700;color:var(--leaf);
+  text-transform:uppercase;letter-spacing:.04em;text-align:left;cursor:pointer}
+.qtoggle:hover{background:none;color:var(--fir)}
+.qtoggle:focus-visible{outline:2px solid var(--sun);outline-offset:2px;
+  border-radius:4px}
+/* caret points right when collapsed, down when open */
+.qtoggle::before{content:"";width:0;height:0;flex:0 0 auto;
+  border-left:5px solid currentColor;border-top:4px solid transparent;
+  border-bottom:4px solid transparent;transition:transform .15s ease}
+.qtoggle[aria-expanded="true"]::before{transform:rotate(90deg)}
+#qsummary{font-weight:600;text-transform:none;letter-spacing:0;color:#7a8a72}
+#qsummary.qbad{color:#b5322f}
+.qbody{margin-top:8px}
+.qbody[hidden]{display:none}
+.qrow{display:flex;align-items:baseline;gap:8px;font-size:13px;margin:0 0 4px}
+.qname{min-width:110px;color:var(--fir)}
+.qgrade{font-size:11px;font-weight:700;border-radius:6px;padding:1px 7px;
+  text-transform:uppercase;letter-spacing:.03em}
+.qgrade.good{background:#e6f2dd;color:#2e6b32}
+.qgrade.fair{background:#fbf0d8;color:#8a6a13}
+.qgrade.poor,.qgrade.bad{background:#f7dedd;color:#b5322f}
+.qgrade.unknown{background:#eceff1;color:#5a6b7a}
+.qwhy{color:#7a8a72;font-size:12px}
+.qnote{font-size:12px;margin:6px 0 0;padding-left:14px;text-indent:-14px}
+.qnote::before{content:"\26A0\FE0E  ";color:#c98a1e}
+.qnote.bad::before{color:#b5322f}
+.qnote.ok::before{content:"\2713\FE0E  ";color:#2e6b32}

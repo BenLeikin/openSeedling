@@ -122,6 +122,15 @@ ask GROWLIGHT_FAN_PIN "Fan pin (or 'none')" "20" \
   "20 = pin 38. Any free GPIO; software PWM. 'none' if you have no fan."
 ask GROWLIGHT_RESERVOIR_PINS "Reservoir level pins, low:pin,high:pin (or 'none')" "low:27,high:17" \
   "XKC-Y23A non-contact sensors on the source reservoir. low = minimum-safe height, high = near the rim. 27 = pin 13, 17 = pin 11. 'none' if unwired."
+ask GROWLIGHT_KASA_HOST "Smart plug IP for the AC light backend (or blank)" "" \
+  "Only for the 'kasa' light backend: the IP of a TP-Link plug switching an AC fixture. Leave blank if the light is a dimmable panel on the GPIO."
+if [[ -n "${CFG[GROWLIGHT_KASA_HOST]:-}" ]]; then
+  ask GROWLIGHT_KASA_USER "TP-Link account email (blank for legacy plugs)" "" \
+    "Newer firmware (KLAP) needs account credentials even for local control. Legacy plugs such as the HS103 need none: leave blank."
+  [[ -n "${CFG[GROWLIGHT_KASA_USER]:-}" ]] && \
+    ask GROWLIGHT_KASA_PASS "TP-Link account password" "" \
+      "Stored in .env (mode 600, gitignored)."
+fi
 if [[ -n "${CFG[GROWLIGHT_RESERVOIR_PINS]:-}" \
       && ! "${CFG[GROWLIGHT_RESERVOIR_PINS]}" =~ ^(none|NONE|None|no|n|-|skip)$ ]]; then
   ask GROWLIGHT_RESERVOIR_INVERT "Reservoir sensors inverted? (1 or blank)" "" \
@@ -153,8 +162,11 @@ umask 077
   # Hardware keys are written even when empty: that is how "I have no pump"
   # persists across a re-run instead of reverting to the suggested default.
   for k in GROWLIGHT_LIGHT_PIN GROWLIGHT_PUMP_PINS GROWLIGHT_FLOAT_PINS \
-           GROWLIGHT_FAN_PIN GROWLIGHT_RESERVOIR_PINS; do
+           GROWLIGHT_FAN_PIN GROWLIGHT_RESERVOIR_PINS GROWLIGHT_KASA_HOST; do
     echo "$k=${CFG[$k]:-}"
+  done
+  for k in GROWLIGHT_KASA_USER GROWLIGHT_KASA_PASS; do
+    [[ -n "${CFG[$k]:-}" ]] && echo "$k=${CFG[$k]}"
   done
   [[ -n "${CFG[GROWLIGHT_RESERVOIR_INVERT]:-}" ]] \
     && echo "GROWLIGHT_RESERVOIR_INVERT=${CFG[GROWLIGHT_RESERVOIR_INVERT]}"
@@ -224,6 +236,19 @@ echo "    sensors (ADS1115, BME/BMP280, BH1750) ..."
 echo "    optional: grid auto-detect (opencv) ..."
 "$APP_DIR/venv/bin/pip" install --quiet opencv-python-headless numpy \
   || echo "    opencv unavailable; grid auto-detect off, manual placement still works"
+
+# Smart plug control, for the "kasa" light backend (an AC fixture switched over
+# the network instead of a dimmable panel on the GPIO). Optional at runtime:
+# the PWM backend is the default and never touches this.
+echo "    optional: smart plug light backend (python-kasa) ..."
+"$APP_DIR/venv/bin/pip" install --quiet python-kasa \
+  || echo "    python-kasa unavailable; the smart plug light backend will be off"
+
+# Kasa devices report legacy POSIX timezone names (PST8PDT) that recent Debian
+# releases moved out of the default tzdata package; without this, discovery and
+# every plug command fail with 'No time zone found with key ...'.
+sudo apt-get install -y tzdata-legacy \
+  || echo "    tzdata-legacy unavailable; set the plug's timezone to an IANA name instead"
 
 echo "==> [5/7] systemd service"
 sudo tee /etc/systemd/system/growlight.service > /dev/null << UNIT

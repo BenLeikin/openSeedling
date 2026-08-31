@@ -4,6 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OpenSeedling</title>
+<link rel="icon" href="{{ url_for('static', filename='icon.svg', v=v) }}" type="image/svg+xml">
+<link rel="alternate icon" href="{{ url_for('static', filename='favicon.ico', v=v) }}" sizes="48x48">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png', v=v) }}">
+<link rel="manifest" href="/site.webmanifest">
+<meta name="theme-color" content="#f0f6ea">
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v=v) }}">
 </head>
 <body>
@@ -179,6 +184,11 @@
 <div class="card asensors" id="sensorcard" style="display:none">
   <h2>&#128202; Sensors</h2>
   <div class="sreadout" id="sreadout"></div>
+  <div id="qualitywrap" class="qualitywrap" style="display:none">
+    <button type="button" id="qtoggle" class="qtoggle" aria-expanded="false">
+      Sensor health <span id="qsummary"></span></button>
+    <div id="qbody" class="qbody" hidden></div>
+  </div>
   <div class="editonly" id="waterctl" style="display:none"></div>
   <div id="chartgrid"></div>
   <div class="chartctl chartctl-bottom">
@@ -286,7 +296,16 @@
 
     <div class="fgroup">
       <h3>Light</h3>
+      <p class="fhint">The PWM backend drives a dimmable panel on the GPIO. The
+        smart plug backend switches an AC fixture on and off over the network:
+        there is no dimming, so the fixture's own knob sets intensity and
+        brightness, ramps and the response sweep do not apply.</p>
       <div class="frow">
+        <div><label>Light output
+          <select name="light_backend">
+            <option value="pwm">Dimmable panel (GPIO PWM)</option>
+            <option value="kasa">Smart plug (on/off)</option>
+          </select></label></div>
         <div><label>Max brightness (%) <input name="max_bright" type="number" min="1" max="100" required></label></div>
         <div><label>Ramp length (min) <input name="ramp_min" type="number" min="0" max="240" required></label></div>
       </div>
@@ -416,6 +435,28 @@
           <input name="alert_humidity_high" type="number" min="0" max="100"></label></div>
         <div><label>DLI alert floor (mol/m&#178;/day, 0 = off)
           <input name="alert_dli_low" type="number" min="0" max="30" step="0.5"></label></div>
+        <div><label>DLI alert ceiling (mol/m&#178;/day, 0 = off)
+          <input name="alert_dli_high" type="number" min="0" max="80" step="0.5"></label></div>
+        <div><label>Probe smoothing (samples, 1 = off)
+          <input name="probe_median_depth" type="number" min="1" max="15"></label></div>
+      </div>
+    </div>
+
+    <div class="fgroup">
+      <h3>Auto-watering</h3>
+      <p class="fhint">Fills a tray to its float when that tray's calibrated probe
+        reads dry. Arm it from the Water card; these set how it behaves.</p>
+      <div class="frow">
+        <div><label>Dry trigger (% moisture)
+          <input name="moisture_threshold_pct" type="number" min="1" max="90"></label></div>
+        <div><label>Cooldown between fills (min)
+          <input name="pump_cooldown_min" type="number" min="1" max="1440"></label></div>
+        <div><label>Fill time cap (s)
+          <input name="fill_max_seconds" type="number" min="1" max="600"></label></div>
+        <div><label>Daily pump limit (s)
+          <input name="pump_daily_max_seconds" type="number" min="1" max="3600"></label></div>
+        <div><label>Manual dose cap (s)
+          <input name="pump_max_seconds" type="number" min="1" max="120"></label></div>
       </div>
     </div>
 

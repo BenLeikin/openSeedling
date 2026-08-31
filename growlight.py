@@ -15,6 +15,7 @@ Requires (handled by setup.sh):
   - pip install astral rpi-hardware-pwm flask
 """
 
+import asyncio
 import json
 import os
 import re
@@ -22,6 +23,7 @@ import secrets
 import subprocess
 import sys
 import signal
+import statistics
 import threading
 import time
 from datetime import datetime, timedelta
@@ -44,6 +46,7 @@ import ai_report
 import discord_alert
 import alerts
 import hoststats
+import quality
 
 # ------------------- defaults (overridden by config.json) -------------------
 DEFAULTS = {
@@ -65,6 +68,11 @@ DEFAULTS = {
     "alert_cooldown_hours": 6,  # reminder interval while a problem persists
     "alert_dry_pct": 15,        # calibrated trays only
     "alert_humidity_high": 80,  # 0 disables
+    "alert_dli_high": 0,        # ceiling counterpart to alert_dli_low: a day
+                                #   finishing above this many mol means the
+                                #   fixture is turned up too far or hung too
+                                #   close. 0 disables (default, since it only
+                                #   makes sense once a target is chosen).
     "alert_dli_low": 4,         # checked once daily just after lights-off:
                                 #   a day that finishes under this many mol/m2
                                 #   means the light was off, dimmed or blocked.
@@ -126,6 +134,11 @@ DEFAULTS = {
     "discord_webhook": "",      # set to enable Discord alerts (see discord_alert.py)
     "password_hash": "",        # set to enable login (see README); blank = open
     "cookie_secure": True,      # True for HTTPS; set False only for local http testing
+    "probe_median_depth": 5,    # rolling median over the last N logged probe
+                                # readings, used for decisions only (charts
+                                # stay raw); 1 disables the filter
+    "light_backend": "pwm",     # "pwm" = dimmable panel on GPIO; "kasa" = smart
+                                # plug (on/off only, fixture knob sets intensity)
     "auto_water": False,        # master switch; keep OFF until moisture calibrated
     "moisture_threshold_pct": 30,  # CALIBRATION TODO: "dry" trigger, per-probe
     "pump_max_seconds": 20,     # hard cap on a single dose (anti-flood/dry-run)
@@ -355,8 +368,138 @@ except Exception as e:
              f"and reboot after adding it.")
 
 
+# ---- light output backends ----
+# "pwm" is the original path: a dimmable 5V panel on hardware PWM.
+# "kasa" drives a TP-Link smart plug for an AC fixture that has no controllable
+# dimming, so output is on/off and the fixture's own knob sets intensity.
+# Both are kept: switching backends is a settings change, not a redeploy.
+KASA_HOST = (os.environ.get("GROWLIGHT_KASA_HOST") or "").strip()
+KASA_USER = (os.environ.get("GROWLIGHT_KASA_USER") or "").strip()
+KASA_PASS = os.environ.get("GROWLIGHT_KASA_PASS") or ""
+KASA_ON_AT = 1.0        # brightness above this percent means "on"
+
+kasa_state = {"on": None,        # last state we believe the plug is in
+              "ok": None,        # last command succeeded?
+              "error": "",       # human-readable last failure
+              "fails": 0,        # consecutive failures
+              "last_ok": 0.0}
+_kasa_lock = threading.Lock()
+_kasa_loop = None
+_kasa_dev = None
+
+
+def _kasa_run(coro, timeout=12):
+    """Run a python-kasa coroutine from this threaded app.
+
+    python-kasa is async and the app is threads, so all plug I/O happens on one
+    dedicated event loop in its own thread. One loop (not asyncio.run per call)
+    because the library caches a session per device and reconnecting on every
+    poll is both slow and hard on the plug.
+    """
+    global _kasa_loop
+    if _kasa_loop is None:
+        _kasa_loop = asyncio.new_event_loop()
+        threading.Thread(target=_kasa_loop.run_forever, daemon=True,
+                         name="kasa").start()
+    fut = asyncio.run_coroutine_threadsafe(coro, _kasa_loop)
+    return fut.result(timeout=timeout)
+
+
+async def _kasa_device():
+    global _kasa_dev
+    if _kasa_dev is not None:
+        return _kasa_dev
+    from kasa import Device, DeviceConfig, Credentials
+    if KASA_USER or KASA_PASS:
+        cfg = DeviceConfig(host=KASA_HOST,
+                           credentials=Credentials(KASA_USER, KASA_PASS))
+        _kasa_dev = await Device.connect(config=cfg)
+    else:
+        # legacy devices (HS103 and friends) need no credentials at all
+        _kasa_dev = await Device.connect(host=KASA_HOST)
+    return _kasa_dev
+
+
+async def _kasa_set(on):
+    dev = await _kasa_device()
+    await (dev.turn_on() if on else dev.turn_off())
+    await dev.update()
+    return bool(dev.is_on)
+
+
+def kasa_apply(on, retries=1):
+    """Drive the plug to `on`. Returns True on success.
+
+    Retries once because a single dropped packet over wifi is routine and not
+    worth an alert; a genuine failure (plug unplugged, wrong IP, auth broken)
+    fails both attempts and is recorded for the alert rules.
+    """
+    global _kasa_dev
+    if not KASA_HOST:
+        with _kasa_lock:
+            kasa_state.update(ok=False, error="no GROWLIGHT_KASA_HOST configured")
+        return False
+    last = ""
+    for attempt in range(retries + 1):
+        try:
+            actual = _kasa_run(_kasa_set(on))
+            with _kasa_lock:
+                kasa_state.update(on=actual, ok=True, error="", fails=0,
+                                  last_ok=time.time())
+            return True
+        except Exception as e:
+            last = f"{type(e).__name__}: {e}"[:200]
+            _kasa_dev = None          # force a reconnect on the next attempt
+            if attempt < retries:
+                time.sleep(1.5)
+    with _kasa_lock:
+        kasa_state["fails"] += 1
+        kasa_state.update(ok=False, error=last)
+    print(f"kasa plug command failed ({last})")
+    return False
+
+
+def release_backend(old):
+    """Turn off whichever output we are switching away from.
+
+    Without this the abandoned backend holds its last state forever: switch
+    from PWM to the plug while the panel is lit and the panel stays lit, drawing
+    power with nothing in the app able to reach it any more.
+    """
+    try:
+        if old == "kasa":
+            kasa_apply(False)
+        else:
+            pwm.change_duty_cycle(0)
+        print(f"light backend released: {old} set to off")
+    except Exception as e:
+        print(f"could not release the {old} light backend: {e}")
+
+
+def light_backend(cfg=None):
+    if cfg is None:
+        with settings_lock:
+            cfg = dict(settings)
+    return "kasa" if cfg.get("light_backend") == "kasa" else "pwm"
+
+
 def set_brightness(percent):
+    """Apply a brightness percent through whichever backend is configured.
+
+    On the kasa backend there is no dimming: anything above KASA_ON_AT turns the
+    plug on, at or below turns it off. The percent is still carried through the
+    rest of the app unchanged so schedules, ramps and the DLI code need no
+    special cases; the plug simply cannot express the middle of a ramp.
+    """
     percent = max(0.0, min(100.0, percent))
+    if light_backend() == "kasa":
+        want = percent > KASA_ON_AT
+        with _kasa_lock:
+            believed = kasa_state["on"]
+        if believed is want and kasa_state["ok"]:
+            return                      # already there; don't poll the plug
+        kasa_apply(want)
+        return
     pwm.change_duty_cycle(percent)
 
 
@@ -631,6 +774,7 @@ def run_pump_until_full(tray, reason="fill", force=False):
         pass
     if tripped:
         fill_failure["msg"] = ""             # a good fill resolves the alert
+        schedule_postfill(tray)              # judge the probe once water wicks
         return True, f"filled in {elapsed:.1f}s"
     fill_failure["msg"] = (f"Tray {tray} fill ran to the {elapsed:.1f}s cap "
                            "without the float tripping. Likely causes: source "
@@ -664,6 +808,53 @@ def compensated_volts(volts, cal, soil_temp_f):
         return volts
     ref = tc.get("ref_f", TEMP_COMP_REF_F)
     return volts - coeff * (soil_temp_f - ref)
+
+
+PROBE_JUMP_V = 0.08     # volts; a departure larger than this is judged
+PROBE_CONFIRM = 3       # consecutive agreeing readings that make it a step
+_probe_verdict = {}     # tray -> "steady" | "spike" | "step", for display
+
+
+def probe_volts_filtered(tray, snap=None):
+    """A probe's voltage with single-sample transients rejected.
+
+    The probes sit steady to a couple of millivolts and then take occasional
+    excursions of 100-350mV, which is interference rather than sensor noise
+    (a switching load near unshielded leads into a high-impedance ADC input).
+    The per-read median in sensors.py samples milliseconds apart, so it cannot
+    see a transient that lasts longer than that; this takes a median across the
+    last few LOGGED readings instead, which rejects one bad sample outright
+    while still tracking soil that dries over hours.
+
+    Charts keep showing raw values on purpose: the excursions are diagnostic
+    and hiding them would have hidden the problem. Only the decisions
+    (moisture %, dry alert, auto-watering) read the filtered value.
+
+    Returns (volts, ts) or (None, None).
+    """
+    key = f"probe:{tray}"
+    if snap is None:
+        snap = db.latest()
+    rec = snap.get(key)
+    if rec is None:
+        return None, None
+    ts, raw = rec
+    with settings_lock:
+        depth = int(settings.get("probe_median_depth", 5))
+    depth = max(depth, PROBE_CONFIRM + 6) if depth > 1 else depth
+    if depth <= 1:
+        return raw, ts
+    try:
+        vals = db.recent_values(key, n=depth)
+    except Exception as e:
+        print(f"probe filter fell back to raw ({e})")
+        return raw, ts
+    if len(vals) < 3:
+        return raw, ts          # not enough history to filter meaningfully
+    val, verdict = quality.spike_or_step(vals, jump=PROBE_JUMP_V,
+                                         confirm=PROBE_CONFIRM)
+    _probe_verdict[str(tray)] = verdict
+    return (val if val is not None else raw), ts
 
 
 def probe_moisture(volts, cal, soil_temp_f=None):
@@ -795,9 +986,12 @@ def gather_report_data():
         elif k.startswith("probe:"):
             t = k[6:]
             tcal = pcal.get(t) or {}
-            pm, approx = probe_moisture_any(v, tcal, stf)
+            fv, _ = probe_volts_filtered(t, snap)
+            if fv is None:
+                fv = v
+            pm, approx = probe_moisture_any(fv, tcal, stf)
             nm = pnames.get(t, f"Tray {t}")
-            flag = probe_cal_flag(v, tcal)
+            flag = probe_cal_flag(fv, tcal)
             if flag:
                 nm += (" (reading beyond the wet anchor - recalibrate wet)"
                        if flag == "below_wet"
@@ -1055,22 +1249,130 @@ def report_loop():
         time.sleep(60)
 
 
+def auto_water_blockers(cfg=None):
+    """Reasons auto-watering must not run, per tray -> [reasons].
+
+    Auto-watering decides to pump based on a probe reading, so an untrustworthy
+    probe is not a degraded feature, it is a flood or a drought. A tray with any
+    blocker is skipped by the loop and cannot be armed from the UI.
+    """
+    if cfg is None:
+        with settings_lock:
+            cfg = dict(settings)
+    cal = cfg.get("probe_cal") or {}
+    snap = db.latest()
+    out = {}
+    for tray in sorted(set(PUMP_PINS) | set(sensors.FLOAT_PINS)):
+        why = []
+        if tray not in _pumps:
+            why.append("no pump hardware")
+        if tray not in sensors.FLOAT_PINS:
+            why.append("no float switch (fill would run blind)")
+        tcal = cal.get(tray) or {}
+        if not tcal or tcal.get("wet") is None or tcal.get("dry") is None:
+            why.append("probe not calibrated")
+        else:
+            fv, _ = probe_volts_filtered(tray, snap)
+            if fv is None:
+                why.append("no probe reading yet")
+            elif probe_cal_flag(fv, tcal):
+                why.append("probe reading is outside its calibration range")
+        if why:
+            out[tray] = why
+    return out
+
+
+POSTFILL_DELAY_S = 20 * 60     # let water wick to the probe before judging
+
+
+def schedule_postfill(tray):
+    """After a successful fill, judge the probe against its wet anchor later.
+
+    Water takes time to wick from the tray to the probe, so the check is
+    deferred rather than taken immediately. Drift here is the early warning
+    for a degrading probe or a stale calibration.
+    """
+    with settings_lock:
+        cal = ((settings.get("probe_cal") or {}).get(str(tray)) or {}).copy()
+    if cal.get("wet") is None:
+        return                      # nothing to compare against
+    _postfill_due[str(tray)] = {"due": time.time() + POSTFILL_DELAY_S,
+                                "cal": cal}
+
+
+def check_postfill(readings=None):
+    """Evaluate any post-fill probe checks that have come due."""
+    if not _postfill_due:
+        return
+    for tray, pending in list(_postfill_due.items()):
+        if time.time() < pending["due"]:
+            continue
+        _postfill_due.pop(tray, None)
+        volts, _ = probe_volts_filtered(tray)
+        ok, msg = quality.postfill_verdict(volts, pending["cal"])
+        if ok is None:
+            continue
+        postfill_result[tray] = {"ok": bool(ok), "msg": msg, "ts": time.time()}
+        print(f"post-fill check tray {tray}: {msg}")
+        try:
+            db.log_event("probe", f"tray {tray} post-fill: {msg}")
+        except Exception:
+            pass
+
+
 def watering_loop():
-    """Autonomous watering. DISABLED until auto_water is on AND moisture is
-    calibrated. Scaffold only -- the dry-trigger and fill logic go here once
-    real moisture data tells us what 'dry' means.
-    Planned: if a cell reads below moisture_threshold_pct and cooldown has
-    elapsed and the tray float says 'not full', dose via run_pump(reason="auto"),
-    stopping early when the float trips. If a dose runs to the cap without the
-    float tripping, treat it as source-empty/leak/stuck-float: log it, fire a
-    notify alert, and flip auto_water off."""
+    """Autonomous watering: when a calibrated probe reads dry and the tray's
+    float says it is not full, fill to the float.
+
+    Every guard is deliberate. The trigger is the probe, so a tray whose probe
+    is uncalibrated or reading outside its anchors is skipped entirely rather
+    than watered on a guess. The fill itself is float-gated with a time cap,
+    refuses on an empty reservoir, honours the daily cap, and a fill that caps
+    out without the float tripping switches auto_water off (in
+    run_pump_until_full). Cooldown exists because soil wicks slowly: probes
+    read dry for minutes after a fill has already reached the roots.
+    """
     while True:
         time.sleep(60)
-        with settings_lock:
-            on = bool(settings.get("auto_water", False))
-        if not on:
-            continue
-        # TODO (post-calibration): real dry detection + float-gated dosing.
+        try:
+            with settings_lock:
+                cfg = dict(settings)
+            if not cfg.get("auto_water"):
+                continue
+            blockers = auto_water_blockers(cfg)
+            threshold = float(cfg.get("moisture_threshold_pct", 30))
+            cooldown = float(cfg.get("pump_cooldown_min", 30)) * 60
+            cal = cfg.get("probe_cal") or {}
+            snap = db.latest()
+            stf = latest_soil_temp_f(snap)
+            for tray in sorted(PUMP_PINS):
+                if tray in blockers:
+                    continue
+                volts, ts = probe_volts_filtered(tray, snap)
+                if volts is None:
+                    continue
+                if time.time() - ts > 3600:
+                    continue          # stale reading: do not water on old data
+                pct = probe_moisture(volts, cal.get(tray) or {}, stf)
+                if pct is None or pct > threshold:
+                    continue
+                st = pump_state.get(tray) or {}
+                if time.time() - st.get("last_run", 0.0) < cooldown:
+                    continue
+                f = sensors.read_float(tray)
+                if f is None or f < 1:
+                    continue          # no float, or already full
+                ok, msg = run_pump_until_full(tray, reason="auto")
+                print(f"auto-water tray {tray} at {pct:.0f}%: {msg}")
+                if ok:
+                    try:
+                        db.log_event("auto_water",
+                                     f"tray {tray} at {pct:.0f}% moisture: {msg}")
+                    except Exception:
+                        pass
+                break                 # one pump per pass; re-evaluate next minute
+        except Exception as e:
+            print(f"watering_loop error: {e}")
 
 
 def sample_loop():
@@ -1083,10 +1385,11 @@ def sample_loop():
         with settings_lock:
             interval = max(1, int(settings.get("sample_interval_min", 5)))
         try:
-            readings = sensors.read_all()
+            readings = validate_readings(sensors.read_all())
             if readings:
                 db.log_many(list(readings.items()))
                 run_alerts(readings)
+                check_postfill(readings)
         except Exception as e:
             print(f"sample_loop error: {e}")
         # housekeeping once a day: roll raw -> hourly, prune old raw
@@ -1141,9 +1444,103 @@ def fan_should_run(cfg, now, on_time, off_time):
     return False, "idle"
 
 
+# --- sensor data quality state (in memory; nothing here is worth persisting) ---
+# sensor -> count of implausible readings rejected in the current session, and
+# the reason for the most recent one. Feeds the health score and the dashboard.
+_reject_counts = {}
+_reject_last = {}
+# tray -> pending post-fill probe check: {"due": ts, "cal": {...}}
+_postfill_due = {}
+# tray -> last post-fill verdict for display
+postfill_result = {}
+# cached health payload; recomputing per status poll would hammer sqlite
+_health_cache = {"ts": 0.0, "data": {}}
+
+
+def validate_readings(readings):
+    """Drop implausible values before they ever reach the database.
+
+    A probe reading the 3.3V rail means the signal is gone, not that the soil
+    is bone dry. Letting that into history corrupts the charts, the alert
+    thresholds and any calibration done afterwards, and it is indistinguishable
+    from real data later. Rejections are counted and logged as events so a
+    wiring fault is visible rather than silent.
+    """
+    clean, dropped = {}, []
+    for k, v in readings.items():
+        why = quality.check_bounds(k, v)
+        if why is None:
+            clean[k] = v
+            continue
+        dropped.append((k, v, why))
+        _reject_counts[k] = _reject_counts.get(k, 0) + 1
+        _reject_last[k] = why
+    for k, v, why in dropped:
+        print(f"rejected {k}={v}: {why}")
+        try:
+            db.log_event("sensor", f"rejected {k}={v}: {why}")
+        except Exception:
+            pass
+    return clean
+
+
 # sensor -> last-seen unix ts; touched only by the sample thread via run_alerts
 _seen_sensors = {}
 SEEN_TTL = 3 * 86400    # a sensor silent this long is treated as removed
+
+
+# binary sensors are legitimately constant for days; a flatline there means
+# nothing and accusing them would train you to ignore the rule
+NON_STUCK_PREFIXES = ("float:", "reservoir:", "canopy:")
+
+
+def stuck_sensors(cadence_s):
+    """Sensors reporting on time but reporting the same number forever."""
+    out = {}
+    for key in sorted(_seen_sensors):
+        if key.startswith(NON_STUCK_PREFIXES):
+            continue
+        try:
+            vals = db.recent_values(key, n=24, max_age=48 * 3600)
+        except Exception:
+            continue
+        why = quality.check_stuck(vals, cadence_s)
+        if why:
+            out[key] = why
+    return out
+
+
+def sensor_health(cfg, snap=None, max_age=60):
+    """Per-sensor health for the dashboard, cached: recomputing this on every
+    15-second status poll would mean a dozen queries per client per poll."""
+    now = time.time()
+    if now - _health_cache["ts"] < max_age and _health_cache["data"]:
+        return _health_cache["data"]
+    snap = snap if snap is not None else db.latest()
+    cadence = max(1, int(cfg.get("sample_interval_min", 5))) * 60
+    cap = max(1, int(cfg.get("capture_interval_min", 10))) * 60
+    out = {}
+    for key, (ts, _v) in snap.items():
+        if key.startswith(("dry:", "growth", "moisture:")):
+            continue
+        try:
+            vals = db.recent_values(key, n=24, max_age=48 * 3600)
+        except Exception:
+            vals = []
+        verdict = (_probe_verdict.get(key[6:], "steady")
+                   if key.startswith("probe:") else "steady")
+        if key.startswith(NON_STUCK_PREFIXES):
+            vals = vals[:1]      # binary sensors are meant to sit still
+        score, grade, why = quality.health(
+            vals, age_s=now - ts,
+            cadence_s=cap if key.startswith("canopy:") else cadence,
+            rejects=_reject_counts.get(key, 0), verdict=verdict,
+            noise_ref=0.01 if key.startswith("probe:") else None)
+        if _reject_last.get(key) and not any("implausible" in w for w in why):
+            why.append(_reject_last[key])
+        out[key] = {"score": score, "grade": grade, "why": why}
+    _health_cache.update(ts=now, data=out)
+    return out
 
 
 def run_alerts(readings):
@@ -1162,6 +1559,7 @@ def run_alerts(readings):
             "probe_dry_pct": cfg.get("alert_dry_pct", 15),
             "humidity_high": cfg.get("alert_humidity_high", 80),
             "dli_low": cfg.get("alert_dli_low", 4),
+            "dli_high": cfg.get("alert_dli_high", 0),
         }
         snap = dict(readings)
 
@@ -1170,7 +1568,8 @@ def run_alerts(readings):
         # once per evening and a mid-morning low total can't false-alarm
         with state_lock:
             off_t = state.get("off")
-        if off_t is not None and cfg.get("alert_dli_low"):
+        if off_t is not None and (cfg.get("alert_dli_low")
+                                  or cfg.get("alert_dli_high")):
             now_dt = datetime.now(off_t.tzinfo)
             if off_t <= now_dt <= off_t + timedelta(minutes=45):
                 d = dli_today()
@@ -1186,7 +1585,9 @@ def run_alerts(readings):
             if not k.startswith("probe:"):
                 continue
             t = k[6:]
-            pct, approx = probe_moisture_any(v, pcal.get(t) or {}, stf)
+            fv, _ = probe_volts_filtered(t)      # transient-rejected, not raw
+            pct, approx = probe_moisture_any(fv if fv is not None else v,
+                                             pcal.get(t) or {}, stf)
             if pct is not None and not approx:      # only alert on real calibration
                 moist[names.get(t, f"Tray {t}")] = pct
         snap["_moisture"] = moist
@@ -1196,6 +1597,11 @@ def run_alerts(readings):
 
         snap["_fill_failed"] = fill_failure["msg"]
         snap["_reservoir"] = reservoir_state()
+        # a plug that stops responding means the light is stuck wherever it
+        # was; the sustain window absorbs a wifi blip, repeated failures do not
+        snap["_plug_failed"] = (kasa_state["error"]
+                                if (light_backend(cfg) == "kasa"
+                                    and kasa_state["fails"] >= 2) else "")
 
         # sensors that have gone quiet: keys seen recently but missing from
         # this read. Tracked in memory only (persisting it once made a removed
@@ -1208,6 +1614,9 @@ def run_alerts(readings):
                   if now_ts - t > SEEN_TTL]:
             _seen_sensors.pop(k, None)
         snap["_stale"] = sorted(set(_seen_sensors) - set(readings))
+        # reporting on time but not measuring: invisible to the stale check
+        snap["_stuck"] = stuck_sensors(
+            max(1, int(cfg.get("sample_interval_min", 5))) * 60)
 
         for action, key, title, message, level in alerts.check_all(
                 snap, acfg, "C" if cfg.get("units") == "metric" else "F"):
@@ -1478,7 +1887,7 @@ def record_growth(path, cfg, now):
         if out.get("error"):
             print(f"growth: {out['error']}")
         return
-    readings = out.get("readings") or {}
+    readings = validate_readings(out.get("readings") or {})
     if readings:
         db.log_many(list(readings.items()), ts=int(now.timestamp()))
 
@@ -1786,6 +2195,33 @@ def _asset_ver():
 @app.route("/")
 def index():
     return render_template("index.html", tzs=TIMEZONES, v=_asset_ver())
+
+
+@app.route("/favicon.ico")
+def favicon():
+    # browsers request this at the site root regardless of the <link> tags
+    return send_from_directory(app.static_folder, "favicon.ico",
+                               mimetype="image/x-icon")
+
+
+@app.route("/site.webmanifest")
+def webmanifest():
+    """Home-screen metadata. Served from a route rather than /static because
+    Flask's mimetype guess for .webmanifest is application/octet-stream, which
+    some browsers refuse."""
+    return Response(json.dumps({
+        "name": "OpenSeedling",
+        "short_name": "Seedling",
+        "start_url": "/",
+        "display": "standalone",
+        "background_color": "#f0f6ea",
+        "theme_color": "#f0f6ea",
+        "icons": [
+            {"src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png"},
+            {"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png"},
+            {"src": "/static/icon.svg", "sizes": "any", "type": "image/svg+xml"},
+        ],
+    }), mimetype="application/manifest+json")
 
 
 @app.route("/photo/latest")
@@ -2339,11 +2775,38 @@ def status():
         render=dict(render),
         video_time=(datetime.fromtimestamp(VIDEO_PATH.stat().st_mtime)
                     .isoformat() if VIDEO_PATH.exists() else None),
+        light_backend=light_backend(cfg),
+        kasa={"host": KASA_HOST,
+              "on": kasa_state["on"], "ok": kasa_state["ok"],
+              "error": kasa_state["error"], "fails": kasa_state["fails"]}
+             if light_backend(cfg) == "kasa" else None,
         settings=public_settings(cfg),
         probe_default_cal=PROBE_DEFAULT_CAL,
-        probe_cal_flags={k[6:]: f for k, (ts, v) in snap.items()
-                         if k.startswith("probe:")
-                         and (f := probe_cal_flag(v, (pcal.get(k[6:]) or {})))},
+        probe_cal_flags={t: f for t in
+                         [k[6:] for k in snap if k.startswith("probe:")]
+                         if (f := probe_cal_flag(
+                             (probe_volts_filtered(t, snap)[0] or 0),
+                             (pcal.get(t) or {})))},
+        # filtered volts per tray, so the readout matches what decisions use
+        probe_filtered={t: probe_volts_filtered(t, snap)[0]
+                        for t in [k[6:] for k in snap if k.startswith("probe:")]},
+        quality={
+            "health": sensor_health(cfg, snap),
+            # advisory only: cross-sensor checks can accuse the wrong sensor,
+            # so they are shown but never wired to alerts or watering
+            "contradictions": [
+                {"subject": subj, "message": msg} for subj, msg in
+                quality.contradictions(
+                    {k: v for k, (ts, v) in snap.items()},
+                    {**cfg, "_light_on": bool(s["brightness"] > 1)},
+                    pumped_recently=any(
+                        time.time() - (st.get("last_run") or 0) < 3600
+                        for st in pump_state.values()))],
+            "postfill": postfill_result,
+            "rejects": {k: {"count": n, "last": _reject_last.get(k, "")}
+                        for k, n in _reject_counts.items()},
+            "probe_verdict": dict(_probe_verdict),
+        },
         focus={"running": focus_state["running"], "step": focus_state["step"],
                "best": focus_state["best"], "error": focus_state["error"]},
         sensors=sensors_out,
@@ -2367,6 +2830,9 @@ def status():
             "auto_water": cfg.get("auto_water", False),
             "reservoir": {"state": reservoir_state(),
                           "wired": bool(sensors.RESERVOIR_PINS)},
+            "auto_blockers": auto_water_blockers(cfg),
+            "moisture_threshold_pct": cfg.get("moisture_threshold_pct", 30),
+            "pump_cooldown_min": cfg.get("pump_cooldown_min", 30),
             "trays": {t: {
                 "float": sensors.read_float(t),
                 "pump_hw": t in _pumps,
@@ -2871,6 +3337,35 @@ def frame_context():
     return jsonify(ts=ts, readings=out)
 
 
+@app.route("/api/auto_water", methods=["POST"])
+@require_auth
+def api_auto_water():
+    """Arm or disarm autonomous watering.
+
+    Arming is refused while any tray has a blocker, because the trigger is a
+    probe reading and an untrustworthy probe means a flood or a drought.
+    Disarming is always allowed and never questioned.
+    """
+    data = request.get_json(silent=True) or {}
+    want = bool(data.get("enabled"))
+    if not want:
+        with settings_lock:
+            settings["auto_water"] = False
+            save_config()
+        db.log_event("auto_water", "disarmed")
+        return jsonify(ok=True, enabled=False)
+    blockers = auto_water_blockers()
+    if blockers:
+        return jsonify(ok=False, enabled=False, blockers=blockers,
+                       error="Auto-watering needs a calibrated probe and a "
+                             "float switch on every tray with a pump."), 200
+    with settings_lock:
+        settings["auto_water"] = True
+        save_config()
+    db.log_event("auto_water", "armed")
+    return jsonify(ok=True, enabled=True)
+
+
 @app.route("/api/fan", methods=["POST"])
 @require_auth
 def api_fan():
@@ -3139,12 +3634,20 @@ SETTINGS_VALIDATORS = {
     "alert_dry_pct": _v_int(0, 90),
     "alert_humidity_high": _v_int(0, 100),
     "alert_dli_low": _v_float(0, 30),
+    "alert_dli_high": _v_float(0, 80),
     "fan_mode": _v_choice("auto", "on", "off"),
     "fan_speed": _v_int(0, 100),
     "fan_auto_speed": _v_int(0, 100),
     "fan_min_speed": _v_int(0, 100),
     "fan_humidity_on": _v_int(0, 100),
+    "moisture_threshold_pct": _v_int(1, 90),
+    "pump_max_seconds": _v_int(1, 120),
+    "pump_cooldown_min": _v_int(1, 1440),
+    "pump_daily_max_seconds": _v_int(1, 3600),
+    "fill_max_seconds": _v_int(1, 600),
     "units": _v_choice("imperial", "metric"),
+    "light_backend": _v_choice("pwm", "kasa"),
+    "probe_median_depth": _v_int(1, 15),
     "schedule_mode": _v_choice("solar", "fixed", "duration"),
     "fixed_on": _v_hhmm,
     "fixed_off": _v_hhmm,
@@ -3177,8 +3680,14 @@ def update_settings():
             errors[k] = str(e) or "invalid"
     if new:
         with settings_lock:
+            was = light_backend(settings)
             settings.update(new)
+            now_backend = light_backend(settings)
             save_config()
+        if now_backend != was:
+            # dark the abandoned output before the loop starts driving the new one
+            release_backend(was)
+            db.log_event("light", f"backend {was} -> {now_backend}")
         wake.set()
     return jsonify(ok=not errors, saved=sorted(new), errors=errors)
 

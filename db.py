@@ -145,6 +145,16 @@ def recent_events(limit=50):
     return [dict(r) for r in rows]
 
 
+def recent_values(sensor, n=9, max_age=7200):
+    """The last `n` raw values for `sensor`, newest first, ignoring anything
+    older than `max_age` seconds. For filtering a live reading: a median over
+    these rejects a single transient without waiting for a long window."""
+    since = int(time.time()) - max_age
+    return [r[0] for r in _c().execute(
+        "SELECT value FROM readings WHERE sensor=? AND ts>=? "
+        "ORDER BY ts DESC LIMIT ?", (sensor, since, max(1, int(n))))]
+
+
 def reading_near(sensor, ts, window=3600):
     """Value for a sensor closest to time `ts` (for timelapse-frame labels).
     Returns None if nothing within `window` seconds."""
