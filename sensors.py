@@ -6,20 +6,26 @@ readings. Nothing here knows about brightness, schedules, or the web app.
 
     import sensors
     sensors.read_all()
-    # -> {"moisture:B2": 43.1, "temp:air": 22.4, "humidity": 58.0,
-    #     "lux": 1840.0, "temp:soil_1": 21.7, ...}   (None values dropped)
+    # -> {"probe:1": 1.883, "float:1": 1.0, "reservoir:low": 1.0,
+    #     "temp:air": 22.4, "humidity": 58.0, "pressure": 1013.2,
+    #     "lux": 1840.0, "temp:soil": 21.7, ...}
 
-read_all() returns only sensors that are actually wired and enabled; anything
-not yet wired is simply absent (the dashboard shows "-" for it). As each sensor
-type is wired, fill in its _read_* function and flip its entry in ENABLED.
-Build one type at a time and verify before moving on.
+read_all() returns only the sensors actually present. Every device is probed
+once at first use and disabled gracefully if absent, so a bare Pi (or a test
+box) runs the whole app without them and the dashboard shows "-" for the
+missing readings rather than failing.
 
-Hardware plan (all on the Pi's I2C bus, pins 3=SDA / 5=SCL, plus 1-Wire on
-GPIO4 / pin 7):
-  - 2x capacitive soil moisture (one per tray) -> ADS1115 ADC @ 0x48 (A0, A1)
-  - BME280 air temp + humidity    -> 0x76
-  - BH1750 ambient lux            -> 0x23
-  - 5x DS18B20 soil temp          -> 1-Wire, /sys/bus/w1/devices/28-*
+Wired hardware (I2C on pins 3=SDA / 5=SCL, 1-Wire on GPIO4 / pin 7):
+  - 2x capacitive soil probes -> ADS1115 ADC @ 0x48, channels A0 and A1
+  - BME280 air temp / humidity / pressure -> 0x76 (BMP280 at 0x77 also
+    detected; it has no humidity and that reading is simply absent)
+  - BH1750 ambient lux -> 0x23
+  - DS18B20 soil temp -> 1-Wire, auto-discovered from /sys/bus/w1/devices/28-*
+  - 2x float switches (GPIO23, GPIO22): open = tray full, the fail-safe sense
+  - 2x XKC-Y23A reservoir level sensors (GPIO27 low, GPIO17 high)
+
+All pin assignments are overridable by environment variable, so moving a
+signal off a bad pin is an .env change rather than a code edit.
 """
 
 
@@ -37,21 +43,20 @@ import time
 # sleeps, so the worst-case wait is one conversion.
 _io_lock = threading.Lock()
 
-# Flip these to True as each sensor type is wired and its _read_* filled in.
-# (Moisture probes have their own PROBE_ENABLED below.)
+# Per-type master switches. All wired; set one False to stop reading that
+# device without unplugging it.
 ENABLED = {
     "air": True,       # BME280/BMP280 air temp (+ humidity, + pressure)
     "lux": True,       # BH1750 ambient light
     "soil_temp": True,   # DS18B20 on 1-Wire (GPIO4); auto-detects attached probes
 }
 
-# --- float switch (destination tray; reports raw switch state) ---
-# Flip FLOAT_ENABLED True once wired. Pin is BCM GPIO23 (physical pin 16),
-# other leg to GND, internal pull-up. read_float() reports the raw contact
-# state so you can verify the mapping by hand, then mount/flip the float so
-# "tray full" lands on the fail-safe (broken-wire) state.
-# Float GPIOs (BCM). Override via GROWLIGHT_FLOAT_PINS="1:23,2:22" if you
-# need to move one off a bad pin without editing code.
+# --- float switches (one per tray) ---
+# Other leg to GND, internal pull-up. Mounted so that rising water OPENS the
+# switch: open reads as "full" and refuses to pump, which is also the
+# broken-wire state, so a cut lead fails safe.
+# Override via GROWLIGHT_FLOAT_PINS="1:23,2:22" to move one off a bad pin
+# without editing code.
 FLOAT_PINS = {"1": 23, "2": 22}   # tray -> BCM pin (physical 16, 15)
 _fp = os.environ.get("GROWLIGHT_FLOAT_PINS")
 if _fp is not None and not _fp.strip():
@@ -412,13 +417,6 @@ def _read_soil_temps():
         except Exception as e:
             print(f"{serial}: read error ({e})")
     return out
-
-
-# ------------------------------------------------------------------------- #
-# Each sensor type returns {} until its _read_* is filled in and its ENABLED
-# entry flipped True. Camera-based dryness (growth.py) and the float switch are
-# the live sources today; the I2C/1-Wire sensors above are wiring-pending.
-# ------------------------------------------------------------------------- #
 
 
 # --------------------------------- public ---------------------------------

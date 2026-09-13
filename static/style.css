@@ -1,13 +1,52 @@
 :root{
+    /* Light palette. Dark mode remaps this same set below, which is why the
+       structural colours are variables: one block to flip instead of ninety
+       scattered hex values. */
     --soil:#4a3826; --fir:#27432e; --leaf:#3f7d45; --sprout:#7fb069;
     --sun:#e8b04b; --mist:#f0f6ea; --glass:#fffefb; --line:#d8e6cd;
     --blush:#e9a17c;
+    --tint:#eef4e6; --surface-2:#f6faf1; --muted:#637359; --line-2:#cdddc0;
+    --input-bg:#fff; --series:#4a7c59; --on-accent:#fff; --band:#dfeccd;
+    --good:#2e6b32; --good-bg:#e6f2dd;
+    --warn:#7d5f10; --warn-bg:#fbf0d8;
+    --bad:#b5322f;  --bad-bg:#f7dedd;
+    --page-bg-1:#e2efd4; --page-bg-2:#e6f0db;
+    color-scheme:light;
+  }
+  /* Dark palette. Greens are lifted rather than darkened: the light theme
+     leans on dark green text over pale green, and simply inverting it gives
+     muddy, low-contrast text. */
+  :root[data-theme="dark"]{
+    --soil:#c2a98c; --fir:#dfe9d8; --leaf:#8fc196; --sprout:#7fb069;
+    --sun:#e8b04b; --mist:#141a15; --glass:#1c241d; --line:#33402f;
+    --blush:#e9a17c;
+    --tint:#232d23; --surface-2:#202a21; --muted:#94a48d; --line-2:#3a4736;
+    --input-bg:#141a15; --series:#7fb069; --on-accent:#12190f; --band:#2a3a27;
+    --good:#8fd49a; --good-bg:#23331f;
+    --warn:#e0bb6a; --warn-bg:#332a16;
+    --bad:#f08a86;  --bad-bg:#3a2020;
+    --page-bg-1:#1b2a1c; --page-bg-2:#1a261b;
+    color-scheme:dark;
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --soil:#c2a98c; --fir:#dfe9d8; --leaf:#8fc196; --sprout:#7fb069;
+      --sun:#e8b04b; --mist:#141a15; --glass:#1c241d; --line:#33402f;
+      --blush:#e9a17c;
+      --tint:#232d23; --surface-2:#202a21; --muted:#94a48d; --line-2:#3a4736;
+      --input-bg:#141a15; --series:#7fb069; --on-accent:#12190f; --band:#2a3a27;
+      --good:#8fd49a; --good-bg:#23331f;
+      --warn:#e0bb6a; --warn-bg:#332a16;
+      --bad:#f08a86;  --bad-bg:#3a2020;
+      --page-bg-1:#1b2a1c; --page-bg-2:#1a261b;
+      color-scheme:dark;
+    }
   }
   *{box-sizing:border-box;margin:0}
   body{
     background:
-      radial-gradient(circle at 8% 4%, #e2efd4 0 110px, transparent 130px),
-      radial-gradient(circle at 94% 90%, #e6f0db 0 140px, transparent 160px),
+      radial-gradient(circle at 8% 4%, var(--page-bg-1) 0 110px, transparent 130px),
+      radial-gradient(circle at 94% 90%, var(--page-bg-2) 0 140px, transparent 160px),
       var(--mist);
     color:var(--fir);
     font:16px/1.5 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
@@ -27,7 +66,11 @@
   .vine{height:14px;margin-bottom:14px;background:
     radial-gradient(circle 5px at 10px 7px, var(--sprout) 4px, transparent 5px) repeat-x;
     background-size:26px 14px;border-radius:7px;opacity:.7}
-  .card{background:var(--glass);border:1.5px solid var(--line);border-radius:18px;
+    /* A stacking context so the wandering seedling (z-index:-1) paints above the
+     card's own background but beneath its content, which is what lets it walk
+     BEHIND chips and buttons instead of over them. */
+  .card{position:relative;z-index:0;
+    background:var(--glass);border:1.5px solid var(--line);border-radius:18px;
     padding:18px;margin-bottom:16px;box-shadow:0 2px 0 var(--line)}
   .phase{display:flex;align-items:center;gap:14px}
   /* soft burst-ray sun; size/brightness track --glow (0 night .. 1 full sun) */
@@ -73,7 +116,7 @@
   details[open] summary::after{content:" \25B4"}
   details[open] summary{display:block;margin-bottom:12px}
   #photo,#vframe{width:100%;border-radius:12px;border:1.5px solid var(--line);
-    display:block;background:#dfe9d4;min-height:160px}
+    display:block;background:var(--surface-2);min-height:160px}
   .imgwrap{position:relative;line-height:0}
   #gridsvg{position:absolute;inset:0;width:100%;height:100%;touch-action:none;cursor:crosshair}
   #guidesvg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
@@ -82,12 +125,16 @@
   .gh{fill:#e8b04b;stroke:#27432e;stroke-width:3}
   .gc{cursor:pointer}
   .glbl{fill:#fff;font:700 26px Georgia,serif;paint-order:stroke;stroke:#1d3324;stroke-width:4px}
-  .gnm{fill:#eafff0;font:600 19px sans-serif;paint-order:stroke;stroke:#1d3324;stroke-width:3px}
+  .gnm{fill:var(--good-bg);font:600 19px sans-serif;paint-order:stroke;stroke:#1d3324;stroke-width:3px}
   .gridctl{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;margin-top:10px;
     font-size:13px;color:var(--leaf)}
   .gridctl button{margin-top:0;padding:6px 14px}
-  .gridctl input[type=number]{width:54px}
-  .gridctl input[type=checkbox]{width:auto}
+  .gridctl input[type=number]{width:62px;text-align:right;
+    -moz-appearance:textfield;appearance:textfield}
+  .gridctl input[type=number]::-webkit-outer-spin-button,
+  .gridctl input[type=number]::-webkit-inner-spin-button{
+    -webkit-appearance:none;margin:0}
+  .gridctl input[type=checkbox]{width:16px;height:16px}
   #photoinfo{font-size:13px;color:var(--leaf);margin-top:8px}
   .capctl{display:flex;align-items:center;gap:12px;margin-top:10px}  .capctl button{margin-top:0;padding:6px 14px}
   .capctl .muted{font-size:13px;color:var(--leaf)}
@@ -100,19 +147,29 @@
   form .frow{display:grid;grid-template-columns:1fr 1fr;gap:10px 14px;margin-bottom:10px}
   label{font-size:13px;color:var(--leaf);display:block}
   input,select{width:100%;padding:8px 10px;margin-top:3px;font-size:15px;color:var(--fir);
-    background:#fff;border:1.5px solid var(--line);border-radius:10px}
+    background:var(--input-bg);border:1.5px solid var(--line);border-radius:10px}
   input:focus,select:focus{outline:2px solid var(--sprout);border-color:var(--sprout)}
-  input[type=checkbox]{width:auto;accent-color:var(--leaf);transform:scale(1.3)}
-  .checkrow{display:flex;align-items:center;gap:10px;margin-top:18px;
-    font-size:14px;color:var(--fir)}
+  /* the shared input rule adds margin-top:3px for fields that sit UNDER a
+     label; a checkbox sits BESIDE its text, so that offset drops it out of
+     line. Clear it and let the flex row do the centring. */
+  /* Real dimensions rather than transform:scale — a scaled checkbox keeps its
+     small layout box, so flex centres the box while the pixels draw larger,
+     and the gap to the label is wrong too. */
+  input[type=checkbox]{width:16px;height:16px;margin:0;flex:0 0 auto;
+    transform:none;accent-color:var(--leaf)}
+  /* line-height:1.5 puts the text's visual centre above its line box centre,
+     so a correctly centred checkbox still reads low. Tighten the line box. */
+  .checkrow{display:flex;align-items:center;gap:8px;margin-top:18px;
+    font-size:14px;line-height:1.2;color:var(--fir)}
+  .checkrow label{line-height:1.2}
   .tzrow{grid-column:1 / -1}
   button{margin-top:6px;padding:10px 22px;font-size:15px;font-weight:600;
-    color:#fff;background:var(--leaf);border:0;border-radius:12px;cursor:pointer;
+    color:var(--on-accent);background:var(--leaf);border:0;border-radius:12px;cursor:pointer;
     box-shadow:0 2px 0 var(--fir)}
   button:hover{background:#346a3b}
   button:focus-visible{outline:3px solid var(--sun)}
   #msg{margin-left:12px;font-size:14px}
-  #msg.ok{color:var(--leaf)} #msg.err{color:#a4452c}
+  #msg.ok{color:var(--leaf)} #msg.err{color:var(--bad)}
   footer{text-align:center;color:var(--leaf);font-size:12px;margin-top:6px}
   @media (prefers-reduced-motion:no-preference){
     .nowdot{animation:pulse 2.4s ease-in-out infinite}
@@ -152,7 +209,7 @@
 .sgroup{flex:1 1 200px;min-width:170px}
 .sgroup h3{margin:0 0 6px;font-size:13px;color:var(--leaf);font-weight:700;
   text-transform:uppercase;letter-spacing:.04em}
-.schip{display:inline-flex;align-items:baseline;gap:5px;background:#f1f6ea;
+.schip{display:inline-flex;align-items:baseline;gap:5px;background:var(--tint);
   border:1px solid var(--line);border-radius:8px;padding:5px 9px;margin:0 6px 6px 0;
   font-size:13px}
 .schip b{font-size:15px;color:var(--ink)}
@@ -160,17 +217,24 @@
 .chartctl{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-bottom:8px}
 .chartctl select{width:auto;min-width:160px;margin-top:0}
 #chartinfo{font-size:12px;color:var(--leaf)}
-.ranges button{margin:0 0 0 4px;padding:5px 12px;background:#eef4e6;color:var(--leaf);
+.ranges button{margin:0 0 0 4px;padding:5px 12px;background:var(--tint);color:var(--leaf);
   border:1px solid var(--line)}
-.ranges button.on{background:var(--leaf);color:#fff;border-color:var(--leaf)}
+.ranges button.on{background:var(--leaf);color:var(--on-accent);border-color:var(--leaf)}
 #chartinfo{font-size:12px;color:var(--leaf)}
 .gmoist{fill:#1d3324;font:700 17px sans-serif;paint-order:stroke;
-  stroke:#eafff0;stroke-width:3px}
+  stroke:var(--good-bg);stroke-width:3px}
 
 .waterctl{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-bottom:14px;
   padding-top:10px;border-top:1px solid var(--line)}
 .waterctl button{margin:0;padding:6px 14px}
-.waterctl input[type=number]{width:54px}
+/* 54px fits one digit plus the spinner; a two-digit value collides with the
+   arrows. Hide the spinners (the value is typed or set from a preset anyway)
+   and widen slightly so 2 digits and a leading minus all fit. */
+.waterctl input[type=number]{width:62px;text-align:right;
+  -moz-appearance:textfield;appearance:textfield}
+.waterctl input[type=number]::-webkit-outer-spin-button,
+.waterctl input[type=number]::-webkit-inner-spin-button{
+  -webkit-appearance:none;margin:0}
 #pumpinfo{font-size:12px;color:var(--leaf)}
 
 /* ---- auth / read-only ---- */
@@ -179,7 +243,7 @@
 #authbox{display:flex;align-items:center;gap:6px;font-size:13px;flex-wrap:wrap}
 #authbox input[type=password]{width:120px;margin:0;padding:5px 8px}
 #authbox button{margin:0;padding:5px 12px;white-space:nowrap}
-.robadge{background:#e9eef3;color:#5a6b7a;border:1px solid #c9d4dd;border-radius:8px;
+.robadge{background:var(--tint);color:var(--muted);border:1px solid var(--line);border-radius:8px;
   padding:3px 9px;font-size:12px;white-space:nowrap}
 @media (max-width:560px){
   /* phone, logged out: give the login row the full width under the title
@@ -198,9 +262,9 @@
 #reportbody p{margin:0 0 8px}
 .rhead{display:flex;align-items:center;gap:10px;margin-bottom:8px}
 .rbadge{font-size:12px;font-weight:700;padding:3px 11px;border-radius:999px;letter-spacing:.02em}
-.rbg-good{background:#e3f0d8;color:#2f6b34}
-.rbg-watch{background:#fbeccb;color:#9a6b1e}
-.rbg-problem{background:#f6dcd0;color:#b1492c}
+.rbg-good{background:var(--good-bg);color:var(--good)}
+.rbg-watch{background:var(--warn-bg);color:var(--warn)}
+.rbg-problem{background:var(--bad-bg);color:var(--bad)}
 .rtime{font-size:12px;color:var(--leaf)}
 .rsummary{font-size:16px;color:var(--fir);line-height:1.45}
 .rfacts{font-size:13px;color:var(--leaf)}
@@ -210,7 +274,7 @@
 .rsec ul{margin:0;padding-left:18px}
 .rsec li{font-size:13.5px;color:var(--fir);margin-bottom:3px;line-height:1.4}
 .rmuted{font-size:13.5px;color:var(--leaf)}
-.rmuted code{background:#eef4e6;padding:1px 5px;border-radius:5px;font-size:12.5px}
+.rmuted code{background:var(--tint);padding:1px 5px;border-radius:5px;font-size:12.5px}
 .rconf{font-size:12px;color:var(--leaf);margin-top:10px}
 body.readonly .editonly{display:none !important}
 
@@ -238,13 +302,13 @@ body.gridlocked .gridedit{display:none}
 
 /* per-cell canopy growth label on the snapshot overlay */
 .ggrow{fill:#2e7d32;font:700 17px sans-serif;paint-order:stroke;
-  stroke:#eafff0;stroke-width:3px}
+  stroke:var(--good-bg);stroke-width:3px}
 .gdry{fill:#8d6e63;font:700 16px sans-serif;paint-order:stroke;
-  stroke:#eafff0;stroke-width:3px}
+  stroke:var(--good-bg);stroke-width:3px}
 .drycal{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px}
-.drycal #calinfo{color:#7a8a72;font-size:.9em}
+.drycal #calinfo{color:var(--muted);font-size:.9em}
 #charttip{position:fixed;display:none;pointer-events:none;z-index:50;
-  background:#2f4030;color:#eafff0;font-size:12px;padding:4px 8px;border-radius:6px;
+  background:#2f4030;color:var(--good-bg);font-size:12px;padding:4px 8px;border-radius:6px;
   white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.25)}
 
 /* manual light override */
@@ -252,10 +316,10 @@ body.gridlocked .gridedit{display:none}
 .lightctl .lcrow{display:flex;align-items:center;gap:8px}
 .lightctl .lclabel{font-weight:600;color:var(--leaf)}
 .lightctl button.lcbtn{margin-top:0;padding:5px 14px;font-size:13px;
-  background:#eef4e6;color:var(--leaf);
+  background:var(--tint);color:var(--leaf);
   border:1.5px solid transparent}          /* border always present, so the
                                               selected state can't resize it */
-.lightctl button.lcbtn.on{background:var(--leaf);color:#fff;
+.lightctl button.lcbtn.on{background:var(--leaf);color:var(--on-accent);
   border-color:var(--leaf)}
 .lightctl .lcslider{display:flex;align-items:center;gap:10px;width:100%}
 .lightctl .lcslider input[type=range]{flex:1;accent-color:var(--leaf);margin:0;
@@ -277,7 +341,7 @@ body.gridlocked .gridedit{display:none}
   /* auto-fit, not auto-fill: with few charts in a group, empty tracks
      collapse and the real charts stretch across the row */
   grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
-.ccard{background:#f6faf1;border:1px solid var(--line);border-radius:10px;
+.ccard{background:var(--surface-2);border:1px solid var(--line);border-radius:10px;
   padding:8px 10px 4px}
 .chead{display:flex;justify-content:space-between;align-items:baseline;gap:8px;
   font-size:12px;font-weight:600;color:var(--ink);margin-bottom:4px}
@@ -297,22 +361,22 @@ svg.cmini{width:100%;height:96px;display:block;cursor:crosshair}
 .tray-head b{font-size:14px;color:var(--leaf)}
 .tray-head .tsum{font-size:12px;color:var(--leaf);font-weight:400}
 .tgrid{display:grid;gap:6px}
-.tcell{background:#f6faf1;border:1px solid var(--line);border-radius:8px;
+.tcell{background:var(--surface-2);border:1px solid var(--line);border-radius:8px;
   padding:6px 7px;display:flex;flex-direction:column;gap:4px;min-height:78px}
-.tcell.filled{background:#eef6e6;border-color:#cdddc0}
+.tcell.filled{background:var(--surface-2);border-color:var(--line-2)}
 .tcell .tid{font-size:10px;font-weight:700;color:var(--leaf);letter-spacing:.04em;
   display:flex;justify-content:space-between;align-items:center}
-.tcell .tage{font-weight:400;font-size:10px;color:#7a8a72}
+.tcell .tage{font-weight:400;font-size:10px;color:var(--muted)}
 .tcell input{width:100%;margin:0;padding:3px 5px;font-size:12px;
-  border:1px solid var(--line);border-radius:5px;background:#fff}
+  border:1px solid var(--line);border-radius:5px;background:var(--input-bg)}
 .tcell input.tseed{font-weight:600}
 .tcell input.tequip{font-style:italic}
 .tcell input.tdate{font-size:11px;color:var(--leaf)}
-body.readonly .tcell input{background:#f6faf1;border-color:transparent;
+body.readonly .tcell input{background:var(--surface-2);border-color:transparent;
   pointer-events:none}
 .trayctl{margin-top:10px;font-size:12px;color:var(--leaf);min-height:16px}
 @media (max-width:700px){ .tcell{min-height:auto} }
-.chead .cstats b.hot{color:#b5322f}
+.chead .cstats b.hot{color:var(--bad)}
 
 /* =================== production polish layer =================== */
 /* interactive states: one consistent language for every control */
@@ -330,7 +394,7 @@ button:focus:not(:focus-visible){outline:none}
 
 /* cards: subtle lift on the interactive ones only */
 .ccard,.tcell{transition:border-color .15s ease,box-shadow .15s ease}
-.ccard:hover{border-color:#cdddc0;box-shadow:0 1px 4px rgba(46,64,42,.06)}
+.ccard:hover{border-color:var(--line-2);box-shadow:0 1px 4px rgba(46,64,42,.06)}
 .tcell:focus-within{border-color:var(--leaf);
   box-shadow:0 0 0 3px rgba(74,124,89,.12)}
 
@@ -339,9 +403,9 @@ button:focus:not(:focus-visible){outline:none}
   min-height:15px;display:inline-block}
 
 /* report body scrollbar: subtle, matches the palette */
-#reportbody{scrollbar-width:thin;scrollbar-color:#cdddc0 transparent}
+#reportbody{scrollbar-width:thin;scrollbar-color:var(--line-2) transparent}
 #reportbody::-webkit-scrollbar{width:8px}
-#reportbody::-webkit-scrollbar-thumb{background:#cdddc0;border-radius:4px}
+#reportbody::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:4px}
 
 /* small screens: control rows wrap instead of overflowing */
 @media (max-width:700px){
@@ -400,24 +464,24 @@ polyline.cline{stroke-dasharray:1;stroke-dashoffset:0;
 
 /* ---- camera / data health ---- */
 .camwarn{border-radius:9px;padding:8px 12px;font-size:13px;margin-bottom:10px;line-height:1.45}
-.camwarn.err{background:#fdeceb;border:1px solid #e8b6b3;color:#8a2d2a}
-.camwarn.amber{background:#fdf3d6;border:1px solid #e8c96a;color:#7a5a13}
+.camwarn.err{background:var(--bad-bg);border:1px solid #e8b6b3;color:#8a2d2a}
+.camwarn.amber{background:var(--warn-bg);border:1px solid #e8c96a;color:#7a5a13}
 .camwarn .camerr{font-family:ui-monospace,monospace;font-size:11px;opacity:.85}
 #photo.camdead{filter:grayscale(.7) brightness(.92)}
 .schip.stale{opacity:.55}
 .schip.stale b::after{content:" \26A0";font-size:10px}
-.stalebadge{background:#fdf3d6;border:1px solid #e8c96a;color:#7a5a13;
+.stalebadge{background:var(--warn-bg);border:1px solid #e8c96a;color:#7a5a13;
   border-radius:4px;padding:0 5px;font-size:10px;font-weight:600;vertical-align:1px}
 svg.cmini.cstale polyline.cline{stroke:#a8b5a0;opacity:.75}
 .waterctl .wtray{font-weight:700;font-size:13px;color:var(--leaf);min-width:52px}
 #waterctl{display:flex;flex-direction:column;gap:8px}
 
 .ptrend{font-size:10px;font-weight:600;margin-left:5px;padding:0 5px;border-radius:4px;
-  background:#eef4e6;color:var(--leaf);white-space:nowrap}
-.ptrend.down{background:#fdeceb;color:#8a2d2a}
-.ptrend.up{background:#eaf5e4;color:#2e6b32}
-.schip.dli.ok b{color:#2e6b32}
-.schip.dli.low b{color:#8a6a13}
+  background:var(--tint);color:var(--leaf);white-space:nowrap}
+.ptrend.down{background:var(--bad-bg);color:#8a2d2a}
+.ptrend.up{background:var(--good-bg);color:var(--good)}
+.schip.dli.ok b{color:var(--good)}
+.schip.dli.low b{color:var(--warn)}
 .schip.dli.high b{color:#8a2d2a}
 
 /* ---- settings: grouped sections ---- */
@@ -425,18 +489,18 @@ svg.cmini.cstale polyline.cline{stroke:#a8b5a0;opacity:.75}
 .fgroup:last-of-type{border-bottom:0;padding-bottom:4px}
 .fgroup>h3{font-size:12px;font-weight:700;color:var(--leaf);text-transform:uppercase;
   letter-spacing:.05em;margin:0 0 4px}
-.fhint{font-size:12px;color:#7a8a72;margin:0 0 10px;line-height:1.45}
+.fhint{font-size:12px;color:var(--muted);margin:0 0 10px;line-height:1.45}
 .fgroup .frow{margin-bottom:0}
 .fgroup .checkrow{margin-top:6px}
 .fgroup .checkrow label{font-size:14px;color:var(--fir)}
 .tzrow .fhint{margin-top:4px}
 
 /* ---- empty states ---- */
-.emptystate{background:#f6faf1;border:1px dashed var(--line);border-radius:10px;
+.emptystate{background:var(--surface-2);border:1px dashed var(--line);border-radius:10px;
   padding:14px 16px;color:var(--leaf);font-size:13px;line-height:1.5}
 .emptystate b{display:block;color:var(--fir);font-size:14px;margin-bottom:4px}
 .emptystate p{margin:0}
-.emptystate code{background:#eef4e6;padding:1px 5px;border-radius:4px;font-size:12.5px}
+.emptystate code{background:var(--tint);padding:1px 5px;border-radius:4px;font-size:12.5px}
 
 /* ---- density: the section you act on gets more room ---- */
 .csection.primary .chead{font-size:13px}
@@ -500,17 +564,17 @@ body.nocam .amedia{display:none}
 .lcurvehead{display:flex;align-items:center;gap:10px;font-size:12px;
   font-weight:600;color:var(--leaf);margin-bottom:6px}
 .lcurvehead button{margin:0;padding:4px 12px;font-size:12px;
-  background:#eef4e6;color:var(--leaf);border:1px solid var(--line)}
-.lcurvehead #sweepinfo{font-weight:400;font-size:11px;color:#7a8a72;margin-left:auto;
+  background:var(--tint);color:var(--leaf);border:1px solid var(--line)}
+.lcurvehead #sweepinfo{font-weight:400;font-size:11px;color:var(--muted);margin-left:auto;
   text-align:right}
-#lcurve{width:100%;height:118px;display:block;background:#f6faf1;
+#lcurve{width:100%;height:118px;display:block;background:var(--surface-2);
   border:1px solid var(--line);border-radius:8px}
 
 /* ---- day progress inside the phase card ---- */
 .aphase{display:block}
 .phaserow{display:flex;align-items:center;gap:14px}
 .dayprog{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
-.dpbar{position:relative;height:8px;border-radius:5px;background:#eef4e6;
+.dpbar{position:relative;height:8px;border-radius:5px;background:var(--tint);
   border:1px solid var(--line);overflow:visible}
 .dpbar span{display:block;height:100%;border-radius:5px;
   background:linear-gradient(90deg,#cfe3b8,var(--sun));transition:width .6s ease}
@@ -522,25 +586,35 @@ body.nocam .amedia{display:none}
 .dprow b{color:var(--fir);font-size:13px}
 
 /* ---- per-cell germination state ---- */
-.tcell.sprouted{background:#e8f5e0;border-color:#a8d08a}
-.tcell.archived{background:#f2f2ee;border-color:#dcdcd4;opacity:.72}
+.tcell.sprouted{background:var(--good-bg);border-color:var(--good)}
+.tcell.archived{background:var(--tint);border-color:var(--line);opacity:.72}
 .tcell.archived input{color:#8a8a80}
 .tstat{font-size:10px;color:var(--leaf);line-height:1.3;min-height:13px}
-.tcell.sprouted .tstat{color:#2e6b32;font-weight:600}
+.tcell.sprouted .tstat{color:var(--good);font-weight:600}
 .tcell.archived .tstat{color:#7a7a72}
 .tacts{display:flex;gap:4px;margin-top:2px}
 .tacts button{margin:0;flex:1;padding:3px 4px;font-size:10px;font-weight:600;
-  background:#eef4e6;color:var(--leaf);border:1px solid var(--line);border-radius:5px;
+  background:var(--tint);color:var(--leaf);border:1px solid var(--line);border-radius:5px;
   box-shadow:none}
-.tacts button:hover{background:#e2eed6}
-.tcell.sprouted .tage{color:#2e6b32;font-weight:700}
+.tacts button:hover{background:var(--tint)}
+.tcell.sprouted .tage{color:var(--good);font-weight:700}
 .dlipacemark{position:absolute;top:-3px;width:2px;height:14px;background:var(--fir);
   border-radius:1px;transform:translateX(-1px);transition:left .6s ease;z-index:2}
-.dlibar{overflow:visible}
-.dlipace{font-size:11px;color:#7a8a72;white-space:nowrap}
+/* The DLI bar, matching the photoperiod bar above it. It had no styling at all:
+   the spans rendered as zero-size inline elements, so the only visible part was
+   the pace marker, which read as a stray tick.
+   Scale is 0-16 mol (set in app.js), so the 6-12 seedling target band sits at
+   37.5%-75% of the width. */
+.dlibar{position:relative;height:8px;border-radius:5px;background:var(--tint);
+  border:1px solid var(--line);overflow:visible}
+.dliband{position:absolute;left:37.5%;width:37.5%;top:0;bottom:0;
+  background:var(--band);pointer-events:none}
+.dlifill{position:relative;display:block;height:100%;border-radius:5px;
+  background:linear-gradient(90deg,#cfe3b8,var(--leaf));transition:width .6s ease}
+.dlipace{font-size:11px;color:var(--muted);white-space:nowrap}
 .dlipace b{font-size:12px}
-.dlipace.ok{color:#2e6b32}
-.dlipace.low{color:#8a6a13}
+.dlipace.ok{color:var(--good)}
+.dlipace.low{color:var(--warn)}
 .dlipace.high{color:#8a2d2a}
 
 /* ---- light plan under the day curve ---- */
@@ -549,8 +623,8 @@ body.nocam .amedia{display:none}
 .lphead b{font-size:13px;color:var(--fir)}
 .lpdot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--leaf)}
 .lpdot.low{background:#e0a13a}
-.lpdot.high{background:#b5322f}
-.lpdot.ok{background:#4a7c59}
+.lpdot.high{background:var(--bad)}
+.lpdot.ok{background:var(--series)}
 .lplan ul{margin:0;padding-left:16px;color:var(--leaf);line-height:1.5}
 .lplan li{margin-bottom:2px}
 .modeblock{margin-top:4px}
@@ -573,7 +647,7 @@ svg.cmini{height:120px}
 .cexpand{margin:0 0 0 6px;padding:1px 5px;font-size:12px;line-height:1;
   background:transparent;color:var(--leaf);border:1px solid var(--line);
   border-radius:5px;box-shadow:none;flex:none}
-.cexpand:hover{background:#eef4e6}
+.cexpand:hover{background:var(--tint)}
 .ccard.expanded{grid-column:1/-1}
 .ccard.expanded svg.cmini{height:300px}
 .csection.primary .ccard.expanded svg.cmini{height:300px}
@@ -586,7 +660,7 @@ svg.cmini{height:120px}
 
 /* ---- device stats ---- */
 .hgrid{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(130px,1fr))}
-.htile{background:#f6faf1;border:1px solid var(--line);border-radius:10px;padding:9px 11px}
+.htile{background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:9px 11px}
 .hlabel{font-size:10px;font-weight:700;color:var(--leaf);text-transform:uppercase;
   letter-spacing:.06em;margin-bottom:3px}
 /* Numbers are short; text values (hostname, IP) are not, and word-break split
@@ -597,15 +671,15 @@ svg.cmini{height:120px}
   font-variant-numeric:tabular-nums;overflow-wrap:anywhere;hyphens:none}
 .hvalue.text{font-size:15px;letter-spacing:-0.01em}
 .hvalue.long{font-size:13px}
-.hvalue.good{color:#2e6b32}
-.hvalue.warn{color:#8a6a13}
-.hvalue.bad{color:#b5322f}
+.hvalue.good{color:var(--good)}
+.hvalue.warn{color:var(--warn)}
+.hvalue.bad{color:var(--bad)}
 .hsub{font-size:11px;color:var(--leaf);margin-top:2px}
-.tcell input.tsprdate{color:#2e6b32;border-color:#a8d08a;background:#f4fbef}
+.tcell input.tsprdate{color:var(--good);border-color:#a8d08a;background:var(--input-bg)}
 .tdrow{display:flex;align-items:center;gap:5px;margin:0}
 .tdlbl{font-size:9px;font-weight:700;color:var(--leaf);text-transform:uppercase;
   letter-spacing:.05em;width:30px;flex:none}
-.tdlbl.up{color:#2e6b32}
+.tdlbl.up{color:var(--good)}
 .tdrow .tdate{flex:1;min-width:0}
 
 /* ---- per-cell field menu ---- */
@@ -614,7 +688,7 @@ svg.cmini{height:120px}
 .tfields{margin:0;padding:0 3px;font-size:12px;line-height:1;background:transparent;
   color:var(--leaf);border:0;box-shadow:none;cursor:pointer;opacity:.55}
 .tcell:hover .tfields,.tfields:focus-visible{opacity:1}
-.tmenu{position:absolute;top:20px;right:6px;z-index:20;background:#fff;
+.tmenu{position:absolute;top:20px;right:6px;z-index:20;background:var(--input-bg);
   border:1px solid var(--line);border-radius:8px;padding:6px 8px;
   box-shadow:0 4px 14px rgba(46,64,42,.16);display:flex;flex-direction:column;gap:3px}
 /* a class rule with display:flex outranks the browser default for [hidden],
@@ -622,16 +696,16 @@ svg.cmini{height:120px}
 .tmenu[hidden]{display:none}
 .tmenu label{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--fir);
   white-space:nowrap;cursor:pointer}
-.tmenu input[type=checkbox]{width:auto;margin:0;transform:scale(1.05)}
+.tmenu input[type=checkbox]{width:15px;height:15px;margin:0;transform:none}
 .fhidden{display:none !important}
 .tcell input.tcount{width:100%}
 .tcell input.tsource{font-size:11px;color:var(--leaf)}
 .tcell textarea.tnotes{width:100%;margin:0;padding:3px 5px;font-size:11px;
-  border:1px solid var(--line);border-radius:5px;background:#fff;color:var(--fir);
+  border:1px solid var(--line);border-radius:5px;background:var(--input-bg);color:var(--fir);
   resize:vertical;font-family:inherit;line-height:1.35}
 .tcell textarea.tnotes:focus{border-color:var(--leaf);outline:none;
   box-shadow:0 0 0 3px rgba(74,124,89,.15)}
-body.readonly .tcell textarea{background:#f6faf1;border-color:transparent;pointer-events:none}
+body.readonly .tcell textarea{background:var(--surface-2);border-color:transparent;pointer-events:none}
 .fanrow{margin-top:8px;padding-top:8px;border-top:1px solid var(--line)}
 #faninfo{font-size:12px;color:var(--leaf);margin-left:auto;text-align:right}
 .fanslider{margin-top:6px}
@@ -644,11 +718,11 @@ body.readonly .tcell textarea{background:#f6faf1;border-color:transparent;pointe
 .tsize .tx{font-size:11px;color:var(--leaf)}
 .trm{margin:0 0 0 6px;padding:2px 7px;font-size:11px;background:transparent;
   color:var(--leaf);border:1px solid var(--line);border-radius:5px;box-shadow:none}
-.trm:hover{background:#fdeceb;color:#8a2d2a;border-color:#e8b6b3}
+.trm:hover{background:var(--bad-bg);color:#8a2d2a;border-color:#e8b6b3}
 .trayadd{margin-top:12px;display:flex;align-items:center;gap:10px}
-.trayadd button{margin:0;padding:5px 14px;font-size:13px;background:#eef4e6;
+.trayadd button{margin:0;padding:5px 14px;font-size:13px;background:var(--tint);
   color:var(--leaf);border:1px solid var(--line);box-shadow:none}
-.trayadd button:hover{background:#e2eed6}
+.trayadd button:hover{background:var(--tint)}
 #trayaddinfo{font-size:12px;color:var(--leaf)}
 #traycfg{display:flex;flex-direction:column;gap:7px}
 .trayrow{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
@@ -688,7 +762,7 @@ body.readonly .tcell textarea{background:#f6faf1;border-color:transparent;pointe
 }
 #rectwrap{margin-top:10px}
 #rectimg{width:100%;border-radius:10px;border:1.5px solid var(--line);display:block}
-#rectbtn.on{background:var(--leaf);color:#fff;border-color:var(--leaf)}
+#rectbtn.on{background:var(--leaf);color:var(--on-accent);border-color:var(--leaf)}
 .dimrow{display:flex;align-items:center;gap:5px}
 .dimrow input{width:100%}
 
@@ -696,7 +770,7 @@ body.readonly .tcell textarea{background:#f6faf1;border-color:transparent;pointe
 .ccells{margin-top:10px}
 .ccname{font-size:12px;font-weight:700;color:var(--leaf);margin-bottom:5px}
 .ccgrid{display:grid;gap:5px}
-.ccell{background:#f6faf1;border:1px solid var(--line);border-radius:8px;
+.ccell{background:var(--surface-2);border:1px solid var(--line);border-radius:8px;
   padding:5px 6px;display:flex;flex-direction:column;gap:1px;min-height:52px}
 .ccell.empty{background:transparent;border-style:dashed;opacity:.45}
 .ccid{font-size:9px;font-weight:700;color:var(--leaf);letter-spacing:.04em}
@@ -730,15 +804,15 @@ body.readonly .tcell textarea{background:#f6faf1;border-color:transparent;pointe
 /* out-of-range probe calibration badge: the reading sits past an anchor, the
    percentage is pegged, and the dry alert is blind until recalibrated */
 .calwarn{display:inline-block;margin-left:.35em;padding:0 .4em;border-radius:3px;
-  background:#b5322f;color:#fff;font-size:.72em;font-weight:600;vertical-align:1px;
+  background:var(--bad);color:var(--on-accent);font-size:.72em;font-weight:600;vertical-align:1px;
   cursor:help}
 .focusrow{display:flex;align-items:center;gap:.6em;margin-top:.3em}
-.pctx{color:#7a8a72;font-size:.85em}
-#resstate.resbad{color:#b5322f}
-#resstate.reswarn{color:#c98a1e}
+.pctx{color:var(--muted);font-size:.85em}
+#resstate.resbad{color:var(--bad)}
+#resstate.reswarn{color:var(--warn)}
 #resstate.resok{color:#2e7d32}
-.autowbad{color:#b5322f}
-#autowbtn.on{background:var(--leaf);color:#fff}
+.autowbad{color:var(--bad)}
+#autowbtn.on{background:var(--leaf);color:var(--on-accent)}
 
 /* ---- sensor health / data quality ---- */
 .qualitywrap{margin-top:10px;border-top:1px dashed var(--line);padding-top:8px}
@@ -757,20 +831,176 @@ body.readonly .tcell textarea{background:#f6faf1;border-color:transparent;pointe
   border-left:5px solid currentColor;border-top:4px solid transparent;
   border-bottom:4px solid transparent;transition:transform .15s ease}
 .qtoggle[aria-expanded="true"]::before{transform:rotate(90deg)}
-#qsummary{font-weight:600;text-transform:none;letter-spacing:0;color:#7a8a72}
-#qsummary.qbad{color:#b5322f}
+#qsummary{font-weight:600;text-transform:none;letter-spacing:0;color:var(--muted)}
+#qsummary.qbad{color:var(--bad)}
 .qbody{margin-top:8px}
 .qbody[hidden]{display:none}
 .qrow{display:flex;align-items:baseline;gap:8px;font-size:13px;margin:0 0 4px}
 .qname{min-width:110px;color:var(--fir)}
 .qgrade{font-size:11px;font-weight:700;border-radius:6px;padding:1px 7px;
   text-transform:uppercase;letter-spacing:.03em}
-.qgrade.good{background:#e6f2dd;color:#2e6b32}
-.qgrade.fair{background:#fbf0d8;color:#8a6a13}
-.qgrade.poor,.qgrade.bad{background:#f7dedd;color:#b5322f}
-.qgrade.unknown{background:#eceff1;color:#5a6b7a}
-.qwhy{color:#7a8a72;font-size:12px}
+.qgrade.good{background:var(--good-bg);color:var(--good)}
+.qgrade.fair{background:var(--warn-bg);color:var(--warn)}
+.qgrade.poor,.qgrade.bad{background:var(--bad-bg);color:var(--bad)}
+.qgrade.unknown{background:var(--tint);color:var(--muted)}
+.qwhy{color:var(--muted);font-size:12px}
 .qnote{font-size:12px;margin:6px 0 0;padding-left:14px;text-indent:-14px}
-.qnote::before{content:"\26A0\FE0E  ";color:#c98a1e}
-.qnote.bad::before{color:#b5322f}
-.qnote.ok::before{content:"\2713\FE0E  ";color:#2e6b32}
+.qnote::before{content:"\26A0\FE0E  ";color:var(--warn)}
+.qnote.bad::before{color:var(--bad)}
+.qnote.ok::before{content:"\2713\FE0E  ";color:var(--good)}
+
+/* ---- the wandering seedling ----------------------------------------------
+   A small character that crosses one card every half minute, entering and
+   leaving behind the card's edge. It lives at z-index:-1 inside the card's
+   stacking context, so it passes behind chips, text and buttons rather than
+   over them: the occlusion is the whole point, and it is what makes it read
+   as a thing in the room rather than an overlay.
+   Drawn in the existing palette so it belongs to the same world as the sun
+   and moon in the header. */
+/* In front of the card's content now, so it is never hidden behind a chart.
+   Still clipped by the card's edges, which is what sells the entrance and the
+   exit: it comes out from behind the edge and disappears behind the far one. */
+.walkwrap{position:absolute;inset:0;overflow:hidden;pointer-events:none;
+  z-index:3;border-radius:inherit}
+.walker{position:absolute;bottom:10px;left:0;width:30px;height:34px;
+  will-change:transform}
+.walker .legs line{stroke:var(--leaf);stroke-width:2.6;stroke-linecap:round}
+.walker .stem{stroke:var(--leaf);stroke-width:2.6;stroke-linecap:round}
+.walker .leaf-l{fill:var(--sprout)}
+.walker .leaf-r{fill:#a8d08a}
+.walker .eye{fill:var(--fir)}
+.walker .mouth{stroke:var(--fir);stroke-width:1.2;stroke-linecap:round;fill:none}
+.walker .cheek{fill:#e9a17c;opacity:.5}
+.walker .arm{stroke:var(--leaf);stroke-width:2.6;stroke-linecap:round}
+.walker .pot{fill:#cb8f6a}
+.walker .pot-rim{fill:#b87a56}
+/* chile pepper */
+.walker .pod{fill:#d85a30}
+.walker .calyx{fill:var(--leaf)}
+.walker .pstem{stroke:var(--leaf);stroke-width:1.5;stroke-linecap:round}
+.walker .peye{fill:#4a1b0c}
+.walker .pcheek{fill:#993c1d;opacity:.45}
+.walker .pmouth{stroke:#4a1b0c;stroke-width:.85;stroke-linecap:round;fill:none}
+.walker .parm{stroke:var(--leaf)}
+/* grey cat, drawn in profile */
+.walker .fur{fill:#9aa8a2}
+.walker .inner-ear{fill:#e9a17c}
+.walker .whisker{stroke:#7c8a85;stroke-width:.6;stroke-linecap:round;fill:none}
+.walker .cleg{stroke:#9aa8a2;stroke-width:2.4}
+.walker .tail{stroke:#7c8a85;stroke-width:1.7;stroke-linecap:round;fill:none}
+
+@media (prefers-reduced-motion:no-preference){
+  /* Walk in, stop, wave, walk out. One timeline with holds in the middle
+     rather than chained animations, so the three phases cannot drift apart. */
+  .walker{animation:walk-across var(--walk-dur,11s) linear forwards}
+  .walker .body{animation:walk-bob .5s ease-in-out infinite}
+  .walker .leg-a{animation:step-a .5s ease-in-out infinite}
+  .walker .leg-b{animation:step-b .5s ease-in-out infinite}
+  /* legs still and arm waving only during the pause */
+  .walker.pausing .leg-a,.walker.pausing .leg-b,.walker.pausing .body{
+    animation:none}
+  .walker .arm{transform-origin:15px 21px;opacity:0}
+  .walker.pausing .arm{opacity:1;animation:wave .42s ease-in-out 6}
+  /* the cat's tail is always visible and flicks rather than waves */
+  .walker .tail{opacity:1}
+  .walker.pausing .tail{animation:flick .6s ease-in-out 4}
+  /* the bee's wings blur rather than wave, and are always visible */
+  .walker .wing{opacity:.85}
+  .walker.pausing .wing.arm{animation:buzz .12s linear 20}
+  @keyframes buzz{0%,100%{transform:rotate(0deg)}50%{transform:rotate(-14deg)}}
+  @keyframes flick{0%,100%{transform:rotate(0deg)}50%{transform:rotate(-22deg)}}
+  @keyframes walk-across{
+    0%  {transform:translateX(var(--walk-from)) scaleX(var(--walk-dir,1))}
+    36% {transform:translateX(var(--walk-mid))  scaleX(var(--walk-dir,1))}
+    64% {transform:translateX(var(--walk-mid))  scaleX(var(--walk-dir,1))}
+    100%{transform:translateX(var(--walk-to))   scaleX(var(--walk-dir,1))}
+  }
+  /* the bob is tiny on purpose: at 30px tall, more reads as a bounce */
+  @keyframes walk-bob{50%{transform:translateY(-1.5px)}}
+  @keyframes step-a{50%{transform:rotate(24deg)}}
+  @keyframes step-b{0%,100%{transform:rotate(24deg)}50%{transform:rotate(0deg)}}
+  @keyframes wave{0%,100%{transform:rotate(-8deg)}50%{transform:rotate(-46deg)}}
+}
+
+/* checkboxes that sit inline inside a label (Daily report, Show cell grid)
+   need the same baseline treatment as .checkrow */
+.aitog,.gridctl label{display:inline-flex;align-items:center;gap:8px;line-height:1.2}
+
+/* Peak stats: same label-left/value-right language as .dprow above them.
+   The <dl> had no rules at all, so dt/dd fell back to browser defaults and
+   stacked with an indent, which is why the bottom of the card read looser
+   than the top. */
+.daystats{display:flex;flex-wrap:wrap;justify-content:space-between;
+  gap:4px 14px;margin:7px 0 0}
+.daystats>div{display:flex;align-items:baseline;gap:6px;white-space:nowrap}
+.daystats dt{font-size:12px;color:var(--leaf)}
+.daystats dd{margin:0;font-size:13px;font-weight:600;color:var(--fir);
+  font-variant-numeric:tabular-nums}
+.daystats dd small{font-size:11px;font-weight:400;color:var(--leaf)}
+#lbuddymodel{width:auto;margin:0;padding:4px 8px;font-size:13px}
+
+/* snail: slow walk, eyestalks instead of arms */
+.walker .foot{stroke:#c9b79a;stroke-width:2.6;stroke-linecap:round}
+.walker .foot-pad{fill:#c9b79a}
+.walker .shell{fill:#cb8f6a}
+.walker .shell-line{stroke:#b87a56;stroke-width:1.4}
+.walker .stalk{stroke:#c9b79a;stroke-width:1;stroke-linecap:round}
+.walker .stalk-wave{stroke:#c9b79a;stroke-width:1;stroke-linecap:round}
+/* ladybug */
+.walker .shell-red{fill:#d85a30}
+.walker .shell-dark{fill:#c14d27}
+.walker .wing-split{stroke:#4a1b0c;stroke-width:.9}
+.walker .spot{fill:#4a1b0c}
+.walker .head-dark{fill:#3d3a35}
+.walker .eye-white{fill:#fff}
+.walker .antenna{stroke:#3d3a35;stroke-width:1;stroke-linecap:round;fill:none}
+.walker .bug-leg{stroke:#27432e;stroke-width:1.4}
+/* raindrop */
+.walker .drop{fill:#8fb8c9}
+.walker .glint{stroke:#b9d6e2;stroke-width:1.3;stroke-linecap:round}
+.walker .dcheek{fill:#6f9db0;opacity:.5}
+.walker .drop-leg{stroke:#6f9db0;stroke-width:2.2}
+.walker .drop-arm{stroke:#6f9db0}
+/* bee */
+.walker .bee-body{fill:#efb32a}
+.walker .wing{fill:#dfe9ef;opacity:.85}
+.walker .stripe{stroke:#412402;stroke-width:1.9;fill:none}
+.walker .beye{fill:#412402}
+.walker .bmouth{stroke:#412402;stroke-width:.8;stroke-linecap:round;fill:none}
+.walker .antenna.dark{stroke:#412402;stroke-width:.9}
+/* garden gnome */
+.walker .coat{fill:var(--leaf)}
+.walker .beard{fill:#f0e6d8}
+.walker .face{fill:#f0cdb4}
+.walker .gcheek{fill:#e9a17c;opacity:.6}
+.walker .hat{fill:#d85a30}
+.walker .hat-brim{fill:#c14d27}
+.walker .boot{stroke:#4a3826;stroke-width:2.2}
+.walker .coat-arm{stroke:var(--leaf)}
+.cstats .alt2{color:var(--muted);font-weight:400}
+
+/* ---- planting history ---- */
+.histwrap{margin-top:12px;border-top:1px dashed var(--line);padding-top:8px}
+.histbody{margin-top:8px}
+.histbody[hidden]{display:none}
+#histsummary{font-weight:600;text-transform:none;letter-spacing:0;color:var(--muted)}
+.hrow{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;font-size:13px;
+  padding:4px 0;border-bottom:1px solid var(--tint)}
+.hrow:last-child{border-bottom:0}
+.hcell{font-weight:700;color:var(--leaf);min-width:44px}
+.hseed{color:var(--fir);font-weight:600}
+.houtcome{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;
+  border-radius:6px;padding:1px 7px}
+.houtcome.ok{background:var(--good-bg);color:var(--good)}
+.houtcome.bad{background:var(--bad-bg);color:var(--bad)}
+.hwhen{color:var(--muted);font-size:12px}
+.hrestore{margin:0 0 0 auto;padding:2px 10px;font-size:12px;font-weight:600;
+  background:none;box-shadow:none;color:var(--leaf);border:1px solid var(--line);
+  border-radius:8px}
+.hrestore:hover{background:var(--tint);color:var(--fir)}
+.tdied{background:var(--bad)}
+.tdied:hover{background:#8d3a24}
+.themebtn{margin:0;padding:5px 12px;font-size:13px;font-weight:600;
+  background:none;box-shadow:none;color:var(--leaf);
+  border:1px solid var(--line);border-radius:8px;white-space:nowrap}
+.themebtn:hover{background:var(--tint);color:var(--fir)}

@@ -220,6 +220,9 @@ echo "==> [4/7] Python venv and dependencies"
 "$APP_DIR/venv/bin/pip" install --quiet --upgrade pip
 echo "    core ..."
 "$APP_DIR/venv/bin/pip" install --quiet astral rpi-hardware-pwm flask gpiozero lgpio
+# a real WSGI server; growlight falls back to Flask's dev server without it
+"$APP_DIR/venv/bin/pip" install --quiet waitress \
+  || echo "    waitress unavailable; the dev server will be used instead"
 
 # Sensor drivers. Each is optional at runtime: sensors.py probes for the device
 # and disables that reading if either the library or the hardware is absent, so

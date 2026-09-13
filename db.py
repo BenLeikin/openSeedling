@@ -67,6 +67,27 @@ def init():
             detail TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
+
+        -- Finished plantings. A cell is cleared when its plant is transplanted
+        -- or dies, so this is where the germination record actually lives:
+        -- without it, every transplant would silently delete a data point from
+        -- the variety's success rate.
+        CREATE TABLE IF NOT EXISTS plantings (
+            id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts        INTEGER NOT NULL,   -- when the record was written
+            tray      TEXT    NOT NULL,
+            cell      TEXT    NOT NULL,
+            seed      TEXT,
+            equipment TEXT,
+            planted   TEXT,               -- ISO dates, as the tray stores them
+            sprouted  TEXT,
+            ended     TEXT,
+            outcome   TEXT    NOT NULL,   -- 'transplanted' | 'died'
+            count     INTEGER,
+            source    TEXT,
+            notes     TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_plantings_ts ON plantings(ts);
     """)
     c.commit()
 
@@ -135,6 +156,41 @@ def latest(sensors=None, max_age_days=7):
     if sensors is not None:
         out = {k: v for k, v in out.items() if k in sensors}
     return out
+
+
+def add_planting(rec):
+    """Record a finished planting. Returns its row id."""
+    c = _c()
+    cur = c.execute(
+        "INSERT INTO plantings (ts, tray, cell, seed, equipment, planted, "
+        "sprouted, ended, outcome, count, source, notes) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (int(time.time()), str(rec.get("tray", "")), str(rec.get("cell", "")),
+         rec.get("seed") or "", rec.get("equipment") or "",
+         rec.get("planted") or "", rec.get("sprouted") or "",
+         rec.get("ended") or "", rec.get("outcome") or "transplanted",
+         int(rec.get("count") or 0), rec.get("source") or "",
+         rec.get("notes") or ""))
+    c.commit()
+    return cur.lastrowid
+
+
+def plantings(limit=500):
+    """Finished plantings, newest first."""
+    cols = ("id", "ts", "tray", "cell", "seed", "equipment", "planted",
+            "sprouted", "ended", "outcome", "count", "source", "notes")
+    rows = _c().execute(
+        f"SELECT {', '.join(cols)} FROM plantings ORDER BY ts DESC, id DESC "
+        "LIMIT ?", (int(limit),)).fetchall()
+    return [dict(zip(cols, r)) for r in rows]
+
+
+def delete_planting(pid):
+    """Remove one history row (used when a cell is restored)."""
+    c = _c()
+    n = c.execute("DELETE FROM plantings WHERE id=?", (int(pid),)).rowcount
+    c.commit()
+    return n
 
 
 def recent_events(limit=50):

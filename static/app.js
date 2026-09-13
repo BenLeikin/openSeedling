@@ -519,6 +519,13 @@ function fillForm(cfg){
     f.elements['capture_enabled'].checked=!!cfg['capture_enabled'];
   if(f.elements['camera_enabled']&&document.activeElement!==f.elements['camera_enabled'])
     f.elements['camera_enabled'].checked=!!cfg['camera_enabled'];
+  applyTheme(cfg['theme']||'auto');
+  if(f.elements['little_buddy']&&!formHolds('little_buddy',cfg))
+    f.elements['little_buddy'].checked=cfg['little_buddy']!==false;
+  buddyOn = cfg['little_buddy']!==false;
+  if(f.elements['buddy_model']&&!formHolds('buddy_model',cfg))
+    f.elements['buddy_model'].value=cfg['buddy_model']||'sprout';
+  buddyPick = cfg['buddy_model']||'sprout';
 }
 
 let frames=[],fidx=0,ptimer=null;
@@ -697,6 +704,7 @@ let sensorData={};
 let sampleMin=5, capMin=30, capOn=false, camHealth=null, presTrend=null, lightMetrics=null;
 let probeCal={}, probeNames={}, probeDefaultCal=null;   // per-tray anchors, labels, fallback
 let probeFlags={};             // per-tray below_wet/above_dry from the server
+let filteredVals={};           // sensor -> transient-filtered value
 function probePct(c, v){
   if(!c || c.wet==null || c.dry==null || (c.dry-c.wet)<0.05) return null;
   return Math.max(0, Math.min(100, 100*(c.dry-v)/(c.dry-c.wet)));
@@ -809,6 +817,7 @@ function renderSensors(j){
   probeCal=(j.settings&&j.settings.probe_cal)||{};
   probeNames=(j.settings&&j.settings.probe_names)||{};
   probeFlags=j.probe_cal_flags||{};
+  filteredVals=j.filtered||{};   // smoothed values for the chips; charts stay raw
   if(j.probe_default_cal)probeDefaultCal=j.probe_default_cal;
   presTrend=j.pressure_tendency||null;
   lightMetrics=j.light_metrics||null;
@@ -838,7 +847,10 @@ function renderSensors(j){
     if(k.startsWith('float:')||k.startsWith('reservoir:'))continue; // shown in the water controls instead
     if(k.startsWith('growth')||k.startsWith('dry:')||k.startsWith('moisture:'))
       continue;                               // drawn as tray grids below
-    const v=sensorData[k].value;
+    // chips show the smoothed value so the readout matches what the alerts
+    // judge; the charts below keep the raw series
+    const raw=sensorData[k].value;
+    const v=(k in filteredVals && filteredVals[k]!=null) ? filteredVals[k] : raw;
     const missing = v==null || (typeof v==='number'&&isNaN(v));
     const m=sensorMeta(k, missing?0:v);
     m.key0=k;
@@ -911,6 +923,18 @@ const CHART_SECTIONS=[
 ];
 let seriesData={}, chartPlots={}, soilTempHigh=85, soilTempLow=80;
 let humHigh=60, humLow=40;
+// lux and PPFD are the same measurement in two units, so the lux card names
+// both rather than the app drawing two identical charts
+function ppfdFromLux(lx){
+  const k=Number(S&&S.settings&&S.settings.lux_to_ppfd_k)||0;
+  const cf=Number(S&&S.settings&&S.settings.canopy_factor)||1;
+  return k>0 ? lx*cf/k : null;
+}
+function chartHeadUnit(key){
+  if(key!=='lux')return chartUnitFor(key);
+  return ppfdFromLux(1)==null ? 'lx' : 'lx \u00b7 \u00b5mol/m\u00b2/s';
+}
+
 function chartUnitFor(s){
   if(s.startsWith('temp:'))return tUnit();
   if(s.startsWith('humidity')||s.startsWith('canopy:'))return '%';
@@ -947,7 +971,10 @@ function renderChartGrid(){
   if(!grid)return;
   // remember which cards are open: the grid is rebuilt on every reload
   document.querySelectorAll('.ccard.expanded').forEach(c=>expandedCharts.add(c.id));
-  const keys=Object.keys(seriesData).filter(k=>!k.startsWith('float:')&&!k.startsWith('reservoir:')).sort();
+  // PPFD is lux scaled by a constant, so a separate card would draw the same
+  // line twice. It rides along on the lux chart as a second unit instead.
+  const keys=Object.keys(seriesData).filter(k=>!k.startsWith('float:')
+    &&!k.startsWith('reservoir:')&&k!=='ppfd').sort();
   if(!keys.length){
     const haveNow=Object.keys(sensorData||{}).length>0;
     grid.innerHTML='<div class="emptystate">'
@@ -970,7 +997,7 @@ function renderChartGrid(){
     for(const k of mine){
       const m=sensorMeta(k,0);
       h+=`<div class="ccard" id="cc-${cssId(k)}">
-            <div class="chead"><span>${m.label}<span class="cunit">${chartUnitFor(k)}</span></span>
+            <div class="chead"><span>${m.label}<span class="cunit">${chartHeadUnit(k)}</span></span>
               <span class="cstats" id="cs-${cssId(k)}">&mdash;</span>
               <button type="button" class="cexpand" data-key="${cssId(k)}"
                       title="Expand this chart" aria-label="Expand ${m.label} chart">\u2922</button></div>
@@ -1041,11 +1068,46 @@ function drawMini(key){
   let h='';
   for(let i=0;i<=2;i++){const yy=P+(H-B-P)*i/2;
     h+=`<line x1="${P}" y1="${yy}" x2="${W-P}" y2="${yy}" stroke="#e6f0de" stroke-width="1"/>`;}
-  const line=data.map(d=>`${sx(d[0]).toFixed(1)},${sy(d[1]).toFixed(1)}`).join(' ');
-  const area=`${P},${H-B} ${line} ${W-P},${H-B}`;
-  h+=`<polygon points="${area}" fill="rgba(74,124,89,0.10)"/>`;
-  h+=`<polyline fill="none" stroke="#4a7c59" stroke-width="1.8" points="${line}"
-        pathLength="1" class="cline" vector-effect="non-scaling-stroke"/>`;
+  // Split the series where sampling stopped. Drawing one unbroken line across
+  // an outage claims readings that were never taken; each run of real data is
+  // solid, and the interval between runs is a faint dashed bridge so the shape
+  // still reads while the absence is visible.
+  const gaps=[];
+  for(let i=1;i<data.length;i++)gaps.push(data[i][0]-data[i-1][0]);
+  const sorted=gaps.slice().sort((a,b)=>a-b);
+  const typical=sorted.length?sorted[Math.floor(sorted.length/2)]:0;
+  // 2.5x the usual spacing: tolerant of jitter, tight enough to catch a
+  // restart or a sensor dropping out for a couple of cycles
+  const gapLimit=typical>0 ? typical*2.5 : Infinity;
+  const runs=[]; let run=[data[0]];
+  for(let i=1;i<data.length;i++){
+    if(data[i][0]-data[i-1][0]>gapLimit){runs.push(run);run=[];}
+    run.push(data[i]);
+  }
+  runs.push(run);
+  const pt=d=>`${sx(d[0]).toFixed(1)},${sy(d[1]).toFixed(1)}`;
+  for(const r of runs){
+    if(r.length<2){
+      // a lone sample between two outages still deserves to be visible
+      if(r.length===1)
+        h+=`<circle cx="${sx(r[0][0]).toFixed(1)}" cy="${sy(r[0][1]).toFixed(1)}"
+              r="2" fill="#4a7c59"/>`;
+      continue;
+    }
+    const seg=r.map(pt).join(' ');
+    const x0s=sx(r[0][0]).toFixed(1), x1s=sx(r[r.length-1][0]).toFixed(1);
+    h+=`<polygon points="${x0s},${H-B} ${seg} ${x1s},${H-B}"
+          fill="rgba(74,124,89,0.10)"/>`;
+    h+=`<polyline fill="none" stroke="#4a7c59" stroke-width="1.8" points="${seg}"
+          pathLength="1" class="cline" vector-effect="non-scaling-stroke"/>`;
+  }
+  for(let i=1;i<runs.length;i++){
+    const a0=runs[i-1][runs[i-1].length-1], b0=runs[i][0];
+    h+=`<line x1="${sx(a0[0]).toFixed(1)}" y1="${sy(a0[1]).toFixed(1)}"
+          x2="${sx(b0[0]).toFixed(1)}" y2="${sy(b0[1]).toFixed(1)}"
+          stroke="#4a7c59" stroke-width="1.4" stroke-dasharray="3 4" opacity="0.45"
+          vector-effect="non-scaling-stroke" class="cgap"/>`;
+  }
   if(key==='pressure'&&data.length>=4){
     // least-squares fit across the window: the slope is the weather signal
     const n=data.length;
@@ -1116,10 +1178,13 @@ function drawMini(key){
   const lastTs=xs[xs.length-1];
   const isStale=(Date.now()/1000-lastTs)>lim*60;
   svg.classList.toggle('cstale', isStale);
+  const ppfdNow = key==='lux' ? ppfdFromLux(cur) : null;
   if(stat)stat.innerHTML=`<b${over?' class="hot"':''}>${cur.toFixed(dec)}</b>`
+    +(ppfdNow!=null?` <span class="alt2">${Math.round(ppfdNow)} \u00b5mol</span>`:'')
     +` \u00b7 lo ${lo.toFixed(dec)} \u00b7 hi ${hi.toFixed(dec)}`
     +(isStale?` <span class="stalebadge" title="last point ${agoStr(new Date(lastTs*1000))}">stale</span>`:'');
   chartPlots[key]={unit,dec,W,H,P,B,big,
+    alt: key==='lux' ? ppfdFromLux : null,
     pts:data.map(d=>({x:sx(d[0]),y:sy(d[1]),v:d[1],t:d[0]})),
     fmt:t=>new Date(t*1000).toLocaleString([],{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})};
 }
@@ -1144,7 +1209,11 @@ function chartMove(e){
   // value rides on the crosshair itself, so it reads without a floating tooltip
   if(lbl){
     const txt=lbl.querySelector('text'), rect=lbl.querySelector('rect');
-    const s1=`${best.v.toFixed(plot.dec)}${plot.unit}`;
+    let s1=`${best.v.toFixed(plot.dec)}${plot.unit}`;
+    if(plot.alt){                       // lux: name the PPFD equivalent too
+      const p=plot.alt(best.v);
+      if(p!=null)s1+=` / ${Math.round(p)} \u00b5mol`;
+    }
     const s2=plot.fmt(best.t);
     const label=plot.big?`${s1}  \u00b7  ${s2}`:s1;
     txt.textContent=label;
@@ -1400,6 +1469,7 @@ function renderTrays(j){
         const hcl=f=>hid.has(f)?' fhidden':'';
         h+=`<div class="${cls.join(' ')}" data-tray="${id}" data-cell="${cid}"
               data-sprouted="${esc(v.sprouted||'')}" data-archived="${esc(v.archived||'')}"
+              data-seed="${esc(v.seed||'')}"
               data-hide="${esc((v.hide||[]).join(','))}">
               <span class="tid">${cid}<span class="tage">${badge}</span>
                 <button type="button" class="tfields editonly" aria-label="Choose fields for ${cid}"
@@ -1432,10 +1502,14 @@ function renderTrays(j){
                         title="${v.sprouted?'Mark as not sprouted':'Mark sprouted today'}"
                         ><span class="blong">${v.sprouted?'Un-sprout':'Sprouted'}</span><span
                          class="bshort">${v.sprouted?'\u21b6':'\u2713'}</span></button>
-                <button type="button" class="tarch" data-cell="${cid}" data-tray="${id}"
-                        title="${v.archived?'Restore this cell':'Mark transplanted out'}"
-                        ><span class="blong">${v.archived?'Restore':'Archive'}</span><span
-                         class="bshort">${v.archived?'\u21ba':'\u2913'}</span></button>
+                <button type="button" class="tmoved" data-cell="${cid}" data-tray="${id}"
+                        title="Potted on: record it and empty the cell"
+                        ><span class="blong">Transplanted</span><span
+                         class="bshort">\u2913</span></button>
+                <button type="button" class="tdied" data-cell="${cid}" data-tray="${id}"
+                        title="Lost it: record it and empty the cell"
+                        ><span class="blong">Died</span><span
+                         class="bshort">\u2715</span></button>
               </div>
             </div>`;
       }
@@ -1633,8 +1707,49 @@ function initTrays(){
     wrap.dataset.sig=JSON.stringify(trays);
     saveTray(cell.dataset.tray);
   });
-  wrap.addEventListener('click',ev=>{
-    const b=ev.target.closest('.tsprout,.tarch');
+  wrap.addEventListener('click',async ev=>{
+    const end=ev.target.closest('.tmoved,.tdied');
+    if(end){
+      const outcome=end.classList.contains('tdied')?'died':'transplanted';
+      const cell=end.closest('.tcell');
+      const seed=(cell.dataset.seed||'').trim();
+      const what=seed?`"${seed}" in ${cell.dataset.cell}`:cell.dataset.cell;
+      if(!window.confirm(`Record ${what} as ${outcome} and empty the cell?\n\n`
+        +`It stays in the planting history and still counts toward this `
+        +`variety's germination rate.`))return;
+      // the button keeps focus after a click, and renderTrays deliberately
+      // skips re-rendering while focus is inside the tray area (so a poll can't
+      // clobber typing). Drop focus or the cell appears to do nothing until the
+      // next manual refresh.
+      end.blur();
+      const tr=cell.dataset.tray, cid=cell.dataset.cell;
+      // Hold off tray re-renders until our own refresh lands. A poll started
+      // before this POST returns pre-delete data, and without the guard it
+      // repaints the cell straight back in.
+      // Held across the refresh, not just the POST: releasing it earlier lets a
+      // poll that started before the delete repaint the cell straight back in.
+      trayPending++;
+      let done=false;
+      try{
+        const r=await fetch('/api/planting_end',{method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({tray:tr,cell:cid,outcome})});
+        const j=await r.json().catch(()=>({}));
+        if(j.ok)done=true; else alert(j.error||'Could not record that.');
+      }catch(e){alert('Request failed.');}
+      if(!done){trayPending=Math.max(0,trayPending-1);return;}
+      // empty it locally and on screen now, so the click has a visible effect
+      // instead of waiting on a round trip
+      if(trays[tr]&&trays[tr].cells)delete trays[tr].cells[cid];
+      clearCellUI(cell);
+      const wrapEl=document.getElementById('trayswrap');
+      if(wrapEl)wrapEl.dataset.sig=JSON.stringify(trays);
+      loadPlantings();
+      try{ await refresh(); }
+      finally{ trayPending=Math.max(0,trayPending-1); }
+      return;
+    }
+    const b=ev.target.closest('.tsprout');
     if(!b)return;
     const cell=b.closest('.tcell');
     const field=b.classList.contains('tsprout')?'sprouted':'archived';
@@ -1666,6 +1781,137 @@ function initTrays(){
     saveTray(tray);
   });
 }
+// ---- planting history ----
+// Cells are cleared when a plant is transplanted or lost, so this is where the
+// record of what grew where actually lives.
+let plantingHistory=[];
+async function loadPlantings(){
+  try{
+    const r=await fetch('/api/plantings');
+    const j=await r.json();
+    plantingHistory=j.plantings||[];
+  }catch(e){plantingHistory=[];}
+  renderPlantings();
+}
+function renderPlantings(){
+  const wrap=document.getElementById('histwrap');
+  const body=document.getElementById('histbody');
+  const sum=document.getElementById('histsummary');
+  if(!wrap||!body)return;
+  if(!plantingHistory.length){wrap.style.display='none';return;}
+  wrap.style.display='';
+  const died=plantingHistory.filter(p=>p.outcome==='died').length;
+  const moved=plantingHistory.length-died;
+  if(sum)sum.textContent=`\u00b7 ${moved} transplanted, ${died} lost`;
+  let h='';
+  for(const p of plantingHistory){
+    const days=(p.planted&&p.sprouted)
+      ? Math.round((new Date(p.sprouted)-new Date(p.planted))/86400000) : null;
+    const bits=[];
+    if(p.planted)bits.push('sown '+esc(p.planted));
+    bits.push(p.sprouted?`sprouted ${esc(p.sprouted)}${days!=null?` (${days}d)`:''}`
+                        :'never sprouted');
+    if(p.ended)bits.push(esc(p.ended));
+    h+=`<div class="hrow">
+          <span class="hcell">${esc(p.tray)}/${esc(p.cell)}</span>
+          <span class="hseed">${esc(p.seed||'(no variety)')}</span>
+          <span class="houtcome ${p.outcome==='died'?'bad':'ok'}">${esc(p.outcome)}</span>
+          <span class="hwhen">${bits.join(' \u00b7 ')}</span>
+          <button type="button" class="hrestore editonly" data-id="${p.id}"
+                  title="Put this back in its cell">restore</button>
+        </div>`;
+  }
+  body.innerHTML=h;
+  applyAuthTo(body);
+}
+function applyAuthTo(el){
+  el.querySelectorAll('.editonly').forEach(e=>{e.style.display=canEdit?'':'none';});
+}
+function initPlantings(){
+  const t=document.getElementById('histtoggle'), b=document.getElementById('histbody');
+  if(t&&b)t.addEventListener('click',()=>{
+    const open=b.hasAttribute('hidden');
+    if(open)b.removeAttribute('hidden'); else b.setAttribute('hidden','');
+    t.setAttribute('aria-expanded', open?'true':'false');
+  });
+  if(b)b.addEventListener('click',async ev=>{
+    const btn=ev.target.closest('.hrestore');
+    if(!btn)return;
+    btn.blur();
+    try{
+      const r=await fetch('/api/planting_restore',{method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({id:Number(btn.dataset.id)})});
+      const j=await r.json().catch(()=>({}));
+      if(!j.ok){alert(j.error||'Could not restore that.');return;}
+    }catch(e){alert('Request failed.');return;}
+    const wrapEl=document.getElementById('trayswrap');
+    if(wrapEl)wrapEl.dataset.sig='';       // the restored cell must reappear now
+    refresh(); loadPlantings();
+  });
+  loadPlantings();
+}
+
+// Empty a cell in place. Used for the instant feedback after Transplanted or
+// Died: the authoritative redraw follows from the next status, but the click
+// should not look ignored while that round trip happens.
+function clearCellUI(cell){
+  cell.querySelectorAll('input,textarea').forEach(el=>{
+    el.value='';
+    el.setAttribute('value','');   // keep the attribute in step with the
+  });                              // property, so the markup stays honest
+  cell.dataset.sprouted=''; cell.dataset.archived=''; cell.dataset.seed='';
+  cell.classList.remove('sprouted','archived','filled');
+  const age=cell.querySelector('.tage'); if(age)age.textContent='';
+  const st=cell.querySelector('.tstat'); if(st)st.textContent='';
+}
+
+// Theme: "auto" leaves it to the device's own preference, which the stylesheet
+// handles through a media query; light and dark force it with an attribute.
+// The browser chrome colour is kept in step so the phone address bar matches.
+// The header button names the mode it will switch you to, which is how a
+// two-state toggle stays unambiguous: "Dark Mode" means pressing it gives you
+// dark. "auto" resolves to whatever the device is currently doing, so the
+// first press always lands on the opposite of what you can see.
+let themeMode='auto';
+function isDarkNow(mode){
+  return mode==='dark' || (mode!=='light' && window.matchMedia
+    && window.matchMedia('(prefers-color-scheme: dark)').matches);
+}
+function labelTheme(){
+  const btn=document.getElementById('themebtn');
+  if(btn)btn.textContent = isDarkNow(themeMode) ? 'Light Mode' : 'Dark Mode';
+}
+async function toggleTheme(){
+  const next = isDarkNow(themeMode) ? 'light' : 'dark';
+  themeMode=next;
+  applyTheme(next);                    // instant: never wait on the round trip
+  try{
+    const r=await fetch('/api/settings',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({theme:next})});
+    const j=await r.json().catch(()=>({}));
+    if(r.status===401||!j.ok)return;    // read-only: it still applies for this visit
+    pendingSave.theme=next;             // hold it until a status echoes it back
+  }catch(e){}
+}
+function initTheme(){
+  const btn=document.getElementById('themebtn');
+  if(btn)btn.addEventListener('click',toggleTheme);
+  labelTheme();
+}
+
+function applyTheme(mode){
+  const root=document.documentElement;
+  if(mode==='light'||mode==='dark')root.setAttribute('data-theme',mode);
+  else root.removeAttribute('data-theme');
+  const dark = mode==='dark' || (mode!=='light' && window.matchMedia
+    && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  const meta=document.querySelector('meta[name="theme-color"]');
+  if(meta)meta.setAttribute('content', dark?'#141a15':'#f0f6ea');
+  themeMode=mode;
+  labelTheme();
+}
+
 function initSensors(){
   const pmap={probewet1:['1','wet'],probedry1:['1','dry'],probewet2:['2','wet'],probedry2:['2','dry']};
   for(const id in pmap){const b=document.getElementById(id);
@@ -1959,6 +2205,11 @@ document.getElementById('cfgform').addEventListener('submit',async ev=>{
   body.capture_enabled=f.elements['capture_enabled'].checked;
   if(f.elements['camera_enabled'])
     body.camera_enabled=f.elements['camera_enabled'].checked;
+  if(f.elements['little_buddy'])
+    body.little_buddy=f.elements['little_buddy'].checked;
+
+  if(f.elements['buddy_model'])
+    body.buddy_model=f.elements['buddy_model'].value;
   msg.textContent='Planting...';msg.className='';
   try{
     const r=await fetch('/api/settings',{method:'POST',
@@ -2212,6 +2463,254 @@ async function startSweep(){
   }catch(e){if(info)info.textContent='request failed';}
 }
 let sweepRunning=false, lastCurve=null;
+// ---- the wandering seedling ----
+// Every half minute a small seedling crosses one card, entering and leaving
+// behind its edge. It sits at z-index:-1 inside the card, so it walks BEHIND
+// the chips and buttons rather than over them.
+let buddyOn=true;        // mirrors the "little buddy" setting
+let buddyPick='sprout';  // 'sprout' | 'pepper' | 'cat' | 'random'
+function buddyModel(){
+  if(buddyPick!=='random')return buddyPick in BUDDY_SPRITES ? buddyPick : 'sprout';
+  const keys=Object.keys(BUDDY_SPRITES);
+  return keys[Math.floor(Math.random()*keys.length)];
+}
+const WALK_EVERY_MS=30000;
+// walk in, stop and wave, walk out. The pause fractions must match the
+// walk-across keyframes in the stylesheet (36% and 64%).
+const WALK_DUR_MS=11000, PAUSE_START=0.36, PAUSE_END=0.64;
+let walkTimer=null;
+
+// Three characters, picked per outing. Each returns the SVG for one walker;
+// they share the walk cycle, so a new one is a sprite function plus a case
+// here, nothing more. The parts that animate carry fixed class names:
+// .legs/.leg-a/.leg-b step, .body bobs, .arm waves during the pause.
+const BUDDY_MODELS={sprout:'Potted sprout', pepper:'Chile pepper', cat:'Avey',
+  snail:'Snail', ladybug:'Ladybug', drop:'Raindrop', bee:'Bee', gnome:'Garden gnome'};
+
+function buddySprout(){
+  return `<g class="legs">
+      <line class="leg-a" x1="15" y1="26" x2="11" y2="33" style="transform-origin:15px 26px"/>
+      <line class="leg-b" x1="15" y1="26" x2="19" y2="33" style="transform-origin:15px 26px"/>
+    </g>
+    <g class="body" style="transform-origin:15px 26px">
+      <line class="stem" x1="15" y1="22" x2="15" y2="13"/>
+      <path class="leaf-l" d="M15 16c-5.5 0-8.5-2.8-8.5-6.6 4.7-1 8.5 1.9 8.5 6.6z"/>
+      <path class="leaf-r" d="M15 13.6c0-4.7 2.8-7.5 7.5-6.6.9 4.7-2.8 7.5-7.5 6.6z"/>
+      <path class="pot" d="M8.4 22h13.2l-1.5 8.2a1.6 1.6 0 0 1-1.6 1.3h-7a1.6 1.6 0 0 1-1.6-1.3z"/>
+      <rect class="pot-rim" x="7.6" y="20.2" width="14.8" height="2.6" rx="1"/>
+      <circle class="cheek" cx="10.9" cy="28.2" r="1.1"/>
+      <circle class="cheek" cx="19.1" cy="28.2" r="1.1"/>
+      <circle class="eye" cx="12.6" cy="26.4" r="0.9"/>
+      <circle class="eye" cx="17.4" cy="26.4" r="0.9"/>
+      <path class="mouth" d="M13.2 28.6q1.8 1.4 3.6 0"/>
+      <line class="arm" x1="20.6" y1="25.4" x2="25" y2="21.6" style="transform-origin:20.6px 25.4px"/>
+    </g>`;
+}
+
+function buddyPepper(){
+  return `<g class="legs">
+      <line class="leg-a" x1="15" y1="30" x2="11.5" y2="35" style="transform-origin:15px 30px"/>
+      <line class="leg-b" x1="15" y1="30" x2="18.5" y2="35" style="transform-origin:15px 30px"/>
+    </g>
+    <g class="body" style="transform-origin:15px 30px">
+      <path class="pod" d="M15 13c4.4 0 6.8 3.6 6.8 8.4 0 5.4-3 9-6.8 9s-6.8-3.6-6.8-9c0-4.8 2.4-8.4 6.8-8.4z"/>
+      <path class="calyx" d="M12.4 12.6h5.2l-0.6 1.9h-4z"/>
+      <line class="pstem" x1="15" y1="12.6" x2="15" y2="9.6"/>
+      <circle class="pcheek" cx="10.9" cy="23" r="1.1"/>
+      <circle class="pcheek" cx="19.1" cy="23" r="1.1"/>
+      <circle class="peye" cx="12.7" cy="21" r="0.95"/>
+      <circle class="peye" cx="17.3" cy="21" r="0.95"/>
+      <path class="pmouth" d="M13.2 23.4q1.8 1.5 3.6 0"/>
+      <line class="arm parm" x1="21.2" y1="21.4" x2="25.6" y2="17.6" style="transform-origin:21.2px 21.4px"/>
+    </g>`;
+}
+
+function buddyCat(){
+  // side profile: a cat walking across should look like it is going somewhere.
+  // The tail takes the place of the wave during the pause.
+  return `<g class="legs">
+      <line class="leg-a cleg" x1="9" y1="25" x2="9" y2="29.5" style="transform-origin:9px 25px"/>
+      <line class="leg-b cleg" x1="19.5" y1="25" x2="19.5" y2="29.5" style="transform-origin:19.5px 25px"/>
+    </g>
+    <g class="body" style="transform-origin:15px 25px">
+      <path class="arm tail" d="M22.5 22c1.6-0.6 2.6-2.2 2.2-3.8" style="transform-origin:22.5px 22px"/>
+      <path class="fur" d="M7.5 17.5h13.5a1.5 1.5 0 0 1 1.5 1.5v4.5a1.5 1.5 0 0 1-1.5 1.5H7.5a1.5 1.5 0 0 1-1.5-1.5V19a1.5 1.5 0 0 1 1.5-1.5z"/>
+      <circle class="fur" cx="9" cy="13" r="5.4"/>
+      <path class="fur" d="M4.8 9.6l-0.7-3.9 3.3 2z"/>
+      <path class="fur" d="M13.2 9.6l0.7-3.9-3.3 2z"/>
+      <path class="inner-ear" d="M5.3 9.2l-0.3-1.9 1.6 1z"/>
+      <path class="inner-ear" d="M12.7 9.2l0.3-1.9-1.6 1z"/>
+      <circle class="eye" cx="7" cy="12.6" r="0.95"/>
+      <circle class="eye" cx="11" cy="12.6" r="0.95"/>
+      <path class="inner-ear" d="M8.4 14.8h1.2l-0.6 0.7z"/>
+      <path class="whisker" d="M4.6 14.4L1.8 13.8"/>
+      <path class="whisker" d="M4.6 15.4L2 16"/>
+      <path class="whisker" d="M13.4 14.4L16.2 13.8"/>
+    </g>`;
+}
+
+function buddySnail(){
+  // the slow one: SNAIL_DUR overrides the shared duration so it actually
+  // reads as a snail rather than a shell on a normal walk cycle
+  return `<g class="legs">
+      <line class="leg-a stalk" x1="6.5" y1="24" x2="5" y2="19.5" style="transform-origin:6.5px 24px"/>
+      <line class="leg-b stalk" x1="9.5" y1="24" x2="10.5" y2="19.5" style="transform-origin:9.5px 24px"/>
+    </g>
+    <g class="body" style="transform-origin:15px 26px">
+      <path class="foot" d="M6 26h13c1.6 0 2.6-1 2.6-2.3 0-1.4-1.1-2.2-2.6-2.2h-2" fill="none"/>
+      <ellipse class="foot-pad" cx="8" cy="26" rx="6.5" ry="1.8"/>
+      <circle class="shell" cx="17" cy="19" r="6.4"/>
+      <path class="shell-line" d="M17 19a3.6 3.6 0 1 1 3.6-3.6" fill="none"/>
+      <path class="shell-line" d="M17 19a5.6 5.6 0 1 0 5.6-5.6" fill="none"/>
+      <circle class="eye" cx="5" cy="19" r="1.1"/>
+      <circle class="eye" cx="10.5" cy="19" r="1.1"/>
+      <path class="mouth" d="M6 27.4q1.6 1.2 3.2 0"/>
+      <line class="arm stalk-wave" x1="9.5" y1="24" x2="10.5" y2="19.5" style="transform-origin:9.5px 24px"/>
+    </g>`;
+}
+
+function buddyLadybug(){
+  return `<g class="legs">
+      <line class="leg-a bug-leg" x1="9" y1="27" x2="6" y2="31" style="transform-origin:9px 27px"/>
+      <line class="leg-b bug-leg" x1="21" y1="27" x2="24" y2="31" style="transform-origin:21px 27px"/>
+      <line class="leg-b bug-leg" x1="15" y1="27.5" x2="15" y2="31.5" style="transform-origin:15px 27.5px"/>
+    </g>
+    <g class="body" style="transform-origin:15px 27px">
+      <ellipse class="shell-red" cx="15" cy="21" rx="8" ry="7"/>
+      <path class="shell-dark" d="M15 14a8 7 0 0 0-8 7h8z"/>
+      <line class="wing-split" x1="15" y1="14" x2="15" y2="28"/>
+      <circle class="spot" cx="10.5" cy="19.5" r="1.5"/>
+      <circle class="spot" cx="19.5" cy="19.5" r="1.5"/>
+      <circle class="spot" cx="11.5" cy="24.5" r="1.2"/>
+      <circle class="spot" cx="18.5" cy="24.5" r="1.2"/>
+      <circle class="head-dark" cx="15" cy="13.5" r="4.4"/>
+      <circle class="eye-white" cx="13.3" cy="13" r="1"/>
+      <circle class="eye-white" cx="16.7" cy="13" r="1"/>
+      <path class="antenna" d="M12.4 10.4l-2.2-3"/>
+      <path class="antenna arm" d="M17.6 10.4l2.2-3" style="transform-origin:17.6px 10.4px"/>
+      <circle class="head-dark" cx="10.2" cy="7.4" r=".9"/>
+      <circle class="head-dark" cx="19.8" cy="7.4" r=".9"/>
+    </g>`;
+}
+
+function buddyDrop(){
+  return `<g class="legs">
+      <line class="leg-a drop-leg" x1="12.5" y1="27" x2="10" y2="33.5" style="transform-origin:12.5px 27px"/>
+      <line class="leg-b drop-leg" x1="17.5" y1="27" x2="20" y2="33.5" style="transform-origin:17.5px 27px"/>
+    </g>
+    <g class="body" style="transform-origin:15px 27px">
+      <path class="drop" d="M15 9c4 5 6.6 8.4 6.6 12A6.6 6.6 0 0 1 8.4 21c0-3.6 2.6-7 6.6-12z"/>
+      <path class="glint" d="M11.4 20.5a3.6 3.6 0 0 1 2.2-4.6" fill="none"/>
+      <circle class="dcheek" cx="10.6" cy="23.6" r="1.2"/>
+      <circle class="dcheek" cx="19.4" cy="23.6" r="1.2"/>
+      <circle class="eye" cx="12.8" cy="21.5" r="1.1"/>
+      <circle class="eye" cx="17.2" cy="21.5" r="1.1"/>
+      <path class="mouth" d="M13.2 24q1.8 1.5 3.6 0"/>
+      <line class="arm drop-arm" x1="20.9" y1="22.4" x2="25.4" y2="19" style="transform-origin:20.9px 22.4px"/>
+    </g>`;
+}
+
+function buddyBee(){
+  // the wings take the place of the wave: they blur during the pause
+  return `<g class="legs">
+      <line class="leg-a bug-leg" x1="12" y1="27" x2="10" y2="31.5" style="transform-origin:12px 27px"/>
+      <line class="leg-b bug-leg" x1="18" y1="27" x2="20" y2="31.5" style="transform-origin:18px 27px"/>
+    </g>
+    <g class="body" style="transform-origin:15px 27px">
+      <ellipse class="wing arm" cx="9.5" cy="14" rx="5.5" ry="3.6" style="transform-origin:13px 15px"/>
+      <ellipse class="wing" cx="20.5" cy="14" rx="5.5" ry="3.6"/>
+      <ellipse class="bee-body" cx="15" cy="21" rx="7.4" ry="6.6"/>
+      <path class="stripe" d="M9.2 17.6h11.6"/>
+      <path class="stripe" d="M8 22h14"/>
+      <path class="stripe" d="M9.6 26.2h10.8"/>
+      <circle class="beye" cx="12.6" cy="19.8" r="1.15"/>
+      <circle class="beye" cx="17.4" cy="19.8" r="1.15"/>
+      <path class="bmouth" d="M13 21.6q2 1.5 4 0"/>
+      <path class="antenna dark" d="M13 15.5l-1.4-3.4"/>
+      <path class="antenna dark" d="M17 15.5l1.4-3.4"/>
+    </g>`;
+}
+
+function buddyGnome(){
+  return `<g class="legs">
+      <line class="leg-a boot" x1="12.5" y1="28" x2="10.5" y2="33.5" style="transform-origin:12.5px 28px"/>
+      <line class="leg-b boot" x1="17.5" y1="28" x2="19.5" y2="33.5" style="transform-origin:17.5px 28px"/>
+    </g>
+    <g class="body" style="transform-origin:15px 28px">
+      <path class="coat" d="M9.4 29c0-5.4 2-8.6 5.6-8.6s5.6 3.2 5.6 8.6z"/>
+      <path class="beard" d="M15 25.6c-3.2 0-5.2-2.2-5.2-5.4h10.4c0 3.2-2 5.4-5.2 5.4z"/>
+      <circle class="face" cx="15" cy="16.5" r="4.3"/>
+      <circle class="gcheek" cx="11.4" cy="17.6" r="1.1"/>
+      <circle class="gcheek" cx="18.6" cy="17.6" r="1.1"/>
+      <circle class="eye" cx="13.3" cy="16" r=".95"/>
+      <circle class="eye" cx="16.7" cy="16" r=".95"/>
+      <path class="hat" d="M15 8.4c3.4 0 5.6 2.6 5.6 5.6H9.4c0-3 2.2-5.6 5.6-5.6z"/>
+      <ellipse class="hat-brim" cx="15" cy="14.2" rx="5.8" ry="1.1"/>
+      <line class="arm coat-arm" x1="19.3" y1="24.2" x2="23.6" y2="20.6" style="transform-origin:19.3px 24.2px"/>
+    </g>`;
+}
+
+const BUDDY_SPRITES={sprout:buddySprout, pepper:buddyPepper, cat:buddyCat,
+                     snail:buddySnail, ladybug:buddyLadybug, drop:buddyDrop,
+                     bee:buddyBee, gnome:buddyGnome};
+// the snail walks at its own pace; everything else shares the standard cycle
+const BUDDY_DURATION={snail:20000};
+// Sprites drawn in profile have a natural facing. The walk flips them with
+// scaleX so they always face the way they are travelling; a sprite drawn
+// facing LEFT needs the opposite sign from one drawn facing right, or it
+// moonwalks in one direction. Front-facing sprites are symmetric enough that
+// either sign looks correct.
+const BUDDY_FACES_LEFT={cat:true, snail:true};
+
+function walkerSvg(model){
+  const draw=BUDDY_SPRITES[model]||buddySprout;
+  return `<svg class="walker buddy-${model in BUDDY_SPRITES ? model : 'sprout'}" viewBox="0 0 30 36" aria-hidden="true" focusable="false">${draw()}</svg>`;
+}
+
+function walkOnce(){
+  // never interrupt: one seedling at a time, and none while the tab is hidden
+  if(!buddyOn || document.hidden || document.querySelector('.walkwrap'))return;
+  const cards=[...document.querySelectorAll('.card')].filter(c=>{
+    if(c.offsetParent===null)return false;              // hidden card
+    const r=c.getBoundingClientRect();
+    return r.width>200 && r.height>90;                  // room to walk
+  });
+  if(!cards.length)return;
+  const card=cards[Math.floor(Math.random()*cards.length)];
+  const wrap=document.createElement('div');
+  wrap.className='walkwrap';
+  const model=buddyModel();
+  wrap.innerHTML=walkerSvg(model);
+  const dur=BUDDY_DURATION[model]||WALK_DUR_MS;
+  card.appendChild(wrap);
+  const w=card.clientWidth, rtl=Math.random()<0.5;
+  const walker=wrap.querySelector('.walker');
+  // start and end fully outside the clip, so it emerges from behind the edge
+  walker.style.setProperty('--walk-from', (rtl? w+40 : -40)+'px');
+  walker.style.setProperty('--walk-to',   (rtl? -40 : w+40)+'px');
+  // stop somewhere in the middle third, not dead centre every time
+  const mid=Math.round(w*(0.34+Math.random()*0.32)) - 15;
+  walker.style.setProperty('--walk-mid',  (rtl? mid : mid)+'px');
+  // rtl means travelling right-to-left, so the character must face left
+  const facesLeft=!!BUDDY_FACES_LEFT[model];
+  walker.style.setProperty('--walk-dir',
+    facesLeft ? (rtl ? 1 : -1) : (rtl ? -1 : 1));
+  walker.style.setProperty('--walk-dur',  dur+'ms');
+  // legs stop and the arm waves only while it is standing still
+  const pauseAt=setTimeout(()=>walker.classList.add('pausing'), dur*PAUSE_START);
+  const resumeAt=setTimeout(()=>walker.classList.remove('pausing'), dur*PAUSE_END);
+  setTimeout(()=>{
+    clearTimeout(pauseAt); clearTimeout(resumeAt); wrap.remove();
+  }, dur+400);
+}
+
+function startWalker(){
+  if(walkTimer)return;
+  if(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches)
+    return;                       // no ambient motion for anyone who opted out
+  walkTimer=setInterval(walkOnce, WALK_EVERY_MS);
+}
+
 // ---- Pi health tiles ----
 function hostTile(label, value, sub, cls){
   // numeric tiles are short and keep the large size; text values (hostname, IP)
@@ -2377,11 +2876,13 @@ function renderDayProgress(j){
   // peak intensity reached today
   const stats=document.getElementById('daystats');
   if(stats){
+    // each pair wrapped so the label and value stay on one line together;
+    // a bare dt/dd sequence in a flex row separates them
     let h2='';
     if(day&&day.peak_ppfd!=null)
-      h2+=`<dt>Peak today</dt><dd>${Math.round(day.peak_ppfd)} <small>\u00b5mol</small></dd>`;
+      h2+=`<div><dt>Peak today</dt><dd>${Math.round(day.peak_ppfd)} <small>\u00b5mol</small></dd></div>`;
     if(day&&day.peak_lux!=null)
-      h2+=`<dt>Peak light</dt><dd>${Math.round(day.peak_lux).toLocaleString()} <small>lx</small></dd>`;
+      h2+=`<div><dt>Peak light</dt><dd>${Math.round(day.peak_lux).toLocaleString()} <small>lx</small></dd></div>`;
     stats.innerHTML=h2;
     stats.style.display=h2?'':'none';
   }
@@ -2468,7 +2969,7 @@ function renderFocus(j){
   const info=document.getElementById('focusinfo');
   const f=j.focus||{};
   const was=focusRunning; focusRunning=!!f.running;
-  if(btn)btn.textContent=focusRunning?'Cancel':'\uD83C\uDFAF Focus sweep';
+  if(btn)btn.textContent=focusRunning?'Cancel':'Focus sweep';
   if(focusRunning&&info)
     info.textContent=`sweeping\u2026 ${f.step}${f.total?'/'+f.total:''} points`;
   if(was&&!focusRunning&&info){
@@ -2598,6 +3099,6 @@ function initLight(){
     if(!dragging)setLight(null, +rng.value);
   });
 }
-[initAuth, initSensors, initGridSvg, initReport, initLight, initTrays, initSchedule, initTrayConfig, initCameraBackend].forEach(fn=>{  try{ fn(); }catch(e){ console.error(fn.name+' init failed:', e); }
+[initAuth, initSensors, initGridSvg, initReport, initLight, initTrays, initSchedule, initTrayConfig, initCameraBackend, initPlantings, initTheme, startWalker].forEach(fn=>{  try{ fn(); }catch(e){ console.error(fn.name+' init failed:', e); }
 });
 refresh();

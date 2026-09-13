@@ -90,17 +90,19 @@ def spike_or_step(values, jump=0.08, confirm=3, window=9):
     # departed from the baseline: do the last `confirm` samples agree?
     same_side = all((v - baseline) * (newest - baseline) > 0 for v in recent)
     tight = (max(recent) - min(recent)) <= jump
-    if same_side and all(abs(v - baseline) > jump for v in recent):
-        if tight:
+    if same_side:
+        if tight and all(abs(v - baseline) > jump for v in recent):
             return statistics.median(recent), "step"
-        # not tight, but if each reading is further from the baseline than the
-        # one before it, this is a sensor steadily moving (a tray drying over
-        # hours), not noise. Rejecting it would under-report dryness and delay
-        # watering, so accept the newest value and say so.
+        # A steadily moving sensor (a tray drying over hours, humidity climbing)
+        # is not noise. Requiring the FULL jump on every recent sample missed
+        # gradual movement and held the value at a lagging baseline, which would
+        # delay an alert exactly while the reading climbs toward it. Monotonic
+        # movement is the signal; half the threshold is enough to separate it
+        # from a spike decaying back to baseline.
         up = newest > baseline
         ordered = all((recent[i] - recent[i + 1] > 0) == up
                       for i in range(len(recent) - 1))
-        if ordered:
+        if ordered and all(abs(v - baseline) > jump / 2 for v in recent):
             return newest, "trend"
     return baseline, "spike"
 

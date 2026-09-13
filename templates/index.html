@@ -22,6 +22,8 @@
       <button type="button" id="logoutbtn" style="display:none">Log out</button>
       <span id="loginerr"></span>
     </span>
+    <button type="button" id="themebtn" class="themebtn"
+            title="Switch between light and dark">Dark Mode</button>
     <div id="clock">--:--:--</div>
   </div>
 </header>
@@ -224,6 +226,11 @@
 <div class="card atrays" id="traycard">
   <h2>&#127793; Planting map</h2>
   <div id="trayswrap"></div>
+  <div id="histwrap" class="histwrap" style="display:none">
+    <button type="button" id="histtoggle" class="qtoggle" aria-expanded="false">
+      Planting history <span id="histsummary"></span></button>
+    <div id="histbody" class="histbody" hidden></div>
+  </div>
   <div class="emptystate" id="trayhint" style="display:none">
     <b>Nothing planted yet.</b>
     <p>Type a seed name into any cell to start the map. Add the sow date and the
@@ -332,7 +339,7 @@
         <div class="usbonly manual-focus"><label>Focus (0 = near, 1023 = far)
           <input name="usb_focus_absolute" type="number" min="0" max="1023"></label></div>
         <div class="usbonly manual-focus focusrow">
-          <button type="button" id="focusbtn">&#127919; Focus sweep</button>
+          <button type="button" id="focusbtn">Focus sweep</button>
           <span id="focusinfo" role="status" class="fhint"></span>
         </div>
 
@@ -377,6 +384,19 @@
 
     <div class="fgroup">
       <h3>Display &amp; thresholds</h3>
+        <div class="checkrow"><input type="checkbox" name="little_buddy" id="lbuddy">
+          <label for="lbuddy">Little buddy</label>
+          <select name="buddy_model" id="lbuddymodel" aria-label="Little buddy character">
+            <option value="sprout">Potted sprout</option>
+            <option value="pepper">Chile pepper</option>
+            <option value="cat">Avey</option>
+            <option value="snail">Snail</option>
+            <option value="ladybug">Ladybug</option>
+            <option value="drop">Raindrop</option>
+            <option value="bee">Bee</option>
+            <option value="gnome">Garden gnome</option>
+            <option value="random">Surprise me</option>
+          </select></div>
       <div class="frow">
         <div><label>Units
           <select name="units">
@@ -437,7 +457,7 @@
           <input name="alert_dli_low" type="number" min="0" max="30" step="0.5"></label></div>
         <div><label>DLI alert ceiling (mol/m&#178;/day, 0 = off)
           <input name="alert_dli_high" type="number" min="0" max="80" step="0.5"></label></div>
-        <div><label>Probe smoothing (samples, 1 = off)
+        <div><label>Sensor smoothing (samples, 1 = off)
           <input name="probe_median_depth" type="number" min="1" max="15"></label></div>
       </div>
     </div>

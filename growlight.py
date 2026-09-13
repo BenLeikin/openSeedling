@@ -134,9 +134,13 @@ DEFAULTS = {
     "discord_webhook": "",      # set to enable Discord alerts (see discord_alert.py)
     "password_hash": "",        # set to enable login (see README); blank = open
     "cookie_secure": True,      # True for HTTPS; set False only for local http testing
-    "probe_median_depth": 5,    # rolling median over the last N logged probe
-                                # readings, used for decisions only (charts
-                                # stay raw); 1 disables the filter
+    "probe_median_depth": 5,    # smoothing depth: how many recent readings the
+                                # spike/step filter looks at. Applies to every
+                                # smoothed sensor, not just probes; 1 disables
+    "theme": "auto",            # "auto" follows the device, or force light/dark
+    "little_buddy": True,       # the character that wanders across a card every
+                                # half minute. Purely decorative; off by choice.
+    "buddy_model": "sprout",    # which character walks; "random" picks per outing
     "light_backend": "pwm",     # "pwm" = dimmable panel on GPIO; "kasa" = smart
                                 # plug (on/off only, fixture knob sets intensity)
     "auto_water": False,        # master switch; keep OFF until moisture calibrated
@@ -810,6 +814,69 @@ def compensated_volts(volts, cal, soil_temp_f):
     return volts - coeff * (soil_temp_f - ref)
 
 
+# How large a departure from the recent baseline counts as suspicious, per
+# sensor. These are in each sensor's own units, which is the whole point: 0.08V
+# is meaningful for a probe and meaningless for humidity. A value under the
+# threshold is passed through untouched, so ordinary drift is never filtered.
+SENSOR_JUMP = {
+    "probe:":    0.08,   # volts
+    "temp:soil": 2.0,    # Celsius; a real soil change is slower than this
+    "temp:air":  2.5,    # Celsius
+    "humidity":  6.0,    # percent
+    "pressure":  2.0,    # hPa
+    "canopy:":   5.0,    # percent of tray area
+}
+# Deliberately absent: lux. It legitimately steps by thousands the moment the
+# light switches or a capture raises brightness, and the DLI integration needs
+# the real values. Filtering it would either reject genuine transitions or
+# corrupt the day's light total.
+
+
+def sensor_jump(key):
+    best = None
+    for prefix, jump in SENSOR_JUMP.items():
+        if key.startswith(prefix) and (best is None or len(prefix) > len(best[0])):
+            best = (prefix, jump)
+    return best[1] if best else None
+
+
+def reading_filtered(key, snap=None):
+    """A sensor's latest value with single-sample transients rejected.
+
+    Same machinery as the probes: compare the newest reading against a baseline
+    of older ones, reject a lone excursion, accept a change that persists or
+    that moves steadily. Sensors without a jump threshold (lux) are returned
+    raw. Charts always show raw values; only decisions read this.
+
+    Returns (value, ts) or (None, None).
+    """
+    if snap is None:
+        snap = db.latest()
+    rec = snap.get(key)
+    if rec is None:
+        return None, None
+    ts, raw = rec
+    jump = sensor_jump(key)
+    if jump is None:
+        return raw, ts
+    with settings_lock:
+        depth = int(settings.get("probe_median_depth", 5))
+    if depth <= 1:
+        return raw, ts
+    try:
+        vals = db.recent_values(key, n=max(depth, PROBE_CONFIRM + 6))
+    except Exception as e:
+        print(f"filter fell back to raw for {key} ({e})")
+        return raw, ts
+    if len(vals) < 3:
+        return raw, ts
+    val, verdict = quality.spike_or_step(vals, jump=jump, confirm=PROBE_CONFIRM)
+    _filter_verdict[key] = verdict
+    return (val if val is not None else raw), ts
+
+
+_filter_verdict = {}    # sensor -> "steady" | "spike" | "step" | "trend"
+
 PROBE_JUMP_V = 0.08     # volts; a departure larger than this is judged
 PROBE_CONFIRM = 3       # consecutive agreeing readings that make it a step
 _probe_verdict = {}     # tray -> "steady" | "spike" | "step", for display
@@ -1056,15 +1123,47 @@ def gather_report_data():
         if rows:
             planting[t.get("label", f"Tray {tid}")] = rows
 
-    # per-variety germination: rate and average days, the numbers worth keeping
+    # Per-variety germination, from live cells AND finished plantings. A cell
+    # that was transplanted still germinated; one that died before sprouting is
+    # a real failure. Counting only what is currently in the trays would make
+    # the rate drift upward every time a success was potted on.
     germ = {}
+    hist = []
+    try:
+        hist = db.plantings(limit=500)
+    except Exception as e:
+        print(f"planting history unavailable ({e})")
+    for h in hist:
+        seed = (h.get("seed") or "").strip()
+        if not seed or not h.get("planted"):
+            continue
+        g = germ.setdefault(seed, {"sown": 0, "up": 0, "days": [],
+                                   "seeds": 0, "sources": set(),
+                                   "died": 0, "moved": 0})
+        g["sown"] += 1
+        g["seeds"] += int(h.get("count") or 0)
+        if h.get("source"):
+            g["sources"].add(h["source"])
+        if h.get("outcome") == "died":
+            g["died"] += 1
+        else:
+            g["moved"] += 1
+        if h.get("sprouted"):
+            g["up"] += 1
+            try:
+                d0 = datetime.strptime(h["planted"], "%Y-%m-%d").date()
+                d1 = datetime.strptime(h["sprouted"], "%Y-%m-%d").date()
+                g["days"].append((d1 - d0).days)
+            except ValueError:
+                pass
     for tid, t in sorted((cfg.get("trays") or {}).items()):
         for cid, v in (t.get("cells") or {}).items():
             seed = (v.get("seed") or "").strip()
             if not seed or not v.get("planted"):
                 continue
             g = germ.setdefault(seed, {"sown": 0, "up": 0, "days": [],
-                                       "seeds": 0, "sources": set()})
+                                       "seeds": 0, "sources": set(),
+                                       "died": 0, "moved": 0})
             g["sown"] += 1
             g["seeds"] += int(v.get("count") or 0)
             if v.get("source"):
@@ -1086,6 +1185,12 @@ def gather_report_data():
             line += f", avg {sum(g['days']) / len(g['days']):.1f}d to sprout"
         if g["sources"]:
             line += f", seed from {', '.join(sorted(g['sources']))}"
+        # losses are the signal the report needs to tell a variety that
+        # germinates badly from one that germinates and then damps off
+        if g.get("died"):
+            line += f", {g['died']} lost"
+        if g.get("moved"):
+            line += f", {g['moved']} transplanted out"
         germ_out[seed] = line
     bright = round(st.get("brightness") or 0)
     return {
@@ -1432,7 +1537,8 @@ def fan_should_run(cfg, now, on_time, off_time):
     """Decide the fan's state in auto mode. Returns (on, reason)."""
     rh = None
     try:
-        rh = (db.latest().get("humidity") or (None, None))[1]
+        # filtered: a single bad humidity reading should not kick the fan on
+        rh, _ = reading_filtered("humidity")
     except Exception:
         pass
     hum_on = cfg.get("fan_humidity_on", 0)
@@ -1561,7 +1667,17 @@ def run_alerts(readings):
             "dli_low": cfg.get("alert_dli_low", 4),
             "dli_high": cfg.get("alert_dli_high", 0),
         }
+        # The rules judge filtered values: a lone bad reading should not fire a
+        # soil-temperature or humidity alert, and the sustain window cannot help
+        # when the excursion lasts longer than one sample. Charts and the DLI
+        # code keep using the raw series.
         snap = dict(readings)
+        for key in list(snap):
+            if sensor_jump(key) is None or key.startswith("probe:"):
+                continue          # probes are handled by their own filter below
+            fv, _ = reading_filtered(key)
+            if fv is not None:
+                snap[key] = fv
 
         # the day's light total, judged once the day is over: only within a
         # window after lights-off is _dli present, so the rule fires at most
@@ -2378,6 +2494,87 @@ def probe_tempcomp():
     return jsonify(res)
 
 
+@app.route("/api/planting_end", methods=["POST"])
+@require_auth
+def api_planting_end():
+    """Finish a planting: record it to history, then clear the cell.
+
+    Body: {"tray": "1", "cell": "A1", "outcome": "transplanted"|"died"}.
+    The cell is emptied so it can be replanted immediately; everything it held
+    moves to the plantings table, which is what the germination stats read.
+    Clearing without recording would delete a data point from the variety's
+    success rate every time you potted something on.
+    """
+    data = request.get_json(silent=True) or {}
+    tray = str(data.get("tray", ""))
+    cell = str(data.get("cell", ""))
+    outcome = data.get("outcome")
+    if outcome not in ("transplanted", "died"):
+        return jsonify(ok=False, error="outcome must be transplanted or died"), 400
+    with settings_lock:
+        trays = settings.get("trays") or {}
+        t = trays.get(tray)
+        v = ((t or {}).get("cells") or {}).get(cell)
+        if not v:
+            return jsonify(ok=False, error="no such cell"), 404
+        rec = dict(v)
+    today = datetime.now(ZoneInfo(settings.get("timezone", "UTC"))).date().isoformat()
+    pid = db.add_planting({"tray": tray, "cell": cell, "ended": today,
+                           "outcome": outcome, **rec})
+    with settings_lock:
+        cells = settings["trays"][tray].setdefault("cells", {})
+        cells.pop(cell, None)
+        save_config()
+    label = (rec.get("seed") or "cell").strip()
+    db.log_event("planting", f"{tray}/{cell} {outcome}: {label}")
+    return jsonify(ok=True, id=pid, cleared=True)
+
+
+@app.route("/api/plantings")
+def api_plantings():
+    """Finished plantings, newest first. Readable without login, like the rest
+    of the dashboard."""
+    try:
+        return jsonify(plantings=db.plantings(limit=500))
+    except Exception as e:
+        return jsonify(plantings=[], error=str(e)[:120])
+
+
+@app.route("/api/planting_restore", methods=["POST"])
+@require_auth
+def api_planting_restore():
+    """Put a finished planting back in its cell, for a misclick.
+
+    Refused when the cell has since been replanted: silently overwriting a new
+    planting to undo an old mistake would be the worse failure.
+    """
+    data = request.get_json(silent=True) or {}
+    try:
+        pid = int(data.get("id"))
+    except (TypeError, ValueError):
+        return jsonify(ok=False, error="id required"), 400
+    row = next((p for p in db.plantings(limit=500) if p["id"] == pid), None)
+    if row is None:
+        return jsonify(ok=False, error="no such history entry"), 404
+    tray, cell = row["tray"], row["cell"]
+    with settings_lock:
+        t = (settings.get("trays") or {}).get(tray)
+        if not t:
+            return jsonify(ok=False, error=f"tray {tray} no longer exists"), 409
+        cells = t.setdefault("cells", {})
+        if cells.get(cell):
+            return jsonify(ok=False,
+                           error=f"{cell} has been replanted; clear it first"), 409
+        cells[cell] = {k: row.get(k) or "" for k in
+                       ("seed", "equipment", "planted", "sprouted", "source", "notes")}
+        cells[cell]["count"] = row.get("count") or 0
+        cells[cell]["archived"] = ""
+        save_config()
+    db.delete_planting(pid)
+    db.log_event("planting", f"{tray}/{cell} restored from history")
+    return jsonify(ok=True, tray=tray, cell=cell)
+
+
 @app.route("/api/trays", methods=["POST"])
 @require_auth
 def api_trays():
@@ -2790,6 +2987,9 @@ def status():
         # filtered volts per tray, so the readout matches what decisions use
         probe_filtered={t: probe_volts_filtered(t, snap)[0]
                         for t in [k[6:] for k in snap if k.startswith("probe:")]},
+        # and the same for every other smoothed sensor; charts stay raw
+        filtered={k: reading_filtered(k, snap)[0] for k in snap
+                  if sensor_jump(k) is not None and not k.startswith("probe:")},
         quality={
             "health": sensor_health(cfg, snap),
             # advisory only: cross-sensor checks can accuse the wrong sensor,
@@ -2890,6 +3090,11 @@ def pressure_tendency():
     if len(pts) < 4:
         return None
     now_ts, now_v = pts[-1]
+    # the current end of the trend is filtered: one bad sample at the newest
+    # point swings a 3-hour tendency across a band and mislabels the weather
+    fv, _ = reading_filtered("pressure")
+    if fv is not None:
+        now_v = fv
 
     def value_at(hours_ago):
         target = now_ts - hours_ago * 3600
@@ -3647,6 +3852,10 @@ SETTINGS_VALIDATORS = {
     "fill_max_seconds": _v_int(1, 600),
     "units": _v_choice("imperial", "metric"),
     "light_backend": _v_choice("pwm", "kasa"),
+    "little_buddy": _v_bool,
+    "theme": _v_choice("auto", "light", "dark"),
+    "buddy_model": _v_choice("sprout", "pepper", "cat", "snail", "ladybug",
+                             "drop", "bee", "gnome", "random"),
     "probe_median_depth": _v_int(1, 15),
     "schedule_mode": _v_choice("solar", "fixed", "duration"),
     "fixed_on": _v_hhmm,
@@ -3720,4 +3929,18 @@ if __name__ == "__main__":
     threading.Thread(target=watering_loop, daemon=True).start()
     threading.Thread(target=report_loop, daemon=True).start()
     print(f"Dashboard at http://0.0.0.0:{HTTP_PORT}")
-    app.run(host="0.0.0.0", port=HTTP_PORT, threaded=True)
+    # Waitress rather than Flask's development server: it is a real WSGI server,
+    # it stops the "do not use in production" warning filling the journal, and
+    # its worker threads can hold long-lived connections, which the dev server
+    # handles badly (that is what blocked server-sent events).
+    #
+    # Single process on purpose. The loops above own the PWM, the pumps and the
+    # I2C bus; a second worker process would mean two controllers driving the
+    # same hardware, so never run this under multiple workers.
+    try:
+        from waitress import serve
+        serve(app, host="0.0.0.0", port=HTTP_PORT, threads=16,
+              channel_timeout=120, ident="OpenSeedling")
+    except ImportError:
+        print("waitress not installed; falling back to the Flask dev server")
+        app.run(host="0.0.0.0", port=HTTP_PORT, threaded=True)
