@@ -1827,6 +1827,21 @@ function renderPlantings(){
 function applyAuthTo(el){
   el.querySelectorAll('.editonly').forEach(e=>{e.style.display=canEdit?'':'none';});
 }
+function initBackup(){
+  const box=document.getElementById('backupsecrets');
+  const btn=document.getElementById('backupbtn');
+  const info=document.getElementById('backupinfo');
+  if(!btn)return;
+  const sync=()=>{
+    btn.href = '/api/backup' + (box && box.checked ? '?secrets=1' : '');
+    if(info)info.textContent = (box && box.checked)
+      ? 'database, settings and .env \u2014 keep this file private'
+      : 'database, settings and planting history';
+  };
+  if(box)box.addEventListener('change',sync);
+  sync();
+}
+
 function initPlantings(){
   const t=document.getElementById('histtoggle'), b=document.getElementById('histbody');
   if(t&&b)t.addEventListener('click',()=>{
@@ -2216,6 +2231,13 @@ document.getElementById('cfgform').addEventListener('submit',async ev=>{
       headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     const j=await r.json();
     const errs=j.errors&&Object.keys(j.errors);
+    // a rejected field inside a collapsed section would be invisible: open the
+    // sections holding any errors so the message points at something on screen
+    for(const k of (errs||[])){
+      const el=f.elements[k];
+      const grp=el&&el.closest&&el.closest('details.fgroup');
+      if(grp)grp.open=true;
+    }
     // hold every accepted field until the server echoes it back
     for(const k of (j.saved||[]))
       if(k in body)pendingSave[k]=body[k];
@@ -3099,6 +3121,6 @@ function initLight(){
     if(!dragging)setLight(null, +rng.value);
   });
 }
-[initAuth, initSensors, initGridSvg, initReport, initLight, initTrays, initSchedule, initTrayConfig, initCameraBackend, initPlantings, initTheme, startWalker].forEach(fn=>{  try{ fn(); }catch(e){ console.error(fn.name+' init failed:', e); }
+[initAuth, initSensors, initGridSvg, initReport, initLight, initTrays, initSchedule, initTrayConfig, initCameraBackend, initPlantings, initBackup, initTheme, startWalker].forEach(fn=>{  try{ fn(); }catch(e){ console.error(fn.name+' init failed:', e); }
 });
 refresh();

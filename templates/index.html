@@ -251,75 +251,66 @@
   <summary><h2>&#127807; Settings</h2></summary>
   <form id="cfgform">
 
-    <div class="fgroup">
-      <h3>Schedule</h3>
+    <details class="fgroup">
+      <summary><h3>Alerts</h3></summary>
+      <p class="fhint">Discord alerts fire once a condition holds for the sustain
+        window, then stay quiet until it clears. Soil alerts use the target band
+        set above. Needs a webhook in secrets.</p>
       <div class="frow">
-        <div class="tzrow"><label>Mode <select name="schedule_mode">
-          <option value="solar">Follow sunrise and sunset</option>
-          <option value="fixed">Fixed on and off times</option>
-          <option value="duration">Fixed day length</option>
-        </select></label></div>
+        <div class="checkrow"><input type="checkbox" name="alerts_enabled" id="alen">
+          <label for="alen">Threshold alerts</label></div>
+        <div></div>
+        <div><label>Must hold for (min)
+          <input name="alert_sustain_min" type="number" min="1" max="120"></label></div>
+        <div><label>Remind every (hours)
+          <input name="alert_cooldown_hours" type="number" min="1" max="72"></label></div>
+        <div><label>Tray dry at or below (%)
+          <input name="alert_dry_pct" type="number" min="0" max="90"></label></div>
+        <div><label>Humidity high at (%, 0 = off)
+          <input name="alert_humidity_high" type="number" min="0" max="100"></label></div>
+        <div><label>DLI alert floor (mol/m&#178;/day, 0 = off)
+          <input name="alert_dli_low" type="number" min="0" max="30" step="0.5"></label></div>
+        <div><label>DLI alert ceiling (mol/m&#178;/day, 0 = off)
+          <input name="alert_dli_high" type="number" min="0" max="80" step="0.5"></label></div>
+        <div><label>Sensor smoothing (samples, 1 = off)
+          <input name="probe_median_depth" type="number" min="1" max="15"></label></div>
       </div>
+    </details>
 
-      <div class="modeblock" data-mode="solar">
-        <p class="fhint">Tracks the season: the light window follows local sunrise and
-          sunset, shifted by the offsets below.</p>
-        <div class="frow">
-          <div><label>Sunrise offset (min) <input name="sunrise_offset_min" type="number" min="-360" max="360"></label></div>
-          <div><label>Sunset offset (min) <input name="sunset_offset_min" type="number" min="-360" max="360"></label></div>
-        </div>
-      </div>
-
-      <div class="modeblock" data-mode="fixed">
-        <p class="fhint">The same clock times every day. An off time earlier than the on
-          time runs overnight.</p>
-        <div class="frow">
-          <div><label>Lights on <input name="fixed_on" type="time"></label></div>
-          <div><label>Lights off <input name="fixed_off" type="time"></label></div>
-        </div>
-      </div>
-
-      <div class="modeblock" data-mode="duration">
-        <p class="fhint">A constant day length anchored to the off time: lights-off stays
-          put and lights-on moves to give the hours you ask for.</p>
-        <div class="frow">
-          <div><label>Day length (hours) <input name="duration_hours" type="number" min="0" max="24" step="0.25"></label></div>
-          <div><label>Lights off <input name="duration_end" type="time"></label></div>
-        </div>
-      </div>
-    </div>
-
-    <div class="fgroup">
-      <h3>Location</h3>
-      <p class="fhint">Used for sunrise and sunset, and shown on the dashboard in every mode.</p>
+    <details class="fgroup">
+      <summary><h3>Auto-watering</h3></summary>
+      <p class="fhint">Fills a tray to its float when that tray's calibrated probe
+        reads dry. Arm it from the Water card; these set how it behaves.</p>
       <div class="frow">
-        <div><label>Latitude <input name="latitude" type="number" step="0.0001" min="-90" max="90" required></label></div>
-        <div><label>Longitude <input name="longitude" type="number" step="0.0001" min="-180" max="180" required></label></div>
-        <div class="tzrow"><label>Timezone <select name="timezone" required>
-          {% for z in tzs %}<option value="{{ z }}">{{ z }}</option>{% endfor %}
-        </select></label></div>
+        <div><label>Dry trigger (% moisture)
+          <input name="moisture_threshold_pct" type="number" min="1" max="90"></label></div>
+        <div><label>Cooldown between fills (min)
+          <input name="pump_cooldown_min" type="number" min="1" max="1440"></label></div>
+        <div><label>Fill time cap (s)
+          <input name="fill_max_seconds" type="number" min="1" max="600"></label></div>
+        <div><label>Daily pump limit (s)
+          <input name="pump_daily_max_seconds" type="number" min="1" max="3600"></label></div>
+        <div><label>Manual dose cap (s)
+          <input name="pump_max_seconds" type="number" min="1" max="120"></label></div>
       </div>
-    </div>
+    </details>
 
-    <div class="fgroup">
-      <h3>Light</h3>
-      <p class="fhint">The PWM backend drives a dimmable panel on the GPIO. The
-        smart plug backend switches an AC fixture on and off over the network:
-        there is no dimming, so the fixture's own knob sets intensity and
-        brightness, ramps and the response sweep do not apply.</p>
-      <div class="frow">
-        <div><label>Light output
-          <select name="light_backend">
-            <option value="pwm">Dimmable panel (GPIO PWM)</option>
-            <option value="kasa">Smart plug (on/off)</option>
-          </select></label></div>
-        <div><label>Max brightness (%) <input name="max_bright" type="number" min="1" max="100" required></label></div>
-        <div><label>Ramp length (min) <input name="ramp_min" type="number" min="0" max="240" required></label></div>
+    <details class="fgroup">
+      <summary><h3>Backup</h3></summary>
+      <p class="fhint">A restorable snapshot: the database (readings, events and
+        planting history), every setting and calibration, and a README with the
+        restore steps. Taken with SQLite's online backup, so it is consistent
+        even while the controller is writing. Grab one after any calibration or
+        replanting.</p>
+      <div class="backuprow">
+        <a class="dlbtn" id="backupbtn" href="/api/backup" download>Download backup</a>
+        <label class="bsec"><input type="checkbox" id="backupsecrets"> include .env secrets</label>
+        <span id="backupinfo" class="fhint">database, settings and planting history</span>
       </div>
-    </div>
+    </details>
 
-    <div class="fgroup">
-      <h3>Camera</h3>
+    <details class="fgroup">
+      <summary><h3>Camera</h3></summary>
       <div class="frow">
         <div class="tzrow"><label>Camera type
           <select name="camera_backend">
@@ -380,10 +371,10 @@
           top-down view. Unlock the grid to see the raw frame and drag the
           corners.</span></div>
       </div>
-    </div>
+    </details>
 
-    <div class="fgroup">
-      <h3>Display &amp; thresholds</h3>
+    <details class="fgroup">
+      <summary><h3>Display</h3></summary>
         <div class="checkrow"><input type="checkbox" name="little_buddy" id="lbuddy">
           <label for="lbuddy">Little buddy</label>
           <select name="buddy_model" id="lbuddymodel" aria-label="Little buddy character">
@@ -403,20 +394,41 @@
             <option value="imperial">Imperial (&deg;F, inHg)</option>
             <option value="metric">Metric (&deg;C, hPa)</option>
           </select></label></div>
-        <div><label>Soil target low (<span id="threshlolbl">&deg;F</span>, 0 = off)
-          <input name="soil_temp_low_f" type="number" min="0" max="150"></label></div>
-        <div><label>Soil target high (<span id="threshlbl">&deg;F</span>, 0 = off)
-          <input name="soil_temp_high_f" type="number" min="0" max="150"></label></div>
-        <div><label>Humidity band low (%, 0 = off)
-          <input name="humidity_low" type="number" min="0" max="100"></label></div>
-        <div><label>Humidity band high (%, 0 = off)
-          <input name="humidity_high" type="number" min="0" max="100"></label></div>
+      </div>
+    </details>
+
+    <details class="fgroup">
+      <summary><h3>Fan</h3></summary>
+      <div class="frow">
         <div><label>Fan on above RH (%, 0 = off)
           <input name="fan_humidity_on" type="number" min="0" max="100"></label></div>
         <div><label>Fan minimum speed (%, stall floor)
           <input name="fan_min_speed" type="number" min="0" max="100"></label></div>
         <div class="checkrow"><input type="checkbox" name="fan_with_light" id="fanlight">
           <label for="fanlight">Fan runs during the photoperiod</label></div>
+      </div>
+    </details>
+
+    <details class="fgroup">
+      <summary><h3>Light</h3></summary>
+      <p class="fhint">The PWM backend drives a dimmable panel on the GPIO. The
+        smart plug backend switches an AC fixture on and off over the network:
+        there is no dimming, so the fixture's own knob sets intensity and
+        brightness, ramps and the response sweep do not apply.</p>
+      <div class="frow">
+        <div><label>Light output
+          <select name="light_backend">
+            <option value="pwm">Dimmable panel (GPIO PWM)</option>
+            <option value="kasa">Smart plug (on/off)</option>
+          </select></label></div>
+        <div><label>Max brightness (%) <input name="max_bright" type="number" min="1" max="100" required></label></div>
+        <div><label>Ramp length (min) <input name="ramp_min" type="number" min="0" max="240" required></label></div>
+      </div>
+    </details>
+
+    <details class="fgroup">
+      <summary><h3>Light metrics</h3></summary>
+      <div class="frow">
         <div><label>Lux&rarr;PPFD factor (fixture spectrum, 0 = off)
           <input name="lux_to_ppfd_k" type="number" min="0" max="200" step="1"></label></div>
         <div><label>Canopy factor (sensor plane &rarr; canopy)
@@ -426,61 +438,85 @@
           of the seedlings and divide by the reading at the sensor; 1.0 if the sensor
           already sits at canopy height.</span></div>
       </div>
-    </div>
+    </details>
 
-    <div class="fgroup">
-      <h3>Trays</h3>
+    <details class="fgroup">
+      <summary><h3>Location</h3></summary>
+      <p class="fhint">Used for sunrise and sunset, and shown on the dashboard in every mode.</p>
+      <div class="frow">
+        <div><label>Latitude <input name="latitude" type="number" step="0.0001" min="-90" max="90" required></label></div>
+        <div><label>Longitude <input name="longitude" type="number" step="0.0001" min="-180" max="180" required></label></div>
+        <div class="tzrow"><label>Timezone <select name="timezone" required>
+          {% for z in tzs %}<option value="{{ z }}">{{ z }}</option>{% endfor %}
+        </select></label></div>
+      </div>
+    </details>
+
+    <details class="fgroup">
+      <summary><h3>Schedule</h3></summary>
+      <div class="frow">
+        <div class="tzrow"><label>Mode <select name="schedule_mode">
+          <option value="solar">Follow sunrise and sunset</option>
+          <option value="fixed">Fixed on and off times</option>
+          <option value="duration">Fixed day length</option>
+        </select></label></div>
+      </div>
+
+      <div class="modeblock" data-mode="solar">
+        <p class="fhint">Tracks the season: the light window follows local sunrise and
+          sunset, shifted by the offsets below.</p>
+        <div class="frow">
+          <div><label>Sunrise offset (min) <input name="sunrise_offset_min" type="number" min="-360" max="360"></label></div>
+          <div><label>Sunset offset (min) <input name="sunset_offset_min" type="number" min="-360" max="360"></label></div>
+        </div>
+      </div>
+
+      <div class="modeblock" data-mode="fixed">
+        <p class="fhint">The same clock times every day. An off time earlier than the on
+          time runs overnight.</p>
+        <div class="frow">
+          <div><label>Lights on <input name="fixed_on" type="time"></label></div>
+          <div><label>Lights off <input name="fixed_off" type="time"></label></div>
+        </div>
+      </div>
+
+      <div class="modeblock" data-mode="duration">
+        <p class="fhint">A constant day length anchored to the off time: lights-off stays
+          put and lights-on moves to give the hours you ask for.</p>
+        <div class="frow">
+          <div><label>Day length (hours) <input name="duration_hours" type="number" min="0" max="24" step="0.25"></label></div>
+          <div><label>Lights off <input name="duration_end" type="time"></label></div>
+        </div>
+      </div>
+    </details>
+
+    <details class="fgroup">
+      <summary><h3>Targets</h3></summary>
+      <p class="fhint">Bands drawn on the charts and used by the alerts. 0 turns
+        one off without disabling the rest.</p>
+      <div class="frow">
+        <div><label>Soil target low (<span id="threshlolbl">&deg;F</span>, 0 = off)
+          <input name="soil_temp_low_f" type="number" min="0" max="150"></label></div>
+        <div><label>Soil target high (<span id="threshlbl">&deg;F</span>, 0 = off)
+          <input name="soil_temp_high_f" type="number" min="0" max="150"></label></div>
+        <div><label>Humidity band low (%, 0 = off)
+          <input name="humidity_low" type="number" min="0" max="100"></label></div>
+        <div><label>Humidity band high (%, 0 = off)
+          <input name="humidity_high" type="number" min="0" max="100"></label></div>
+      </div>
+    </details>
+
+    <details class="fgroup">
+      <summary><h3>Trays</h3></summary>
       <p class="fhint">Size is columns &times; rows. Shrinking or removing a tray asks
         before discarding any filled cells. Probes, pumps and floats are wired to
         trays 1 and 2 only.</p>
       <div id="traycfg"></div>
-    </div>
+    </details>
 
-    <div class="fgroup">
-      <h3>Alerts</h3>
-      <p class="fhint">Discord alerts fire once a condition holds for the sustain
-        window, then stay quiet until it clears. Soil alerts use the target band
-        set above. Needs a webhook in secrets.</p>
-      <div class="frow">
-        <div class="checkrow"><input type="checkbox" name="alerts_enabled" id="alen">
-          <label for="alen">Threshold alerts</label></div>
-        <div></div>
-        <div><label>Must hold for (min)
-          <input name="alert_sustain_min" type="number" min="1" max="120"></label></div>
-        <div><label>Remind every (hours)
-          <input name="alert_cooldown_hours" type="number" min="1" max="72"></label></div>
-        <div><label>Tray dry at or below (%)
-          <input name="alert_dry_pct" type="number" min="0" max="90"></label></div>
-        <div><label>Humidity high at (%, 0 = off)
-          <input name="alert_humidity_high" type="number" min="0" max="100"></label></div>
-        <div><label>DLI alert floor (mol/m&#178;/day, 0 = off)
-          <input name="alert_dli_low" type="number" min="0" max="30" step="0.5"></label></div>
-        <div><label>DLI alert ceiling (mol/m&#178;/day, 0 = off)
-          <input name="alert_dli_high" type="number" min="0" max="80" step="0.5"></label></div>
-        <div><label>Sensor smoothing (samples, 1 = off)
-          <input name="probe_median_depth" type="number" min="1" max="15"></label></div>
-      </div>
+    <div class="savebar">
+      <button type="submit">Save &amp; replant</button><span id="msg" role="status"></span>
     </div>
-
-    <div class="fgroup">
-      <h3>Auto-watering</h3>
-      <p class="fhint">Fills a tray to its float when that tray's calibrated probe
-        reads dry. Arm it from the Water card; these set how it behaves.</p>
-      <div class="frow">
-        <div><label>Dry trigger (% moisture)
-          <input name="moisture_threshold_pct" type="number" min="1" max="90"></label></div>
-        <div><label>Cooldown between fills (min)
-          <input name="pump_cooldown_min" type="number" min="1" max="1440"></label></div>
-        <div><label>Fill time cap (s)
-          <input name="fill_max_seconds" type="number" min="1" max="600"></label></div>
-        <div><label>Daily pump limit (s)
-          <input name="pump_daily_max_seconds" type="number" min="1" max="3600"></label></div>
-        <div><label>Manual dose cap (s)
-          <input name="pump_max_seconds" type="number" min="1" max="120"></label></div>
-      </div>
-    </div>
-
-    <button type="submit">Save &amp; replant</button><span id="msg" role="status"></span>
   </form>
 </details>
 

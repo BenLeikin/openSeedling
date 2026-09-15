@@ -1004,3 +1004,34 @@ body.readonly .tcell textarea{background:var(--surface-2);border-color:transpare
   background:none;box-shadow:none;color:var(--leaf);
   border:1px solid var(--line);border-radius:8px;white-space:nowrap}
 .themebtn:hover{background:var(--tint);color:var(--fir)}
+
+/* ---- backup download ---- */
+.backuprow{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px;
+  padding-top:10px;border-top:1px dashed var(--line)}
+.dlbtn{display:inline-block;padding:6px 14px;font-size:13px;font-weight:600;
+  color:var(--on-accent);background:var(--leaf);border-radius:10px;
+  text-decoration:none}
+.dlbtn:hover{background:var(--fir)}
+.bsec{display:inline-flex;align-items:center;gap:6px;font-size:13px;
+  color:var(--muted);line-height:1.2}
+
+/* ---- settings: collapsible groups ---- */
+/* Eleven sections in one scroll meant hunting for a field and scrolling past
+   everything to reach Save. Each section now collapses, and Save sticks to the
+   bottom of the panel so it is reachable from anywhere in the form. */
+details.fgroup{margin-bottom:0;padding-bottom:0}
+details.fgroup+details.fgroup{border-top:0}
+details.fgroup>summary{cursor:pointer;list-style:none;padding:10px 2px;
+  display:flex;align-items:center;gap:8px}
+details.fgroup>summary::-webkit-details-marker{display:none}
+details.fgroup>summary::before{content:"";width:0;height:0;flex:0 0 auto;
+  border-left:5px solid var(--leaf);border-top:4px solid transparent;
+  border-bottom:4px solid transparent;transition:transform .15s ease}
+details.fgroup[open]>summary::before{transform:rotate(90deg)}
+details.fgroup>summary h3{margin:0}
+details.fgroup>summary:hover h3{color:var(--fir)}
+details.fgroup[open]{padding-bottom:12px}
+.savebar{position:sticky;bottom:0;z-index:2;display:flex;align-items:center;
+  gap:8px;padding:10px 0 4px;margin-top:6px;
+  background:linear-gradient(to top,var(--glass) 70%,transparent);
+  border-top:1px solid var(--line)}

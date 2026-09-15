@@ -23,6 +23,7 @@ import secrets
 import subprocess
 import sys
 import signal
+import sqlite3
 import statistics
 import threading
 import time
@@ -2573,6 +2574,83 @@ def api_planting_restore():
     db.delete_planting(pid)
     db.log_event("planting", f"{tray}/{cell} restored from history")
     return jsonify(ok=True, tray=tray, cell=cell)
+
+
+def build_backup(include_secrets=False):
+    """Build a restorable snapshot in memory and return (bytes, filename).
+
+    The database is copied with SQLite's online backup API rather than by
+    reading the file. This runs in WAL mode with the app writing continuously,
+    and a plain file copy can capture a torn database that looks fine until the
+    day you need it. The copy is then integrity-checked before it ships, since
+    a backup nobody verifies is a hope rather than a backup.
+
+    `.env` holds the API key, the plug password and the dashboard password
+    hash, so it is excluded unless explicitly requested; config.json also
+    carries the password hash and coordinates, which is why the archive is
+    only ever served to a logged-in session.
+    """
+    import io
+    import tarfile
+    import tempfile
+
+    stamp = datetime.now(ZoneInfo(settings.get("timezone", "UTC")))
+    name = f"openseedling-backup-{stamp:%Y%m%d-%H%M}.tar.gz"
+    notes = [f"OpenSeedling backup taken {stamp:%Y-%m-%d %H:%M %Z}",
+             "",
+             "growlight.db   readings, hourly rollups, events, planting history",
+             "config.json    every setting, calibration and the planting map",
+             ".env           pin overrides and secrets (only if requested)",
+             "",
+             "To restore: stop the service, copy these back into the app",
+             "directory, then start it again.",
+             ""]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        dbcopy = Path(tmp) / "growlight.db"
+        src = sqlite3.connect(str(db.DB_PATH))
+        try:
+            dst = sqlite3.connect(str(dbcopy))
+            with dst:
+                src.backup(dst)          # consistent against a live writer
+            ok = dst.execute("PRAGMA integrity_check").fetchone()[0]
+            dst.close()
+        finally:
+            src.close()
+        if ok != "ok":
+            raise RuntimeError(f"database copy failed its integrity check: {ok}")
+        notes.append(f"database integrity check: {ok}")
+
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+            tar.add(dbcopy, arcname="growlight.db")
+            if CONFIG_PATH.exists():
+                tar.add(CONFIG_PATH, arcname="config.json")
+            envp = Path(__file__).with_name(".env")
+            if include_secrets and envp.exists():
+                tar.add(envp, arcname=".env")
+            info = tarfile.TarInfo("README.txt")
+            data = ("\n".join(notes)).encode()
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+    return buf.getvalue(), name
+
+
+@app.route("/api/backup")
+@require_auth
+def api_backup():
+    """Download a restorable snapshot. Login required: the archive contains the
+    password hash and, optionally, the secrets from .env."""
+    want_secrets = request.args.get("secrets") == "1"
+    try:
+        blob, name = build_backup(include_secrets=want_secrets)
+    except Exception as e:
+        print(f"backup failed: {e}")
+        return jsonify(ok=False, error=str(e)[:200]), 500
+    db.log_event("backup", f"downloaded {name} ({len(blob)/1024:.0f} KB)")
+    return Response(blob, mimetype="application/gzip", headers={
+        "Content-Disposition": f'attachment; filename="{name}"',
+        "Content-Length": str(len(blob))})
 
 
 @app.route("/api/trays", methods=["POST"])
