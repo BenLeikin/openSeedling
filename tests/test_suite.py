@@ -752,6 +752,26 @@ def _timelapse_sharp():
           and enc[enc.index("-preset") + 1] == "ultrafast" and enc[enc.index("-threads") + 1] == "1",
           f"the video uses a lanczos downscale at crf 20, still ultrafast and one thread ({vf})")
 
+
+def _lightbox():
+    js = (APP / "static" / "app.js").read_text()
+    html = (APP / "templates" / "index.html").read_text()
+    css = (APP / "static" / "style.css").read_text()
+    check(re.search(r'<div id="lightbox"[^>]*role="dialog"[^>]*hidden>', html) and 'id="lbclose"' in html
+          and 'aria-label="Close"' in html and re.search(r"\.lightbox\{position:fixed;inset:0;z-index:\d{3,}", css),
+          "the enlarged view is a full-screen overlay with a Close (X) button, hidden until used")
+    check("onDoubleActivate(document.querySelector('#photocard .imgwrap'), enlargePhoto)" in js
+          and "onDoubleActivate(document.getElementById('vframe'), enlargeFrame)" in js
+          and re.search(r"addEventListener\('dblclick'", js) and "e.pointerType!=='touch'" in js,
+          "double-click, or double-tap on a phone, enlarges the snapshot and the timelapse frame")
+    ep = re.search(r"function enlargePhoto\(\)\{[\s\S]*?\n\}", js)
+    ef = re.search(r"function enlargeFrame\(\)\{[\s\S]*?\n\}", js)
+    check(ep and "if(cropping||gridEditable())return;" in ep.group(0)
+          and ef and "stopPlay()" in ef.group(0) and "'/frame/'" in ef.group(0),
+          "not while editing the grid or a crop; a timelapse frame pauses the player and opens full size")
+    check("e.key==='Escape')closeLightbox()" in js and "e.target.id==='lightbox'&&Date.now()-lbOpened>500" in js,
+          "Esc and a click outside the picture close it; the opening tap's own click does not")
+
 def _ai_reply():
     import io
     import json as _json
@@ -1130,6 +1150,7 @@ run('Camera preview', _camera_preview)
 run('Camera modes and crop reset', _camera_modes_and_reset)
 run('Camera crop', _camera_crop)
 run('Timelapse sharpness and capture status', _timelapse_sharp)
+run('Enlarged view', _lightbox)
 run('AI report reply', _ai_reply)
 run('Grow setups', _setups)
 run('Fan, camera and verdict timing', _fan_camera_timing)

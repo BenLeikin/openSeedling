@@ -585,6 +585,11 @@ it swaps in that photo at full resolution from `/frame/<name>`, framed the same
 way, so a still frame is as sharp as the snapshot. The rendered video is
 1280 wide, lanczos-scaled, x264 ultrafast at CRF 20.
 
+**Enlarged view.** Double-click the snapshot or the timelapse frame (double-tap
+on a phone) to open it full screen; the timelapse pauses and shows that frame at
+full resolution. Close with the X, Esc, or a click outside the picture. It does
+not open while the grid is unlocked or a crop is being drawn.
+
 **Full frame and crop.** A USB (UVC) camera frames a different part of its
 sensor at each capture size, so the size decides how much the camera sees, not
 just the resolution. Settings, Camera, **Camera modes** lists the sizes the

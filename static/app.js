@@ -1131,6 +1131,79 @@ document.getElementById('scrub').addEventListener('input',ev=>{
   stopPlay();fidx=+ev.target.value;showFrame();
 });
 
+// ---------------- enlarged view ----------------
+// Double-click (double-tap on a phone) the snapshot or the timelapse frame to
+// see it full screen; X, Esc or a click outside the picture closes it. Not
+// while the photo is being edited (grid corners or a crop), where double
+// clicks belong to the editor.
+var lbReturn=null, lbSeq=0, lbOpened=0;
+function openLightbox(src, cap, full){
+  const lb=document.getElementById('lightbox'), im=document.getElementById('lbimg');
+  if(!lb||!src)return;
+  const seq=++lbSeq;
+  lbReturn=document.activeElement;
+  im.src=src;
+  im.alt=cap||'Enlarged photo';
+  document.getElementById('lbcap').textContent=cap||'';
+  if(full&&full!==src){                // show what is on screen now, then sharpen
+    const hi=new Image();
+    hi.onload=()=>{if(!lb.hidden&&seq===lbSeq)im.src=hi.src;};
+    hi.src=full;
+  }
+  lb.hidden=false;
+  lbOpened=Date.now();
+  document.documentElement.classList.add('lbopen');
+  document.getElementById('lbclose').focus();
+}
+function closeLightbox(){
+  const lb=document.getElementById('lightbox');
+  if(!lb||lb.hidden)return;
+  lb.hidden=true;
+  lbSeq++;                             // a late full-size load must not land
+  document.documentElement.classList.remove('lbopen');
+  document.getElementById('lbimg').removeAttribute('src');
+  if(lbReturn&&lbReturn.focus)lbReturn.focus();
+}
+function enlargePhoto(){
+  if(cropping||gridEditable())return;
+  const img=document.getElementById('photo');
+  if(img&&img.naturalWidth)
+    openLightbox(img.src, document.getElementById('photoinfo').textContent);
+}
+function enlargeFrame(){
+  if(!frames.length)return;
+  stopPlay();                          // it would keep moving underneath
+  const v=document.getElementById('vframe');
+  openLightbox(v.src, document.getElementById('pframe').textContent,
+               '/frame/'+encodeURIComponent(frames[fidx]));
+}
+// dblclick is not reliable on touch screens, so a second tap within 350 ms
+// near the first counts too
+function onDoubleActivate(el, fn){
+  if(!el)return;
+  let lastTap=0, lx=0, ly=0, lastTouch=0;
+  el.addEventListener('dblclick',e=>{
+    if(Date.now()-lastTouch<800)return;   // the tap handler already did it
+    e.preventDefault();fn();
+  });
+  el.addEventListener('pointerup',e=>{
+    if(e.pointerType!=='touch')return;
+    lastTouch=Date.now();
+    const near=Math.abs(e.clientX-lx)<30&&Math.abs(e.clientY-ly)<30;
+    if(lastTouch-lastTap<350&&near){lastTap=0;fn();}
+    else{lastTap=lastTouch;lx=e.clientX;ly=e.clientY;}
+  });
+}
+onDoubleActivate(document.querySelector('#photocard .imgwrap'), enlargePhoto);
+onDoubleActivate(document.getElementById('vframe'), enlargeFrame);
+document.getElementById('lbclose').addEventListener('click',closeLightbox);
+document.getElementById('lightbox').addEventListener('click',e=>{
+  // the backdrop, not the picture; and not the click the opening tap itself
+  // produces, which lands on the overlay that just appeared under the finger
+  if(e.target.id==='lightbox'&&Date.now()-lbOpened>500)closeLightbox();
+});
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeLightbox();});
+
 // ---------------- auth / read-only ----------------
 let canEdit=true, authEnabled=false;
 function applyAuth(j){
