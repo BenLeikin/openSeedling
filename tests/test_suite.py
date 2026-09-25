@@ -149,6 +149,10 @@ def check(cond, msg):
         FAILS.append(msg)
 
 
+def skip(msg):
+    print("  SKIP  " + msg)
+
+
 def section(name):
     print(f"\n{name}")
 
@@ -512,6 +516,55 @@ def _camera_flatten():
     check(v1 != v0, "the thumbnail version changes after a rebuild")
 
 
+def _camera_crop():
+    check(g.crop_box({"roi": "0.1,0.2,0.5,0.6"}) == (0.1, 0.2, 0.5, 0.6)
+          and g.crop_box({"roi": ""}) is None and g.crop_box({"roi": "junk"}) is None,
+          "the crop setting parses, and blank or bad means full frame")
+    gl = (APP / "growlight.py").read_text()
+    check('"--roi"' not in gl, "photos are always stored full frame (no capture-time crop)")
+    calls = {"n": 0}
+    real_rb = g.rebuild_thumbs_async
+    g.rebuild_thumbs_async = lambda: calls.__setitem__("n", calls["n"] + 1)
+    try:
+        r = c.post("/api/settings", json={"roi": "0.1,0.2,0.5,0.6"}).get_json()
+        bad = c.post("/api/settings", json={"roi": "0.9,0.9,0.5,0.5"}).get_json()
+    finally:
+        g.rebuild_thumbs_async = real_rb
+    check(r["ok"] and calls["n"] == 1, "saving a crop rebuilds the thumbnails")
+    check(not bad["ok"] and "roi" in bad["errors"] and g.settings["roi"] == "0.1,0.2,0.5,0.6",
+          "a crop running off the frame is refused and the old one kept")
+    try:
+        import cv2
+        import numpy as np
+    except Exception:
+        skip("cropped snapshot, thumbnail and AI image (OpenCV not installed here)")
+        return
+    img = np.zeros((600, 1000, 3), np.uint8)
+    for n in ("20260925_120000.jpg",):
+        cv2.imwrite(str(g.TIMELAPSE_DIR / n), img)
+    snap = c.get("/photo/cropped.jpg")
+    shape = None
+    if snap.status_code == 200:
+        shape = cv2.imdecode(np.frombuffer(snap.data, np.uint8), 1).shape[:2]
+    check(shape == (360, 500), f"the snapshot is served cut to the crop ({shape}, want (360, 500))")
+    import base64
+    b = base64.b64decode(ai_report._image_b64(g.TIMELAPSE_DIR / "20260925_120000.jpg", (0.1, 0.2, 0.5, 0.6)))
+    ai_shape = cv2.imdecode(np.frombuffer(b, np.uint8), 1).shape[:2]
+    check(ai_shape == (360, 500), f"the AI report gets the cropped photo ({ai_shape})")
+    if shutil.which("ffmpeg"):
+        with g.settings_lock:
+            cfgc = dict(g.settings, timelapse_flatten=False)
+        out = WORK / "thumbtest"
+        out.mkdir(exist_ok=True)
+        g.make_thumb(g.TIMELAPSE_DIR / "20260925_120000.jpg", cfgc, dst_dir=out)
+        t = cv2.imread(str(out / "20260925_120000.jpg"))
+        check(t is not None and t.shape[:2] == (460, 640),
+              f"raw thumbnails are cut to the crop ({None if t is None else t.shape[:2]}, want (460, 640))")
+    else:
+        skip("cropped thumbnail (ffmpeg not installed here)")
+    c.post("/api/settings", json={"roi": ""})
+
+
 def _shutdown():
     """Last: sets the shutdown flag for good, the way SIGTERM does."""
     with g.settings_lock:
@@ -585,6 +638,7 @@ run('Data', _sec4)
 run('Light schedule', _sec5)
 run('DLI target', _dli_band)
 run('Camera flattening', _camera_flatten)
+run('Camera crop', _camera_crop)
 run('Shutdown', _shutdown)
 
 # --------------------------------------------------------------------------

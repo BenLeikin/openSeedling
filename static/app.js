@@ -365,7 +365,7 @@ function renderPhoto(j){  const card=document.getElementById('photocard');
     warn.style.display=msg?'':'none';
     if(img)img.classList.toggle('camdead', !!(camHealth&&camHealth.fails>0));
   }}
-  if(aligning){card.style.display='';return;}   // live preview owns the image
+  if(aligning||cropping){card.style.display='';return;}   // those modes own the image
   if(!j.photo_count){
     img.style.display='none';
     document.getElementById('photoinfo').textContent='No photos yet.';
@@ -381,13 +381,22 @@ function renderPhoto(j){  const card=document.getElementById('photocard');
   const stamp=j.latest_photo_time||Date.now();
   const editing=gridEditable();
   const flatOn=!(j.settings && j.settings.timelapse_flatten===false);
+  window._flatOn=flatOn;
   const flat=flatOn && !editing && grid && grid.corners && grid.corners.length===4;
+  // the view crop applies to the unflattened photo; flattened is already the tray
+  const roi=(!flat && !editing)?parseRoi(j.settings&&j.settings.roi):null;
   img.dataset.flat=flat?'1':'';
+  img.dataset.crop=roi?roi.join(','):'';
   if(flat){
     img.onerror=()=>{                       // no corners yet, or rectify failed
       if(img.dataset.flat){img.dataset.flat='';img.src='/photo/latest?'+stamp;}
     };
     img.src='/rectified.jpg?t='+encodeURIComponent(stamp);
+  }else if(roi){
+    img.onerror=()=>{                       // crop failed: show the full frame
+      if(img.dataset.crop){img.dataset.crop='';img.src='/photo/latest?'+stamp;drawGrid();}
+    };
+    img.src='/photo/cropped.jpg?t='+encodeURIComponent(stamp)+'&r='+encodeURIComponent(roi.join(','));
   }else{
     img.onerror=null;
     img.src='/photo/latest?'+stamp;
@@ -396,7 +405,8 @@ function renderPhoto(j){  const card=document.getElementById('photocard');
   document.getElementById('photoinfo').textContent=
     (when?`Taken ${when.toLocaleString()}`:'')+` \u00b7 ${j.photo_count} photos so far`
     + (img.dataset.flat?' \u00b7 flattened'
-       :(flatOn&&!editing?' \u00b7 raw frame (unlock grid to place corners)':' \u00b7 raw frame'));
+       :(img.dataset.crop?' \u00b7 cropped'
+       :(flatOn&&!editing?' \u00b7 raw frame (unlock grid to place corners)':' \u00b7 raw frame')));
 }
 async function capturePhoto(){
   const btn=document.getElementById('capturebtn');
@@ -419,6 +429,104 @@ async function capturePhoto(){
   }finally{
     btn.disabled=false;
   }
+}
+// ---- view crop: drag a rectangle on the full photo ----
+// The crop is a view setting: stored photos stay full, and the snapshot,
+// scrubber, video and AI report are cut to it. Only used when photos are
+// not flattened (a flattened photo is already just the tray).
+function parseRoi(s){
+  const m=String(s||'').trim().split(',').map(Number);
+  return (m.length===4&&m.every(n=>isFinite(n)&&n>=0&&n<=1)&&m[2]>=0.05&&m[3]>=0.05)?m:null;
+}
+var cropping=false, cropSel=null, cropDrag=null;   // var: renderPhoto reads it
+function drawCrop(){
+  const svg=document.getElementById('guidesvg');
+  if(!svg)return;
+  const r=cropSel;
+  svg.innerHTML=r
+    ? `<path d="M0 0H1000V1000H0Z M${r[0]*1000} ${r[1]*1000}v${r[3]*1000}h${r[2]*1000}v${-r[3]*1000}Z"`
+      +` fill="rgba(0,0,0,.45)" fill-rule="evenodd"/>`
+      +`<rect x="${r[0]*1000}" y="${r[1]*1000}" width="${r[2]*1000}" height="${r[3]*1000}" fill="none"`
+      +` stroke="#ffd54a" stroke-width="3" stroke-dasharray="12 9" vector-effect="non-scaling-stroke"/>`
+    : '';
+  const info=document.getElementById('photoinfo');
+  if(info)info.textContent=r
+    ? `Crop ${Math.round(r[2]*100)}% \u00d7 ${Math.round(r[3]*100)}% of the frame \u00b7 drag to redraw`
+    : 'Drag a rectangle over the area to keep';
+  if(info&&window._flatOn)info.textContent+=' \u00b7 note: Show photos flattened is on, so the crop applies once it is off';
+}
+function startCrop(){
+  if(cropping)return;
+  if(aligning)stopAlign();
+  cropping=true;
+  const img=document.getElementById('photo');
+  img.dataset.flat='';img.dataset.crop='';img.onerror=null;
+  img.src='/photo/latest?'+Date.now();          // the whole frame to choose from
+  document.getElementById('gridsvg').style.display='none';
+  const svg=document.getElementById('guidesvg');
+  svg.style.display='';svg.style.pointerEvents='auto';svg.style.cursor='crosshair';
+  cropSel=parseRoi(document.querySelector('[name=roi]')&&document.querySelector('[name=roi]').value);
+  document.getElementById('cropctl').style.display='';
+  document.getElementById('cropbtn').style.display='none';
+  drawCrop();
+}
+function stopCrop(){
+  cropping=false;cropDrag=null;
+  const svg=document.getElementById('guidesvg');
+  svg.style.display='none';svg.style.pointerEvents='';svg.style.cursor='';svg.innerHTML='';
+  document.getElementById('cropctl').style.display='none';
+  document.getElementById('cropbtn').style.display='';
+  refresh();
+}
+async function saveCrop(roiStr){
+  const info=document.getElementById('photoinfo');
+  try{
+    const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({roi:roiStr})});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok||j.ok===false){if(info)info.textContent='Crop not saved: '+((j.errors&&j.errors.roi)||j.error||('HTTP '+r.status));return;}
+    const el=document.querySelector('[name=roi]');if(el)el.value=roiStr;
+  }catch(e){if(info)info.textContent='Crop not saved: request failed';return;}
+  stopCrop();
+}
+function cropPoint(ev){
+  const b=document.getElementById('guidesvg').getBoundingClientRect();
+  return [Math.min(1,Math.max(0,(ev.clientX-b.left)/b.width)),
+          Math.min(1,Math.max(0,(ev.clientY-b.top)/b.height))];
+}
+{
+  const svg=document.getElementById('guidesvg');
+  if(svg){
+    svg.addEventListener('pointerdown',ev=>{
+      if(!cropping)return;
+      ev.preventDefault();svg.setPointerCapture(ev.pointerId);
+      cropDrag=cropPoint(ev);cropSel=null;drawCrop();
+    });
+    svg.addEventListener('pointermove',ev=>{
+      if(!cropping||!cropDrag)return;
+      const p=cropPoint(ev);
+      const x=Math.min(p[0],cropDrag[0]),y=Math.min(p[1],cropDrag[1]);
+      cropSel=[x,y,Math.abs(p[0]-cropDrag[0]),Math.abs(p[1]-cropDrag[1])];
+      drawCrop();
+    });
+    svg.addEventListener('pointerup',()=>{
+      if(!cropping)return;
+      cropDrag=null;
+      if(cropSel&&(cropSel[2]<0.05||cropSel[3]<0.05))cropSel=null;   // a click, not a box
+      drawCrop();
+    });
+  }
+  const cb=document.getElementById('cropbtn');
+  if(cb)cb.addEventListener('click',startCrop);
+  const cs=document.getElementById('cropsave');
+  if(cs)cs.addEventListener('click',()=>{
+    if(!cropSel){const i=document.getElementById('photoinfo');if(i)i.textContent='Drag a rectangle first, or choose Full frame';return;}
+    saveCrop(cropSel.map(v=>v.toFixed(3)).join(','));
+  });
+  const cf=document.getElementById('cropfull');
+  if(cf)cf.addEventListener('click',()=>saveCrop(''));
+  const cc=document.getElementById('cropcancel');
+  if(cc)cc.addEventListener('click',stopCrop);
 }
 let aligning=false, alignTimer=null;
 function drawGuides(){
@@ -458,6 +566,7 @@ async function alignTick(){
 }
 function startAlign(){
   if(aligning)return;
+  if(cropping)stopCrop();
   aligning=true;
   const btn=document.getElementById('alignbtn');
   if(btn){btn.textContent='\u23F9 Stop align';btn.classList.add('on');}
@@ -495,6 +604,7 @@ function formHolds(key, cfg){
 }
 
 function fillForm(cfg){
+  if(!cfg)return;
   const f=document.getElementById('cfgform');
   for(const k of ['latitude','longitude','timezone','max_bright','ramp_min',
                   'sunrise_offset_min','sunset_offset_min',
@@ -2255,6 +2365,7 @@ function gridEditable(){return canEdit && grid && !grid.locked;}
 function drawGrid(){
   const svg=document.getElementById('gridsvg');
   if(!grid||!svg)return;
+  if(cropping){svg.style.display='none';return;}   // the crop box owns the photo
   svg.style.display=grid.show?'':'none';
   if(!grid.show){svg.innerHTML='';return;}
   // On the flattened view the image IS the tray rectangle, so the cells are
@@ -2262,7 +2373,11 @@ function drawGrid(){
   // would land in the wrong places here.
   const photo=document.getElementById('photo');
   const flat=!!(photo && photo.dataset.flat);
-  const C=flat?[[0,0],[1,0],[1,1],[0,1]]:grid.corners;
+  const cr=(!flat && photo && photo.dataset.crop)?photo.dataset.crop.split(',').map(Number):null;
+  // corners are saved against the full frame; on a cropped view, re-express
+  // them relative to the crop so the cells stay on the trays
+  const C=flat?[[0,0],[1,0],[1,1],[0,1]]
+         :(cr?grid.corners.map(p=>[(p[0]-cr[0])/cr[2],(p[1]-cr[1])/cr[3]]):grid.corners);
   const R=grid.rows,K=grid.cols,S=1000;
   let h='';
   for(let r=0;r<R;r++)for(let c=0;c<K;c++){

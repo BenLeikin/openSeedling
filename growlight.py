@@ -134,7 +134,10 @@ DEFAULTS = {
     "capture_enabled": False,
     "capture_interval_min": 30,
     "capture_brightness": 100,  # light level held during each photo
-    "roi": "",                  # crop as "x,y,w,h" fractions, blank = full frame
+    "roi": "",                  # view crop as "x,y,w,h" fractions of the stored
+                                # frame, blank = full frame. Applied when photos
+                                # are shown, thumbnailed, rendered or sent to the
+                                # AI report; stored frames stay full.
     "cam_width": 2304,          # capture resolution at full field of view. The
     "cam_height": 1296,         #   Module 3 sensor is 4608x2592, but a full 12MP
                                 #   capture exhausts the Pi Zero 2 W's 512MB RAM, so
@@ -1186,6 +1189,33 @@ def brightness_for(cfg, now, on_time, off_time):
     return mx
 
 
+def crop_box(cfg=None):
+    """The configured view crop as (x, y, w, h) fractions, or None for full frame."""
+    if cfg is None:
+        with settings_lock:
+            cfg = dict(settings)
+    try:
+        return parse_roi(cfg.get("roi", ""))
+    except ValueError:
+        return None
+
+
+def crop_filter(roi):
+    """The same crop as an ffmpeg filter, sized to even pixel counts."""
+    x, y, w, h = roi
+    return (f"crop=trunc(iw*{w:.4f}/2)*2:trunc(ih*{h:.4f}/2)*2:"
+            f"trunc(iw*{x:.4f}):trunc(ih*{y:.4f})")
+
+
+def crop_array(img, roi):
+    """Crop an OpenCV image to the view crop."""
+    ih, iw = img.shape[:2]
+    x, y, w, h = roi
+    x0, y0 = int(round(iw * x)), int(round(ih * y))
+    x1, y1 = min(iw, x0 + max(2, int(round(iw * w)))), min(ih, y0 + max(2, int(round(ih * h))))
+    return img[y0:y1, x0:x1]
+
+
 def parse_roi(s):
     """Validate 'x,y,w,h' fraction string. Returns tuple or None for blank."""
     s = (s or "").strip()
@@ -1231,10 +1261,12 @@ def make_thumb(photo_path, cfg=None, dst_dir=None):
                 return
         except Exception as e:
             log.error(f"thumb rectify failed for {photo_path.name} ({e}); plain scale")
+    roi = crop_box(cfg)
+    vf = (crop_filter(roi) + "," if roi else "") + "scale=640:-2"
     try:
         subprocess.run(
             ["ffmpeg", "-loglevel", "error", "-y", "-i", str(photo_path),
-             "-vf", "scale=640:-2", "-q:v", "7", str(dst)],
+             "-vf", vf, "-q:v", "7", str(dst)],
             capture_output=True, timeout=120)
     except Exception as e:
         log.error(f"thumbnail error for {photo_path.name}: {e}")
@@ -1909,7 +1941,10 @@ def run_report(reason="daily"):
         # and dark; fall back to manual only when nothing else exists
         sched = [p for p in photos if not p.stem.endswith("_m")]
         photo = (sched or photos)[-1] if photos else None
+        with settings_lock:
+            _flat_on = settings.get("timelapse_flatten", True)
         result = ai_report.generate(photo, gather_report_data(),
+                                    crop=None if _flat_on else crop_box(),
                                     model=cfg.get("ai_model"))
         result["reason"] = reason
         try:
@@ -2864,18 +2899,10 @@ def take_photo(cfg, now, manual=False):
                 _camera_fail(err)
             return saved
 
-        cmd = ["rpicam-still", "-n", "-o", str(fname), "-t", "2000"]
-        try:
-            roi = parse_roi(cfg.get("roi", ""))
-        except ValueError:
-            roi = None
-        if roi:
-            x, y, w, h = roi
-            cmd += ["--roi", f"{x},{y},{w},{h}",
-                    "--width", str(int(cw * w) // 2 * 2),
-                    "--height", str(int(ch * h) // 2 * 2)]
-        else:
-            cmd += ["--width", str(cw), "--height", str(ch)]
+        # Full frame always: the view crop is applied when photos are shown,
+        # so it can be changed or cleared later without losing any image.
+        cmd = ["rpicam-still", "-n", "-o", str(fname), "-t", "2000",
+               "--width", str(cw), "--height", str(ch)]
         r = subprocess.run(cmd, capture_output=True, timeout=90)
         if r.returncode != 0:
             err = r.stderr.decode(errors="replace")[-300:]
@@ -3013,6 +3040,10 @@ def render_worker():
                 render["msg"] = f"Flattening {len(frames)} frames..."
             flat_dir = _flatten_frames_to(TIMELAPSE_DIR / "_flat", frames, cfg_r)
         src_glob = str((flat_dir or TIMELAPSE_DIR) / "*.jpg")
+        # the view crop applies to raw frames; flattened ones are already the tray
+        roi = None if flat_dir else crop_box(cfg_r)
+        vf_scale = "scale=1280:-16:in_range=full:out_range=tv"
+        vf = (crop_filter(roi) + "," + vf_scale) if roi else vf_scale
         tmp = TIMELAPSE_DIR / "_render_tmp.mp4"
         # Encode pass: small footprint so the 512MB Zero never OOMs.
         # 1280-wide, ultrafast, single thread, no faststart here (the
@@ -3026,7 +3057,7 @@ def render_worker():
              # black. Remap to limited-range yuv420p and tag it. Height is forced
              # to a multiple of 16 (-16, not -2): a non-mod16 height makes the
              # encoder signal a crop that some hardware decoders render as black.
-             "-vf", "scale=1280:-16:in_range=full:out_range=tv",
+             "-vf", vf,
              "-c:v", "libx264", "-preset", "ultrafast",
              "-crf", "24", "-threads", "1",
              "-pix_fmt", "yuv420p", "-color_range", "tv",
@@ -5246,6 +5277,39 @@ def api_fan():
 
 _rect_cache = {"key": None, "bytes": None}
 _rect_lock = threading.Lock()
+_crop_cache = {"key": None, "bytes": None}
+
+
+@app.route("/photo/cropped.jpg")
+def cropped_image():
+    """The latest photo cut to the view crop, cached per (photo, crop)."""
+    _, latest, _ = photo_inventory()
+    if not latest:
+        return ("no photo yet", 404)
+    roi = crop_box()
+    if not roi:
+        return ("no crop set", 404)     # the page falls back to the full frame
+    key = (str(latest), latest.stat().st_mtime, roi)
+    with _rect_lock:
+        if _crop_cache["key"] == key:
+            return Response(_crop_cache["bytes"], mimetype="image/jpeg",
+                            headers={"Cache-Control": "no-store"})
+    try:
+        import cv2
+        img = cv2.imread(str(latest))
+        if img is None:
+            return ("could not read the photo", 500)
+        ok, buf = cv2.imencode(".jpg", crop_array(img, roi),
+                               [cv2.IMWRITE_JPEG_QUALITY, 88])
+        if not ok:
+            return ("encode failed", 500)
+        data = buf.tobytes()
+        with _rect_lock:
+            _crop_cache.update(key=key, bytes=data)
+        return Response(data, mimetype="image/jpeg",
+                        headers={"Cache-Control": "no-store"})
+    except Exception as e:
+        return (f"crop failed: {e}", 500)
 
 
 @app.route("/rectified.jpg")
@@ -5602,9 +5666,11 @@ def update_settings():
         with settings_lock:
             was = light_backend(settings)
             flat_was = settings.get("timelapse_flatten", True)
+            roi_was = settings.get("roi", "")
             settings.update(new)
             now_backend = light_backend(settings)
-            flat_changed = settings.get("timelapse_flatten", True) != flat_was
+            flat_changed = (settings.get("timelapse_flatten", True) != flat_was
+                            or settings.get("roi", "") != roi_was)
             save_config()
         if flat_changed:
             # thumbnails are built once per photo; without this the scrubber

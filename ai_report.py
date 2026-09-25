@@ -46,12 +46,18 @@ def have_key():
     return bool(api_key())
 
 
-def _image_b64(path):
-    """Return a base64 JPEG of the photo, downscaled to MAX_IMG_W on the long
-    edge. Falls back to the raw file bytes if OpenCV isn't available."""
+def _image_b64(path, crop=None):
+    """Return a base64 JPEG of the photo, cut to `crop` (x, y, w, h fractions)
+    if given, downscaled to MAX_IMG_W on the long edge. Falls back to the raw
+    file bytes if OpenCV isn't available."""
     try:
         import cv2
         img = cv2.imread(str(path))
+        if img is not None and crop:
+            ih, iw = img.shape[:2]
+            x, y, w, h = crop
+            x0, y0 = int(iw * x), int(ih * y)
+            img = img[y0:y0 + max(2, int(ih * h)), x0:x0 + max(2, int(iw * w))]
         if img is not None:
             h, w = img.shape[:2]
             if max(h, w) > MAX_IMG_W:
@@ -205,7 +211,7 @@ def _extract_json(text):
         return None
 
 
-def generate(photo_path, data, model=None, max_tokens=2048, timeout=90):
+def generate(photo_path, data, model=None, max_tokens=2048, timeout=90, crop=None):
     """Call the Claude API with the photo + context. Returns a dict:
     {ok, report?, raw?, ts, model, usage?, error?}. Never raises."""
     key = api_key()
@@ -216,7 +222,7 @@ def generate(photo_path, data, model=None, max_tokens=2048, timeout=90):
         return {"ok": False, "error": "no photo to analyze yet", "ts": int(time.time())}
     model = model or DEFAULT_MODEL
     try:
-        img_b64 = _image_b64(photo_path)
+        img_b64 = _image_b64(photo_path, crop)
     except Exception as e:
         return {"ok": False, "error": f"could not read photo: {e}", "ts": int(time.time())}
     body = {

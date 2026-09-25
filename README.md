@@ -409,7 +409,7 @@ editable from the dashboard Settings panel; the rest are edited in the file.
 | `cam_rotate` | 0 | Rotation baked in at capture (0/90/180/270) for an upside-down mount |
 | `usb_*` | | USB camera controls: device, size, warmup frames, exposure, gain, white balance, focus, and the auto/manual toggle for each |
 | `camera_enabled` | true | Master switch: hides all camera UI and pauses the AI report |
-| `roi` | "" | Crop as `x,y,w,h` fractions, blank = full frame |
+| `roi` | "" | View crop as `x,y,w,h` fractions of the stored frame, blank = full frame. Set it with the Crop button on the snapshot. Stored photos stay full; the snapshot, scrubber, video and AI report are cut to it when photos are not flattened |
 | `cam_width` / `cam_height` | 2304 / 1296 | Capture resolution at full field of view. The Module 3 sensor is 4608x2592, but a full 12MP capture runs the Pi Zero 2 W out of memory, so the default is the 2304x1296 binned mode (same view, ~3MP). Keep the sensor's 16:9 aspect or the frame gets cropped. Raise to 4608x2592 only on a Pi with more RAM |
 | `sample_interval_min` | 5 | Sensor logging interval |
 | `auto_water` | false | Master switch for automatic watering (keep off until calibrated) |
@@ -516,7 +516,14 @@ Two switches in Settings, Camera control flattening (warping the photo to a
 top-down view of the tray grid). **Show photos flattened** covers the snapshot,
 the scrubber thumbnails and the rendered video; turning it off shows raw frames,
 rebuilds the thumbnails automatically, and takes effect in the video on the next
-Render. **Flatten for canopy analysis** only changes what `growth.py` measures. Manual captures are tagged `_m` in the filename; they are analyzed
+Render. **Flatten for canopy analysis** only changes what `growth.py` measures.
+
+**Crop.** With flattening off, the **Crop** button on the snapshot shows the
+full frame; drag a rectangle over the area to keep and press **Save crop**
+(**Full frame** clears it). The crop is applied when photos are shown, not when
+they are taken, so it can be changed or removed later without losing anything:
+the snapshot, scrubber thumbnails (rebuilt automatically), the next Render and
+the AI report all use it. The cell grid is drawn to match the cropped view. Manual captures are tagged `_m` in the filename; they are analyzed
 only inside the photoperiod, and the daily AI report always prefers the latest
 scheduled frame so an off-schedule dark shot never becomes its input.
 

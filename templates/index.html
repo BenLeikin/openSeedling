@@ -156,6 +156,12 @@
   <div class="capctl editonly">
     <button type="button" id="capturebtn">&#128247; Take photo</button>
     <button type="button" id="alignbtn">&#127919; Align</button>
+    <button type="button" id="cropbtn">&#9986; Crop</button>
+    <span id="cropctl" style="display:none">
+      <button type="button" id="cropsave">Save crop</button>
+      <button type="button" id="cropfull">Full frame</button>
+      <button type="button" id="cropcancel">Cancel</button>
+    </span>
     <span id="captureinfo" role="status" class="muted"></span>
   </div>
   <div class="gridctl editonly">
@@ -375,7 +381,8 @@
           <label for="capen">Timelapse capture</label></div>
         <div><label>Photo interval (min) <input name="capture_interval_min" type="number" min="5" max="720" required></label></div>
         <div><label>Photo brightness (%) <input name="capture_brightness" type="number" min="1" max="100" required></label></div>
-        <div class="tzrow"><label>Photo crop x,y,w,h (fractions, blank = full frame)
+        <div class="tzrow"><label>Photo crop x,y,w,h (fractions, blank = full frame;
+          easier: the Crop button on the snapshot)
           <input name="roi" type="text" placeholder="0.22,0.08,0.57,0.82"></label></div>
         <div><label>Rotate photo
           <select name="cam_rotate">
@@ -389,7 +396,8 @@
         <div class="checkrow"><input type="checkbox" name="cam_rectify" id="camrect">
           <label for="camrect">Flatten for canopy analysis</label></div>
         <div class="tzrow"><span class="fhint">Flattening warps the photo to a
-          top-down view of the tray grid. Changing the first box rebuilds the
+          top-down view of the tray grid; with it off, the crop applies instead.
+          Changing the first box or the crop rebuilds the
           scrubber thumbnails; press Render to rebuild the video. Unlock the
           grid to see the raw frame and drag the corners.</span></div>
       </div>
