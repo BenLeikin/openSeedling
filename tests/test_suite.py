@@ -619,6 +619,48 @@ def _camera_crop():
     c.post("/api/settings", json={"roi": ""})
 
 
+def _ai_reply():
+    import io
+    import json as _json
+    photo = WORK / "ai.jpg"
+    photo.write_bytes(b"\xff\xd8\xff\xd9")
+    sent = {}
+
+    def fake_open(resp):
+        class R(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        def opener(req, timeout=None):
+            sent["body"] = _json.loads(req.data)
+            sent["timeout"] = timeout
+            return R(_json.dumps(resp).encode())
+        return opener
+    real_open, real_key = ai_report.urllib.request.urlopen, ai_report.api_key
+    ai_report.api_key = lambda: "test-key"
+    try:
+        ai_report.urllib.request.urlopen = fake_open({
+            "content": [{"type": "thinking", "thinking": ""}],
+            "stop_reason": "max_tokens", "usage": {"output_tokens": 8000}})
+        r1 = ai_report.generate(photo, {})
+        ai_report.urllib.request.urlopen = fake_open({
+            "content": [{"type": "thinking", "thinking": ""},
+                        {"type": "text", "text": '{"summary": "Looking good", "overall_health": "good"}'}],
+            "stop_reason": "end_turn"})
+        r2 = ai_report.generate(photo, {})
+    finally:
+        ai_report.urllib.request.urlopen, ai_report.api_key = real_open, real_key
+    check(sent["body"]["max_tokens"] >= 8000 and sent["timeout"] >= 180,
+          f"the report leaves room for thinking ({sent['body']['max_tokens']} tokens, {sent['timeout']} s)")
+    check(not r1["ok"] and "thinking" in r1["error"],
+          f"a reply that is all thinking is an error, not an empty report ({r1.get('error')})")
+    check(r2["ok"] and r2["report"]["summary"] == "Looking good",
+          "thinking blocks before the JSON are skipped")
+
+
 def _shutdown():
     """Last: sets the shutdown flag for good, the way SIGTERM does."""
     with g.settings_lock:
@@ -695,6 +737,7 @@ run('Camera flattening', _camera_flatten)
 run('Camera preview', _camera_preview)
 run('Camera modes and crop reset', _camera_modes_and_reset)
 run('Camera crop', _camera_crop)
+run('AI report reply', _ai_reply)
 run('Shutdown', _shutdown)
 
 # --------------------------------------------------------------------------

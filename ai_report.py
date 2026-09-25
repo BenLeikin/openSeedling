@@ -211,7 +211,16 @@ def _extract_json(text):
         return None
 
 
-def generate(photo_path, data, model=None, max_tokens=2048, timeout=90, crop=None):
+# Output budget for thinking plus the JSON reply. Current models (Claude
+# Sonnet 5 and later) think by default, and thinking tokens count against
+# max_tokens: at the old 2048 the whole budget went on thinking and the reply
+# came back with no text at all. The JSON itself is about 1,000 tokens.
+MAX_TOKENS = 8000
+TIMEOUT_S = 240
+
+
+def generate(photo_path, data, model=None, max_tokens=MAX_TOKENS, timeout=TIMEOUT_S,
+             crop=None):
     """Call the Claude API with the photo + context. Returns a dict:
     {ok, report?, raw?, ts, model, usage?, error?}. Never raises."""
     key = api_key()
@@ -253,17 +262,28 @@ def generate(photo_path, data, model=None, max_tokens=2048, timeout=90, crop=Non
         return {"ok": False, "error": f"API HTTP {e.code}: {detail}", "ts": int(time.time())}
     except Exception as e:
         return {"ok": False, "error": f"request failed: {e}", "ts": int(time.time())}
+    # thinking blocks come first on thinking models; only text blocks matter
     text = "".join(b.get("text", "") for b in resp.get("content", [])
                    if b.get("type") == "text")
+    stop = resp.get("stop_reason")
+    if not text.strip():
+        why = (f"the model used all {max_tokens} output tokens thinking and "
+               "returned no report; raise ai_report.MAX_TOKENS"
+               if stop == "max_tokens" else
+               f"the reply had no text (stop_reason: {stop or 'unknown'})")
+        return {"ok": False, "error": why, "ts": int(time.time()), "model": model,
+                "usage": resp.get("usage"), "stop_reason": stop}
     report = _extract_json(text)
     out = {"ok": True, "ts": int(time.time()), "model": model,
-           "usage": resp.get("usage"), "raw": text}
+           "usage": resp.get("usage"), "raw": text, "stop_reason": stop}
     if report is not None:
         out["report"] = report
     else:
         out["report"] = {"summary": text.strip()[:300] or "(no summary)",
                          "overall_health": "watch",
-                         "concerns": ["AI reply was not valid JSON; see raw text"],
+                         "concerns": ["AI reply was cut off at the output limit"
+                                      if stop == "max_tokens" else
+                                      "AI reply was not valid JSON; see raw text"],
                          "recommendations": [], "confidence": "low"}
         out["parse_error"] = True
     return out

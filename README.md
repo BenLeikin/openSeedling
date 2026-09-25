@@ -571,8 +571,11 @@ When enabled, the controller sends the latest photo (downscaled) plus the curren
 data to the Claude API once a day at the configured time, and shows the result on
 the dashboard while pushing the summary to ntfy/Discord. A restart does **not**
 regenerate the report; it keeps the last one. New reports come only from crossing
-the scheduled time or pressing "Generate now". Cost is roughly a cent or two per
-report.
+the scheduled time or pressing "Generate now". Current models think before
+answering and thinking is billed as output, so a report costs a few cents; the
+8,000-token output cap (`ai_report.MAX_TOKENS`) bounds it at roughly 13 cents at
+Sonnet 5's list price. If the model runs out of room, the report shows that as an
+error instead of an empty "(no summary)".
 
 The prompt tells the model that grow lights tint the photo without assuming a
 color. To be specific, describe your light in `ai_notes`. There is no dashboard
