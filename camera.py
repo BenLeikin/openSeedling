@@ -1,6 +1,7 @@
 """Camera: capture, crop and flatten, thumbnails, focus sweep, the
 timelapse render, and canopy tracking."""
 
+import hashlib
 import json
 import os
 import shutil
@@ -143,6 +144,57 @@ def make_thumb(photo_path, cfg=None, dst_dir=None):
     except Exception as e:
         log.error(f"thumbnail error for {photo_path.name}: {e}")
 
+
+_frame_lock = threading.Lock()   # one full-size warp at a time on a 512 MB board
+
+
+def frame_view(photo_path, cfg=None):
+    """A stored photo at full resolution, framed the way its thumbnail is.
+
+    The player scrubs through 640px thumbnails, which is right for playing
+    at 8 frames a second but soft once the browser stretches one across the
+    card (twice over on a phone or a HiDPI screen). A paused frame is shown
+    through this instead, at the snapshot's resolution. Same rules as
+    make_thumb, so swapping one for the other never reframes the picture:
+    flattened when timelapse_flatten is on and the grid has corners, else cut
+    to the view crop, else the photo itself.
+
+    Returns (jpeg bytes, None), or (None, path) to send the file as it is.
+    """
+    if cfg is None:
+        with config.settings_lock:
+            cfg = dict(config.settings)
+    grid = cfg.get("grid") or {}
+    corners = grid.get("corners")
+    flatten = bool(cfg.get("timelapse_flatten", True) and corners and len(corners) == 4)
+    roi = None if flatten else crop_box(cfg)
+    if not flatten and not roi:
+        return None, photo_path
+    import cv2
+    with _frame_lock:
+        img = cv2.imread(str(photo_path))
+        if img is None:
+            raise ValueError("unreadable photo")
+        if flatten:
+            out = growth_mod.rectify(img, corners, cols=int(grid.get("cols", 4)),
+                                     rows=int(grid.get("rows", 4)))
+            q = 85                       # as /rectified.jpg
+        else:
+            out = crop_array(img, roi)
+            q = 88                       # as /photo/cropped.jpg
+        ok, buf = cv2.imencode(".jpg", out, [cv2.IMWRITE_JPEG_QUALITY, q])
+    if not ok:
+        raise ValueError("encode failed")
+    return buf.tobytes(), None
+
+
+def frame_etag(photo_path, cfg):
+    """Changes whenever what frame_view would return changes."""
+    grid = cfg.get("grid") or {}
+    key = json.dumps([photo_path.name, photo_path.stat().st_mtime,
+                      bool(cfg.get("timelapse_flatten", True)), grid.get("corners"),
+                      grid.get("cols"), grid.get("rows"), cfg.get("roi")])
+    return hashlib.sha1(key.encode()).hexdigest()[:20]
 
 def photo_inventory():
     # leading underscore marks render scratch, which is not a captured photo
@@ -460,7 +512,8 @@ def render_worker():
         src_glob = str((flat_dir or TIMELAPSE_DIR) / "*.jpg")
         # the view crop applies to raw frames; flattened ones are already the tray
         roi = None if flat_dir else crop_box(cfg_r)
-        vf_scale = "scale=1280:-16:in_range=full:out_range=tv"
+        # lanczos: a sharper downscale than the default bicubic, same memory
+        vf_scale = "scale=1280:-16:flags=lanczos:in_range=full:out_range=tv"
         vf = (crop_filter(roi) + "," + vf_scale) if roi else vf_scale
         tmp = TIMELAPSE_DIR / "_render_tmp.mp4"
         # Encode pass: small footprint so the 512MB Zero never OOMs.
@@ -476,8 +529,11 @@ def render_worker():
              # to a multiple of 16 (-16, not -2): a non-mod16 height makes the
              # encoder signal a crop that some hardware decoders render as black.
              "-vf", vf,
+             # crf 20, not 24: ultrafast turns off adaptive quantization and
+             # deblocking, so at 24 fine leaf and soil texture smeared. Same
+             # preset, so encode time and memory stay the same; files grow.
              "-c:v", "libx264", "-preset", "ultrafast",
-             "-crf", "24", "-threads", "1",
+             "-crf", "20", "-threads", "1",
              "-pix_fmt", "yuv420p", "-color_range", "tv",
              # Fully specify the colour metadata (BT.601, matching the JPEG
              # source). An unspecified matrix makes some hardware decoders

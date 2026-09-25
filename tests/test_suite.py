@@ -666,6 +666,92 @@ def _camera_crop():
     c.post("/api/settings", json={"roi": ""})
 
 
+
+def _timelapse_sharp():
+    js = (APP / "static" / "app.js").read_text()
+    css = (APP / "static" / "style.css").read_text()
+    show = re.search(r"function showFrame\(\)\{[\s\S]*?\n\}", js)
+    stop = re.search(r"function stopPlay\(\)\{[\s\S]*?\n\}", js)
+    sharp = re.search(r"function loadSharpFrame\(\)\{[\s\S]*?\n\}", js)
+    check(show and "loadSharpFrame()" in show.group(0) and stop and "loadSharpFrame()" in stop.group(0)
+          and sharp and "if(ptimer" in sharp.group(0) and "'/frame/'" in sharp.group(0),
+          "a paused or scrubbed-to frame swaps in the full-size photo; playback stays on thumbnails")
+    rule = re.search(r"#captureinfo\{([^}]*)\}", css.split("/* The capture status has its own line")[-1])
+    check(rule and "flex:1 0 100%" in rule.group(1) and re.search(r"(^|;)\s*height:", rule.group(1))
+          and "text-overflow:ellipsis" in rule.group(1),
+          "the capture status has a fixed line of its own, so its text never moves the card")
+    for bad in ("config.json", "_flat.jpg", "missing.jpg"):
+        if c.get(f"/frame/{bad}").status_code != 404:
+            check(False, f"/frame refuses {bad}")
+            break
+    else:
+        check(True, "/frame serves only stored photos (config.json, _scratch and missing names are 404)")
+    try:
+        import cv2
+        import numpy as np
+    except Exception:
+        skip("full-size frame, its framing and caching (OpenCV not installed here)")
+        return
+    name = "20260926_080000.jpg"
+    img = (np.random.default_rng(3).integers(0, 255, (1200, 1600, 3))).astype(np.uint8)
+    cv2.imwrite(str(camera_mod.TIMELAPSE_DIR / name), img)
+    with config.settings_lock:
+        saved = {k: config.settings.get(k) for k in ("grid", "timelapse_flatten", "roi")}
+        config.settings.update(timelapse_flatten=True, roi="", grid={
+            "corners": [[0.1, 0.1], [0.9, 0.1], [0.95, 0.9], [0.05, 0.9]], "cols": 6, "rows": 4})
+        cfgf = dict(config.settings)
+    try:
+        r = c.get(f"/frame/{name}")
+        f = cv2.imdecode(np.frombuffer(r.data, np.uint8), 1) if r.status_code == 200 else None
+        out = WORK / "sharptest"
+        out.mkdir(exist_ok=True)
+        camera_mod.make_thumb(camera_mod.TIMELAPSE_DIR / name, cfgf, dst_dir=out)
+        t = cv2.imread(str(out / name))
+        ok = (f is not None and t is not None and f.shape[1] > 2 * t.shape[1]
+              and abs(f.shape[1] / f.shape[0] - t.shape[1] / t.shape[0]) < 0.01)
+        check(ok, "the full-size frame is flattened like its thumbnail, at full resolution "
+              f"({None if f is None else f.shape[:2]} vs thumb {None if t is None else t.shape[:2]})")
+        tag = r.headers.get("ETag", "").strip('"')
+        r304 = c.get(f"/frame/{name}", headers={"If-None-Match": f'"{tag}"'})
+        check(tag and r304.status_code == 304 and r.headers.get("Cache-Control") == "no-cache",
+              "an unchanged frame is answered 304 without redoing the warp")
+        c.post("/api/grid", json={"corners": [[0.2, 0.1], [0.9, 0.1], [0.95, 0.9], [0.05, 0.9]],
+                                  "rows": 4, "cols": 6})
+        moved = c.get(f"/frame/{name}", headers={"If-None-Match": f'"{tag}"'})
+        check(moved.status_code == 200, "moving the grid corners changes the frame's tag, so it is redrawn")
+        with config.settings_lock:
+            config.settings.update(timelapse_flatten=False, roi="")
+        raw = c.get(f"/frame/{name}")
+        check(raw.status_code == 200 and raw.data == (camera_mod.TIMELAPSE_DIR / name).read_bytes(),
+              "with flattening off and no crop, the frame is the photo itself")
+    finally:
+        with config.settings_lock:
+            config.settings.update(saved)
+        (camera_mod.TIMELAPSE_DIR / name).unlink(missing_ok=True)
+    # the video: sharper scaler and less compression, same preset and threads
+    seen = []
+    real_run = camera_mod.subprocess.run
+
+    def fake_run(args, **kw):
+        seen.append(list(args))
+        return types.SimpleNamespace(returncode=1, stderr=b"test", stdout=b"")
+    camera_mod.subprocess.run = fake_run
+    try:
+        with config.settings_lock:
+            config.settings["timelapse_flatten"] = False
+        camera_mod.render_worker()
+    finally:
+        camera_mod.subprocess.run = real_run
+        with config.settings_lock:
+            config.settings.update(saved)
+        with camera_mod.render_lock:
+            camera_mod.render.update(state="idle", msg="", frames=0)
+    enc = next((a for a in seen if "libx264" in a), [])
+    vf = enc[enc.index("-vf") + 1] if "-vf" in enc else ""
+    check(enc and "flags=lanczos" in vf and enc[enc.index("-crf") + 1] == "20"
+          and enc[enc.index("-preset") + 1] == "ultrafast" and enc[enc.index("-threads") + 1] == "1",
+          f"the video uses a lanczos downscale at crf 20, still ultrafast and one thread ({vf})")
+
 def _ai_reply():
     import io
     import json as _json
@@ -1043,6 +1129,7 @@ run('Camera flattening', _camera_flatten)
 run('Camera preview', _camera_preview)
 run('Camera modes and crop reset', _camera_modes_and_reset)
 run('Camera crop', _camera_crop)
+run('Timelapse sharpness and capture status', _timelapse_sharp)
 run('AI report reply', _ai_reply)
 run('Grow setups', _setups)
 run('Fan, camera and verdict timing', _fan_camera_timing)

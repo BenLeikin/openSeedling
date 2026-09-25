@@ -447,19 +447,20 @@ async function capturePhoto(){
   const info=document.getElementById('captureinfo');
   if(!btn||btn.disabled)return;
   btn.disabled=true;
-  if(info)info.textContent='Capturing\u2026 (~5s)';
+  const say=t=>{if(info){info.textContent=t;info.title=t;}};
+  say('Capturing\u2026 (~5s)');
   try{
     const r=await fetch('/api/capture',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
     const j=await r.json();
     if(j.ok){
-      if(info)info.textContent='Saved.';
+      say('Saved.');
       await refresh();                       // pulls the new photo + count
-      setTimeout(()=>{if(info)info.textContent='';},2500);
+      setTimeout(()=>say(''),2500);
     }else{
-      if(info)info.textContent=j.error||('HTTP '+r.status);
+      say(j.error||('HTTP '+r.status));
     }
   }catch(e){
-    if(info)info.textContent='Request failed.';
+    say('Request failed.');
   }finally{
     btn.disabled=false;
   }
@@ -1012,10 +1013,29 @@ function showFrame(){
     `${frameLabel(frames[fidx])} \u00b7 ${fidx+1}/${frames.length}`;
   loadFrameContext(frames[fidx]);
   (new Image()).src='/thumb/'+frames[(fidx+1)%frames.length]+'?v='+thumbsV;
+  loadSharpFrame();
+}
+// Thumbnails are 640px: right for playing, soft once stretched across the
+// card. When the player stops on a frame, swap in the full-resolution one
+// (framed the same way), after a short pause so scrubbing stays light.
+var sharpTimer=null;
+function loadSharpFrame(){
+  clearTimeout(sharpTimer);
+  if(ptimer||!frames.length)return;
+  const name=frames[fidx];
+  sharpTimer=setTimeout(()=>{
+    if(ptimer||frames[fidx]!==name)return;
+    const im=new Image();
+    im.onload=()=>{
+      if(!ptimer&&frames[fidx]===name)document.getElementById('vframe').src=im.src;
+    };
+    im.src='/frame/'+encodeURIComponent(name);
+  },350);
 }
 function stopPlay(){
   if(ptimer){clearInterval(ptimer);ptimer=null;}
   document.getElementById('playbtn').innerHTML='&#9654; Grow';
+  loadSharpFrame();
 }
 function togglePlay(){
   if(ptimer){stopPlay();return;}

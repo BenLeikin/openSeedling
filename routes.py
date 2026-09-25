@@ -355,6 +355,34 @@ def thumb(name):
     return resp
 
 
+@app.route("/frame/<name>")
+def frame(name):
+    """One stored photo at full resolution, framed like its thumbnail: the
+    timelapse player shows this once it stops on a frame."""
+    if (Path(name).name != name or not name.endswith(".jpg")
+            or name.startswith((".", "_"))):
+        return ("no such photo", 404)
+    path = camera_mod.TIMELAPSE_DIR / name
+    if not path.is_file():
+        return ("no such photo", 404)
+    with config.settings_lock:
+        cfg = dict(config.settings)
+    tag = camera_mod.frame_etag(path, cfg)
+    if request.if_none_match.contains(tag):
+        resp = Response(status=304)     # unchanged: skip the warp entirely
+    else:
+        try:
+            data, raw = camera_mod.frame_view(path, cfg)
+        except Exception as e:
+            return (f"frame failed: {e}", 500)
+        resp = (send_file(raw, mimetype="image/jpeg") if raw is not None
+                else Response(data, mimetype="image/jpeg"))
+    resp.set_etag(tag)
+    # revalidate each time: moving the corners or the crop reframes it
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
 @app.route("/api/grid", methods=["POST"])
 @require_auth
 def update_grid():

@@ -579,6 +579,12 @@ the scrubber thumbnails and the rendered video; turning it off shows raw frames,
 rebuilds the thumbnails automatically, and takes effect in the video on the next
 Render. **Flatten for canopy analysis** only changes what `growth.py` measures.
 
+**Player sharpness.** The Grow player plays 640px thumbnails (light enough for
+8 frames a second over Wi-Fi). When it stops on a frame, paused or scrubbed to,
+it swaps in that photo at full resolution from `/frame/<name>`, framed the same
+way, so a still frame is as sharp as the snapshot. The rendered video is
+1280 wide, lanczos-scaled, x264 ultrafast at CRF 20.
+
 **Full frame and crop.** A USB (UVC) camera frames a different part of its
 sensor at each capture size, so the size decides how much the camera sees, not
 just the resolution. Settings, Camera, **Camera modes** lists the sizes the
@@ -690,7 +696,7 @@ Signed-out viewers see neither the location nor any credential in
 | --- | --- | --- |
 | GET | `/api/status` | Full state: light, sensors, water, settings, auth |
 | GET | `/api/series` | Sensor history for charts |
-| GET | `/api/photos`, `/photo/latest`, `/thumb/<name>` | Timelapse frames |
+| GET | `/api/photos`, `/photo/latest`, `/thumb/<name>`, `/frame/<name>` | Timelapse frames (thumbnail, and full size framed like it) |
 | GET | `/video` | Rendered MP4 |
 | GET | `/api/float` | Fast float read |
 | GET | `/api/report` | Latest AI report + generating flag |

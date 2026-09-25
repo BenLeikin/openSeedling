@@ -1159,6 +1159,12 @@ details.fgroup[open]{padding-bottom:12px}
 
 /* snapshot controls: a button never breaks its own label across lines */
 .capctl button{white-space:nowrap}
+/* The capture status has its own line, always present: text appearing in it
+   used to wrap onto a new row and push the card down by a line. Clipped to
+   one line; the full text is in the tooltip. */
+.capctl{flex-wrap:wrap;row-gap:6px}
+#captureinfo{flex:1 0 100%;height:1.4em;line-height:1.4em;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #cropctl{display:inline-flex;flex-wrap:wrap;gap:inherit}
 
 /* grow setups: tabs across the top, and the editor in Settings */
