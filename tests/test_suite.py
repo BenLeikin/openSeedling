@@ -707,7 +707,17 @@ def _setups():
         {"name": "Seedlings", "dli": 5, "band": [10, 15]}, {"name": "Transplants", "dli": None, "band": [15, 20]}]}})
     check("Seedlings: 5 mol" in ctx and "Transplants: not measured" in ctx,
           "the AI report is told about each setup")
+    with g.settings_lock:
+        g.settings["light_backend"] = "dim"
+    opts = {o["value"]: o["label"] for o in c.get("/api/status").get_json()["light_options"]}
+    with g.settings_lock:
+        g.settings["light_backend"] = "pwm"
+    opts2 = {o["value"]: o["label"] for o in g.light_options()}
+    check(opts.get("main") == "AC fixture (dim line)" and opts2.get("main") == "5V LED panel",
+          f"setups list lights by fixture, following the backend ({opts} / {opts2})")
     js = (APP / "static" / "app.js").read_text()
+    check("'Main light'" not in js and "lightChoices(" in js,
+          "the Setups editor offers fixtures, not 'main' and 'second'")
     check('id="setuptabs"' in (APP / "templates" / "index.html").read_text()
           and "Object.keys(sensorData).filter(inSetup)" in js and "&&inSetup(k)" in js,
           "setup tabs exist and filter the sensor chips and charts")

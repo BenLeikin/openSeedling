@@ -483,8 +483,18 @@ function applySetup(j){
 }
 // Settings, Setups: an editable copy, redrawn from the server only when the
 // user is not in the middle of changing it
-var setupDraft=null, setupDirty=false;
+var setupDraft=null, setupDirty=false, lightOpts=[];
+// the lights as physical fixtures ("AC fixture (dim line)", "5V LED panel"),
+// from the server, which knows the wiring; a stored choice the hardware no
+// longer offers stays listed so saving does not silently drop it
+function lightChoices(cur){
+  const out=lightOpts.map(o=>[o.value,o.label]);
+  if(cur&&!out.some(o=>o[0]===cur))out.push([cur,cur==='second'?'Second light (not available)':cur]);
+  out.push(['','None']);
+  return out;
+}
 function renderSetupConfig(j){
+  lightOpts=j.light_options||[];
   const box=document.getElementById('setupcfg');
   if(!box||setupDirty)return;
   setupDraft=JSON.parse(JSON.stringify((j.settings&&j.settings.setups&&j.settings.setups.length)
@@ -503,8 +513,8 @@ function drawSetupConfig(){
       <div class="frow">
         <div><label>Name <input data-f="name" value="${esc(s.name||'')}" maxlength="40"></label></div>
         <div><label>Light <select data-f="light">
-          ${[['main','Main light'],['second','Second light'],['','None']].map(([v,t])=>
-            `<option value="${v}"${(s.light||'')===v?' selected':''}>${t}</option>`).join('')}
+          ${lightChoices(s.light).map(([v,t])=>
+            `<option value="${esc(v)}"${(s.light||'')===v?' selected':''}>${esc(t)}</option>`).join('')}
         </select></label></div>
         <div><label>Light sensor <select data-f="lux">
           ${[...luxKeys.map(k=>[k,sensorMeta(k,0).label+' ('+k+')'+(k in (sensorData||{})?'':' \u00b7 not detected')]),['','None']].map(([v,t])=>

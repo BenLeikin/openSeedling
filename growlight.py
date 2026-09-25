@@ -4537,6 +4537,7 @@ def status_payload(authed=None):
         day_light=day,
         light_plan=setups_out[0]["plan"],
         setups=setups_out,
+        light_options=light_options(cfg),
         light_metrics=(lambda lx: {
             "k": lux_k(),
             "canopy": canopy_factor(),
@@ -5131,6 +5132,36 @@ def setup_k(setup):
     return k if k > 0 else lux_k()
 
 
+FIXTURE_LABELS = {"pwm": "5V LED panel", "dim": "AC fixture (dim line)",
+                  "kasa": "AC fixture (smart plug)"}
+
+
+def light_options(cfg=None):
+    """The lights a setup can be assigned, named by what they physically are.
+
+    Internally a setup stores "main" or "second", because which fixture is
+    main is a setting (light_backend) and the second light always takes the
+    PWM output main is not using. People think in fixtures, so the names
+    come from the wiring, and they follow a backend change on their own."""
+    if cfg is None:
+        with settings_lock:
+            cfg = dict(settings)
+    main = light_backend(cfg)
+    opts = [{"value": "main", "label": FIXTURE_LABELS[main]}]
+    if pwm2 is not None:              # the second light needs its own PWM channel
+        sec = "pwm" if main != "pwm" else "dim"
+        opts.append({"value": "second", "label": FIXTURE_LABELS[sec]
+                     + ("" if cfg.get("light2_on") else " (turned off in Settings)")})
+    return opts
+
+
+def light_label(value, cfg=None):
+    for o in light_options(cfg):
+        if o["value"] == value:
+            return o["label"]
+    return {"main": "main light", "second": "second light"}.get(value, "no light")
+
+
 def main_lux_key(cfg=None):
     """The light sensor under the main light: what a calibration sweep reads."""
     for st in setups(cfg):
@@ -5159,6 +5190,7 @@ def setup_status(cfg, setup, on_time, off_time, tz):
     lo, hi = setup_band(setup)
     return {"id": setup.get("id"), "name": setup.get("name"),
             "light": setup.get("light", ""), "lux": key, "k": k,
+            "light_label": light_label(setup.get("light", ""), cfg) if setup.get("light") else "",
             "sensors": list(setup.get("sensors") or []),
             "band": [lo, hi], "day": day,
             "plan": light_plan(cfg, on_time, off_time, setup)}
@@ -5680,9 +5712,9 @@ def _v_setups(v):
             sid += "x"
         light = x.get("light") or ""
         if light not in ("main", "second", ""):
-            raise ValueError(f"{name}: light must be main, second or none")
+            raise ValueError(f"{name}: unknown light")
         if light and light in lights:
-            raise ValueError(f"{name}: the {light} light is already assigned to another setup")
+            raise ValueError(f"{name}: the {light_label(light)} is already assigned to another setup")
         lux = str(x.get("lux") or "")
         if lux and not re.fullmatch(r"lux(:\d)?", lux):
             raise ValueError(f"{name}: light sensor must be lux or lux:2")

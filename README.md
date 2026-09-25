@@ -141,7 +141,9 @@ For separate grow areas, each under its own light (for example seedlings under
 the main fixture and transplants under the second light), define setups in
 Settings, Setups. Each setup has:
 
-- a **light**: the main light, the second light, or none;
+- a **light**, listed by fixture: the AC fixture (dim line or smart plug), the
+  5V LED panel, or none. Which fixture is which output follows the light
+  backend setting, so the names stay right if that changes;
 - a **light sensor**: the BH1750 under that light. A second BH1750 on the same
   I2C bus with its ADDR pin tied high answers at 0x5C and logs as `lux:2`;
   the first (ADDR low, 0x23) stays `lux`. A light and a sensor can each belong
