@@ -405,6 +405,7 @@ editable from the dashboard Settings panel; the rest are edited in the file.
 | `capture_interval_min` | 30 | Minutes between frames |
 | `capture_brightness` | 100 | Brightness held during each photo |
 | `camera_backend` | `usb` | `usb` (v4l2) or `rpicam` |
+| `timelapse_flatten` / `cam_rectify` | true / true | Show the snapshot, thumbnails and video flattened / flatten before canopy analysis |
 | `cam_rotate` | 0 | Rotation baked in at capture (0/90/180/270) for an upside-down mount |
 | `usb_*` | | USB camera controls: device, size, warmup frames, exposure, gain, white balance, focus, and the auto/manual toggle for each |
 | `camera_enabled` | true | Master switch: hides all camera UI and pauses the AI report |
@@ -509,7 +510,13 @@ numbers fiction) and a closed canopy hides the soil. Soil moisture comes from
 the probes.
 
 Define the grid by dragging its corners on the photo (or the Detect button),
-then lock it. Manual captures are tagged `_m` in the filename; they are analyzed
+then lock it.
+
+Two switches in Settings, Camera control flattening (warping the photo to a
+top-down view of the tray grid). **Show photos flattened** covers the snapshot,
+the scrubber thumbnails and the rendered video; turning it off shows raw frames,
+rebuilds the thumbnails automatically, and takes effect in the video on the next
+Render. **Flatten for canopy analysis** only changes what `growth.py` measures. Manual captures are tagged `_m` in the filename; they are analyzed
 only inside the photoperiod, and the daily AI report always prefers the latest
 scheduled frame so an off-schedule dark shot never becomes its input.
 

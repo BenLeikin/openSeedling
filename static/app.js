@@ -380,7 +380,8 @@ function renderPhoto(j){  const card=document.getElementById('photocard');
   // cannot place corners on an image that has already been rectified.
   const stamp=j.latest_photo_time||Date.now();
   const editing=gridEditable();
-  const flat=!editing && grid && grid.corners && grid.corners.length===4;
+  const flatOn=!(j.settings && j.settings.timelapse_flatten===false);
+  const flat=flatOn && !editing && grid && grid.corners && grid.corners.length===4;
   img.dataset.flat=flat?'1':'';
   if(flat){
     img.onerror=()=>{                       // no corners yet, or rectify failed
@@ -394,7 +395,8 @@ function renderPhoto(j){  const card=document.getElementById('photocard');
   const when=j.latest_photo_time?new Date(j.latest_photo_time):null;
   document.getElementById('photoinfo').textContent=
     (when?`Taken ${when.toLocaleString()}`:'')+` \u00b7 ${j.photo_count} photos so far`
-    + (img.dataset.flat?' \u00b7 flattened':' \u00b7 raw frame (unlock grid to place corners)');
+    + (img.dataset.flat?' \u00b7 flattened'
+       :(flatOn&&!editing?' \u00b7 raw frame (unlock grid to place corners)':' \u00b7 raw frame'));
 }
 async function capturePhoto(){
   const btn=document.getElementById('capturebtn');
@@ -530,6 +532,8 @@ function fillForm(cfg){
    syncUsbAuto();}
   {const cr=f.elements['cam_rectify'];
    if(cr&&document.activeElement!==cr)cr.checked=cfg.cam_rectify!==false;
+   const tf=f.elements['timelapse_flatten'];
+   if(tf&&document.activeElement!==tf)tf.checked=cfg.timelapse_flatten!==false;
 }
   {const fw=f.elements['fan_with_light'];
    if(fw&&document.activeElement!==fw)fw.checked=cfg.fan_with_light!==false;}
@@ -611,12 +615,12 @@ function loadFrameContext(name){
 }
 function showFrame(){
   if(!frames.length)return;
-  document.getElementById('vframe').src='/thumb/'+frames[fidx];
+  document.getElementById('vframe').src='/thumb/'+frames[fidx]+'?v='+thumbsV;
   document.getElementById('scrub').value=fidx;
   document.getElementById('pframe').textContent=
     `${frameLabel(frames[fidx])} \u00b7 ${fidx+1}/${frames.length}`;
   loadFrameContext(frames[fidx]);
-  (new Image()).src='/thumb/'+frames[(fidx+1)%frames.length];
+  (new Image()).src='/thumb/'+frames[(fidx+1)%frames.length]+'?v='+thumbsV;
 }
 function stopPlay(){
   if(ptimer){clearInterval(ptimer);ptimer=null;}
@@ -631,12 +635,14 @@ function togglePlay(){
     fidx++;showFrame();
   },125);
 }
+var thumbsV=0;          // bumped by the server when thumbnails are rebuilt
 async function loadFrames(){
   if(window._camOn===false)return;
   try{
     const r=await fetch('/api/photos');const j=await r.json();
     const had=frames.length;
     frames=j.names||[];
+    if(j.v!=null&&j.v!==thumbsV){thumbsV=j.v;if(had)showFrame();}  // rebuilt: refetch
     const card=document.getElementById('videocard');
     if(frames.length<2){card.style.display='none';return;}
     card.style.display='';
@@ -2472,6 +2478,7 @@ document.getElementById('cfgform').addEventListener('submit',async ev=>{
                   'usb_focus_absolute','usb_white_balance_temperature'])
     if(f.elements[k])body[k]=parseInt(f.elements[k].value||0,10);
   if(f.elements['cam_rectify'])body.cam_rectify=f.elements['cam_rectify'].checked;
+  if(f.elements['timelapse_flatten'])body.timelapse_flatten=f.elements['timelapse_flatten'].checked;
   for(const k of ['humidity_low','humidity_high','fan_humidity_on','fan_min_speed'])
     if(f.elements[k])body[k]=parseInt(f.elements[k].value||0,10);
   if(f.elements['live_interval_s'])

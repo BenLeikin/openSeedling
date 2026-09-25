@@ -472,6 +472,46 @@ def _dli_band():
     check(not stale, "no hardcoded 6-12 band left" + (f" {stale}" if stale else ""))
 
 
+def _camera_flatten():
+    js = (APP / "static" / "app.js").read_text()
+    html = (APP / "templates" / "index.html").read_text()
+    check('name="timelapse_flatten"' in html and "timelapse_flatten===false" in js,
+          "the snapshot's flattening follows a visible setting")
+    check(js.count("'/thumb/'+frames[") == 2 and "?v='+thumbsV" in js,
+          "scrubber thumbnail URLs carry a version, so browsers drop cached ones")
+    g.TIMELAPSE_DIR.mkdir(parents=True, exist_ok=True)
+    g.THUMB_DIR.mkdir(parents=True, exist_ok=True)
+    for i in range(3):
+        (g.TIMELAPSE_DIR / f"2026092{i}_120000.jpg").write_bytes(b"photo")
+        (g.THUMB_DIR / f"2026092{i}_120000.jpg").write_text("flat")
+    real_mt = g.make_thumb
+
+    def fake_thumb(ph, cfg=None, dst_dir=None):
+        time.sleep(0.05)
+        ((dst_dir or g.THUMB_DIR) / ph.name).write_text(
+            "flat" if (cfg or {}).get("timelapse_flatten", True) else "raw")
+    g.make_thumb = fake_thumb
+    counts = []
+    try:
+        v0 = c.get("/api/photos").get_json().get("v", 0)
+        with g.settings_lock:
+            g.settings["timelapse_flatten"] = True
+        c.post("/api/settings", json={"timelapse_flatten": False})
+        for _ in range(40):
+            counts.append(len(c.get("/api/photos").get_json()["names"]))
+            if not g._thumbs_lock.locked() and counts[-1] and \
+               c.get("/api/photos").get_json().get("v", 0) != v0:
+                break
+            time.sleep(0.05)
+        kinds = {p.read_text() for p in g.THUMB_DIR.glob("*.jpg")}
+        v1 = c.get("/api/photos").get_json().get("v", 0)
+    finally:
+        g.make_thumb = real_mt
+    check(kinds == {"raw"}, f"turning flattening off rebuilds the thumbnails raw ({kinds})")
+    check(min(counts) == 3, f"the scrubber's frame list never empties during a rebuild (min {min(counts)})")
+    check(v1 != v0, "the thumbnail version changes after a rebuild")
+
+
 def _shutdown():
     """Last: sets the shutdown flag for good, the way SIGTERM does."""
     with g.settings_lock:
@@ -544,6 +584,7 @@ run('Watering', _sec3)
 run('Data', _sec4)
 run('Light schedule', _sec5)
 run('DLI target', _dli_band)
+run('Camera flattening', _camera_flatten)
 run('Shutdown', _shutdown)
 
 # --------------------------------------------------------------------------

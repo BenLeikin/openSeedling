@@ -384,11 +384,14 @@
             <option value="180">180&deg;</option>
             <option value="270">270&deg;</option>
           </select></label></div>
+        <div class="checkrow"><input type="checkbox" name="timelapse_flatten" id="camflatshow">
+          <label for="camflatshow">Show photos flattened (snapshot, scrubber, timelapse)</label></div>
         <div class="checkrow"><input type="checkbox" name="cam_rectify" id="camrect">
-          <label for="camrect">Flatten perspective for cell analysis</label></div>
-        <div class="tzrow"><span class="fhint">The snapshot shows the flattened,
-          top-down view. Unlock the grid to see the raw frame and drag the
-          corners.</span></div>
+          <label for="camrect">Flatten for canopy analysis</label></div>
+        <div class="tzrow"><span class="fhint">Flattening warps the photo to a
+          top-down view of the tray grid. Changing the first box rebuilds the
+          scrubber thumbnails; press Render to rebuild the video. Unlock the
+          grid to see the raw frame and drag the corners.</span></div>
       </div>
     </details>
 

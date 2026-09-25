@@ -18,6 +18,7 @@ Requires (handled by setup.sh):
 import asyncio
 import json
 import os
+import shutil
 import re
 import secrets
 import subprocess
@@ -125,8 +126,8 @@ DEFAULTS = {
     "usb_auto_white_balance": False,
     "usb_white_balance_temperature": 4600,
     "cam_rotate": 0,           # 0/90/180/270, applied to captures and analysis
-    "timelapse_flatten": True, # render the video and thumbnails flattened
-    "cam_rectify": True,       # flatten the tray plane before per-cell analysis
+    "timelapse_flatten": True, # show the snapshot, thumbnails and video flattened
+    "cam_rectify": True,       # flatten the tray plane before canopy analysis
     "camera_enabled": False,   # master switch for all camera features (photos,
                                #   timelapse, camera vision, AI report). Off until
                                #   a working camera is connected.
@@ -1200,14 +1201,14 @@ def parse_roi(s):
     return x, y, w, h
 
 
-def make_thumb(photo_path, cfg=None):
+def make_thumb(photo_path, cfg=None, dst_dir=None):
     """640px thumbnail for the browser player. Cheap, one-time per photo.
 
     Rectified to match the snapshot and the rendered video, so scrubbing the
     timelapse shows the same corrected view as everything else. Falls back to a
     plain scale if the grid corners are not set or OpenCV is unavailable.
     """
-    dst = THUMB_DIR / photo_path.name
+    dst = (dst_dir or THUMB_DIR) / photo_path.name
     if dst.exists():
         return
     if cfg is None:
@@ -3465,7 +3466,11 @@ def latest_photo():
 
 @app.route("/api/photos")
 def photo_list():
-    return jsonify(names=[p.name for p in sorted(THUMB_DIR.glob("*.jpg"))])
+    try:
+        v = db.kv_get("thumbs_version") or 0
+    except Exception:
+        v = 0
+    return jsonify(names=[p.name for p in sorted(THUMB_DIR.glob("*.jpg"))], v=v)
 
 
 @app.route("/thumb/<name>")
@@ -3890,18 +3895,46 @@ def api_rebuild_thumbs():
     built once at capture time, so existing ones keep whatever geometry was
     current then and the scrubber would show a mix.
     """
-    def work():
-        with settings_lock:
-            cfg = dict(settings)
-        photos = [p for p in sorted(TIMELAPSE_DIR.glob("*.jpg"))
-                  if not p.name.startswith("_")]
-        for old in THUMB_DIR.glob("*.jpg"):
-            old.unlink(missing_ok=True)
-        for i, ph in enumerate(photos):
-            make_thumb(ph, cfg)
-        log.info(f"rebuilt {len(photos)} thumbnails")
-    threading.Thread(target=work, daemon=True).start()
+    rebuild_thumbs_async()
     return jsonify(ok=True, started=True)
+
+
+_thumbs_lock = threading.Lock()
+
+
+def rebuild_thumbs_async():
+    """Regenerate every thumbnail in the background, one rebuild at a time."""
+    def work():
+        if not _thumbs_lock.acquire(blocking=False):
+            return                     # one already running; it reads settings fresh
+        try:
+            with settings_lock:
+                cfg = dict(settings)
+            photos = [p for p in sorted(TIMELAPSE_DIR.glob("*.jpg"))
+                      if not p.name.startswith("_")]
+            # Build each new thumbnail beside the old ones and swap it in, so
+            # the scrubber's frame list never empties while this runs.
+            tmp = THUMB_DIR / "_rebuild"
+            shutil.rmtree(tmp, ignore_errors=True)
+            tmp.mkdir(parents=True, exist_ok=True)
+            keep = set()
+            for ph in photos:
+                make_thumb(ph, cfg, dst_dir=tmp)
+                if (tmp / ph.name).exists():
+                    os.replace(tmp / ph.name, THUMB_DIR / ph.name)
+                    keep.add(ph.name)
+            for old in THUMB_DIR.glob("*.jpg"):
+                if old.name not in keep:
+                    old.unlink(missing_ok=True)     # its photo is gone
+            shutil.rmtree(tmp, ignore_errors=True)
+            # thumbnails are cached by browsers for a year under their name;
+            # a new version in the URL is what makes them fetch the new ones
+            db.kv_set("thumbs_version", int(time.time()))
+            log.info(f"rebuilt {len(photos)} thumbnails "
+                     f"({'flattened' if cfg.get('timelapse_flatten', True) else 'raw'})")
+        finally:
+            _thumbs_lock.release()
+    threading.Thread(target=work, daemon=True, name="thumbs").start()
 
 
 @app.route("/api/purge_series", methods=["POST"])
@@ -5568,9 +5601,15 @@ def update_settings():
             _kasa_dev = None      # reconnect with the new address or credentials
         with settings_lock:
             was = light_backend(settings)
+            flat_was = settings.get("timelapse_flatten", True)
             settings.update(new)
             now_backend = light_backend(settings)
+            flat_changed = settings.get("timelapse_flatten", True) != flat_was
             save_config()
+        if flat_changed:
+            # thumbnails are built once per photo; without this the scrubber
+            # would keep showing the old geometry
+            rebuild_thumbs_async()
         if now_backend != was:
             # dark the abandoned output before the loop starts driving the new one
             release_backend(was)
