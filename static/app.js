@@ -501,6 +501,7 @@ function fillForm(cfg){
                   'usb_width','usb_height','usb_exposure_time_absolute','usb_gain',
                   'usb_focus_absolute','usb_white_balance_temperature','humidity_low','humidity_high','fan_humidity_on','fan_min_speed','alert_sustain_min','alert_cooldown_hours',
                   'alert_dry_pct','alert_humidity_high','alert_dli_low','alert_dli_high',
+                  'dli_target_low','dli_target_high',
                   'moisture_threshold_pct','pump_cooldown_min',
                   'fill_max_seconds','pump_daily_max_seconds','pump_max_seconds',
                   'probe_median_depth','auto_wet_cal_max_move','light_floor_pct',
@@ -942,8 +943,8 @@ function renderSensors(j){
            +`${lightMetrics.canopy&&lightMetrics.canopy!==1?` \u00d7 ${lightMetrics.canopy} canopy factor`:''}">`
            +`PPFD <b>${Math.round(lightMetrics.ppfd)}</b><span class="u">\u00b5mol</span></span>`;
        if(lightMetrics.dli!=null){
-         const d=lightMetrics.dli, cls=(d>=6&&d<=12)?'ok':(d<6?'low':'high');
-         extra+=`<span class="schip dli ${cls}" title="daily light integral so far today \u00b7 seedlings want 6-12 mol/m\u00b2/day">`
+         const d=lightMetrics.dli, cls=(d>=dliBand.lo&&d<=dliBand.hi)?'ok':(d<dliBand.lo?'low':'high');
+         extra+=`<span class="schip dli ${cls}" title="daily light integral so far today \u00b7 seedling target ${dliBand.lo}-${dliBand.hi} mol/m\u00b2/day">`
            +`DLI <b>${d.toFixed(1)}</b><span class="u">mol</span></span>`;
        }
        if(extra)envg.insertAdjacentHTML('beforeend',extra);
@@ -2419,6 +2420,7 @@ function applyStatus(j){
     loadFrames();
     applyAuth(j);
     setAiControls(j.settings);
+    setDliBand(j.settings);
     {const rc=document.getElementById('reportctl');if(rc)rc.style.display=canEdit?'':'none';}
     fetchReport();
     requestAnimationFrame(fitReportHeight);
@@ -2485,7 +2487,7 @@ document.getElementById('cfgform').addEventListener('submit',async ev=>{
                   'moisture_threshold_pct','pump_cooldown_min','fill_max_seconds',
                   'pump_daily_max_seconds','pump_max_seconds','probe_median_depth'])
     if(f.elements[k])body[k]=parseInt(f.elements[k].value||0,10);
-  for(const k of ['alert_dli_low','alert_dli_high'])
+  for(const k of ['alert_dli_low','alert_dli_high','dli_target_low','dli_target_high'])
     if(f.elements[k])body[k]=parseFloat(f.elements[k].value||0);
   if(f.elements['alerts_enabled'])body.alerts_enabled=f.elements['alerts_enabled'].checked;
   if(f.elements['soil_temp_low_f']){
@@ -2644,6 +2646,28 @@ async function genReport(){
     if(info)info.textContent='';
     document.getElementById('reportbody').innerHTML='<p class="rmuted">Request timed out, but it may still be generating. Reload in a moment to see it.</p>';
   }
+}
+// The seedling DLI target band, from Settings, Targets. The bar's scale grows
+// to fit a high band: 16 mol for a 6 to 12 band, 24 for 15 to 20, and so on.
+var dliBand={lo:15,hi:20,max:24};   // var: read by renders that can run before this line
+function setDliBand(s){
+  if(!s)return;
+  const lo=parseFloat(s.dli_target_low), hi=parseFloat(s.dli_target_high);
+  if(!(lo>0&&hi>lo))return;
+  const max=[16,24,32,40,48,60,80].find(m=>m>=hi*1.15)||Math.ceil(hi*1.15);
+  if(lo===dliBand.lo&&hi===dliBand.hi&&max===dliBand.max&&dliBand.drawn)return;
+  dliBand={lo,hi,max,drawn:true};
+  const pct=v=>(v/max*100).toFixed(2)+'%';
+  const band=document.getElementById('dliband');
+  if(band){band.style.left=pct(lo);band.style.width=pct(hi-lo);}
+  const sc=document.getElementById('dliscale');
+  if(sc)sc.innerHTML=`<i style="left:${pct(lo)}"></i><i style="left:${pct(hi)}"></i>`
+    +`<span class="s0" style="left:0">0</span>`
+    +`<span style="left:${pct(lo)}">${lo}</span>`
+    // the word "target" only fits between the two numbers on a wide band
+    +((hi-lo)/max>=0.3?`<span class="sband" style="left:${pct((lo+hi)/2)}">target</span>`:'')
+    +`<span style="left:${pct(hi)}">${hi}</span>`
+    +`<span class="s16" style="left:100%">${max} mol</span>`;
 }
 function setAiControls(s){
   if(!s)return;
@@ -3253,24 +3277,25 @@ function renderDayProgress(j){
   const lit=document.getElementById('dplit');
   if(lit)lit.textContent=(day&&day.lit_minutes)?durStr(day.lit_minutes*60000)+' lit':'';
 
-  // DLI against the seedling target band (6-12), scaled to 16 mol
+  // DLI against the seedling target band from Settings, Targets
+  const {lo:BLO,hi:BHI,max:BMAX}=dliBand;
   const d=(day&&day.dli!=null)?day.dli:(lightMetrics&&lightMetrics.dli);
   const dfill=document.getElementById('dlifill');
   const dval=document.getElementById('dlival');
   const pace=document.getElementById('dlipace');
-  if(dfill)dfill.style.width=Math.max(0,Math.min(100,(d||0)/16*100)).toFixed(1)+'%';
+  if(dfill)dfill.style.width=Math.max(0,Math.min(100,(d||0)/BMAX*100)).toFixed(1)+'%';
 
   // Follow the schedule. During the photoperiod the fair comparison is not the
-  // whole day's 6-12 target but where the total should be by NOW: that target
+  // whole day's target band but where the total should be by NOW: that band
   // scaled by how far through the lit day we are. Judging a noon total of 5.0
   // against the full-day 6 called it "below target" while it was exactly on
   // pace. After lights out the full band applies again.
-  const lo=6*frac, hi=12*frac;
+  const lo=BLO*frac, hi=BHI*frac;
   const during=frac>0&&frac<1;
   const pm=document.getElementById('dlipacemark');
   if(pm){
-    pm.style.left=Math.max(0,Math.min(100,lo/16*100)).toFixed(1)+'%';
-    pm.style.width=Math.max(0.6,Math.min(100,(hi-lo)/16*100)).toFixed(1)+'%';
+    pm.style.left=Math.max(0,Math.min(100,lo/BMAX*100)).toFixed(1)+'%';
+    pm.style.width=Math.max(0.6,Math.min(100,(hi-lo)/BMAX*100)).toFixed(1)+'%';
     pm.style.display=during?'':'none';
     pm.title=`where today\u2019s total should be by now: ${lo.toFixed(1)}\u2013${hi.toFixed(1)} mol`;
   }
@@ -3279,7 +3304,7 @@ function renderDayProgress(j){
   let state='';
   if(d!=null){
     state = during ? (d<lo?'low':(d<=hi?'ok':'high'))
-                   : (d<6?'low':(d<=12?'ok':'high'));
+                   : (d<BLO?'low':(d<=BHI?'ok':'high'));
   }
   if(dfill)dfill.className='dlifill'+(state?' '+state:'');
   if(dval){
@@ -3304,9 +3329,9 @@ function renderDayProgress(j){
       // schedule-aware: today's total = banked + what the remaining ramp and
       // full-brightness hours will deliver, from the measured light curve
       const proj=d+fc;
-      const verdict=proj<6?'behind':(proj<=12?'on track':'ahead');
+      const verdict=proj<BLO?'behind':(proj<=BHI?'on track':'ahead');
       pace.innerHTML=`forecast <b>${proj.toFixed(1)}</b> \u00b7 ${verdict}`;
-      pace.className='dlipace '+(proj<6?'low':(proj<=12?'ok':'high'));
+      pace.className='dlipace '+(proj<BLO?'low':(proj<=BHI?'ok':'high'));
       pace.title=`${d.toFixed(1)} banked + ${fc.toFixed(1)} from the rest of `
         +'today\u2019s schedule (measured light curve)';
     }else if(frac<0.08){
@@ -3314,9 +3339,9 @@ function renderDayProgress(j){
       pace.className='dlipace';
     }else{
       const proj=d/frac;                       // fallback: no sweep on file yet
-      const verdict=proj<6?'behind':(proj<=12?'on track':'ahead');
+      const verdict=proj<BLO?'behind':(proj<=BHI?'on track':'ahead');
       pace.innerHTML=`projected <b>${proj.toFixed(1)}</b> \u00b7 ${verdict}`;
-      pace.className='dlipace '+(proj<6?'low':(proj<=12?'ok':'high'));
+      pace.className='dlipace '+(proj<BLO?'low':(proj<=BHI?'ok':'high'));
       pace.title='rough estimate from today\u2019s average so far; '
         +'measure the light response curve for a schedule-aware forecast';
     }

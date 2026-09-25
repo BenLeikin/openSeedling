@@ -78,6 +78,11 @@ DEFAULTS = {
                                 #   fixture is turned up too far or hung too
                                 #   close. 0 disables (default, since it only
                                 #   makes sense once a target is chosen).
+    # Seedling DLI target band (mol/m2/day): the Day card's DLI bar, the Plan
+    # verdict and advice, and the AI report all judge against it. 15-20 is the
+    # pepper transplant range from OSU/Purdue extension; see the README.
+    "dli_target_low": 15.0,
+    "dli_target_high": 20.0,
     "alert_dli_low": 4,         # checked once daily just after lights-off:
                                 #   a day that finishes under this many mol/m2
                                 #   means the light was off, dimmed or blocked.
@@ -1865,7 +1870,7 @@ def gather_report_data():
                 + f", mode {cfg.get('fan_mode', 'auto')}") if FAN_HW else None,
         "pressure_trend": pressure_tendency(),
         "light_metrics": {"ppfd": ppfd_from_lux((snap.get("lux") or (None, None))[1]),
-                          "dli": dli_today()},
+                          "dli": dli_today(), "dli_target": list(dli_target(cfg))},
         "planting": planting,
         "germination": germ_out,
         "units": {"temp": temp_unit(), "press": press_unit()},
@@ -2448,6 +2453,7 @@ def run_alerts(readings):
             "humidity_high": cfg.get("alert_humidity_high", 80),
             "dli_low": cfg.get("alert_dli_low", 4),
             "dli_high": cfg.get("alert_dli_high", 0),
+            "dli_target": dli_target(cfg),
         }
         # The rules judge filtered values: a lone bad reading should not fire a
         # soil-temperature or humidity alert, and the sustain window cannot help
@@ -4975,7 +4981,16 @@ def dli_forecast(cfg, now, on_time, off_time):
     return round(total / 1_000_000, 2)
 
 
-DLI_TARGET_LOW, DLI_TARGET_HIGH = 6.0, 12.0
+def dli_target(cfg=None):
+    """The seedling DLI target band (low, high) in mol/m2/day, from settings."""
+    if cfg is None:
+        with settings_lock:
+            cfg = dict(settings)
+    lo = float(cfg.get("dli_target_low") or DEFAULTS["dli_target_low"])
+    hi = float(cfg.get("dli_target_high") or DEFAULTS["dli_target_high"])
+    if hi <= lo:                         # a hand-edited config.json; keep it usable
+        lo, hi = DEFAULTS["dli_target_low"], DEFAULTS["dli_target_high"]
+    return lo, hi
 
 
 def light_plan(cfg, on_time, off_time):
@@ -4995,6 +5010,7 @@ def light_plan(cfg, on_time, off_time):
                 "advice": ["Waiting for a full day measured by the light "
                            "sensor; the first one completes tonight."]}
     full, lit_h = m["mol"], m["lit_hours"]
+    DLI_TARGET_LOW, DLI_TARGET_HIGH = dli_target(cfg)
     # average light per lit hour, measured: what an hour more or less is worth
     per_hour = full / lit_h if lit_h > 0 else 0.0
     mx = float(cfg.get("max_bright", 100))
@@ -5009,7 +5025,7 @@ def light_plan(cfg, on_time, off_time):
             add_h = deficit / per_hour
             plan["advice"].append(
                 f"About {add_h:.1f}h more light, or brighter, to reach "
-                f"{DLI_TARGET_LOW:.0f} mol." if lit_h + add_h <= 18 else
+                f"{DLI_TARGET_LOW:g} mol." if lit_h + add_h <= 18 else
                 "Even an 18h day would not close the gap at this intensity.")
     elif full > DLI_TARGET_HIGH:
         plan["status"] = "high"
@@ -5021,7 +5037,7 @@ def light_plan(cfg, on_time, off_time):
                 f"{mx * DLI_TARGET_HIGH / full:.0f}% max.")
     else:
         plan["advice"].append(
-            f"Inside the {DLI_TARGET_LOW:.0f}-{DLI_TARGET_HIGH:.0f} seedling window.")
+            f"Inside the {DLI_TARGET_LOW:g}-{DLI_TARGET_HIGH:g} mol seedling target.")
     return plan
 
 
@@ -5474,6 +5490,8 @@ SETTINGS_VALIDATORS = {
     "alert_humidity_high": _v_int(0, 100),
     "alert_dli_low": _v_float(0, 30),
     "alert_dli_high": _v_float(0, 80),
+    "dli_target_low": _v_float(0.5, 60, clamp=False),
+    "dli_target_high": _v_float(1, 65, clamp=False),
     "fan_mode": _v_choice("auto", "on", "off"),
     "fan_speed": _v_int(0, 100),
     "fan_auto_speed": _v_int(0, 100),
@@ -5535,6 +5553,15 @@ def update_settings():
             new[k] = fn(v)
         except ValueError as e:
             errors[k] = str(e) or "invalid"
+    if "dli_target_low" in new or "dli_target_high" in new:
+        with settings_lock:
+            lo = new.get("dli_target_low", settings.get("dli_target_low"))
+            hi = new.get("dli_target_high", settings.get("dli_target_high"))
+        if lo is not None and hi is not None and lo >= hi:
+            for k in ("dli_target_low", "dli_target_high"):
+                if k in new:
+                    new.pop(k)
+                    errors[k] = "the DLI target low must be below the high"
     if new:
         if any(k.startswith("kasa_") for k in new):
             global _kasa_dev

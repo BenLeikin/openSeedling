@@ -154,8 +154,9 @@ def build_context(d):
     if lm.get("ppfd") is not None:
         line = f"Light intensity: {lm['ppfd']} PPFD (umol/m2/s) at the sensor"
         if lm.get("dli") is not None:
+            lo, hi = lm.get("dli_target") or (15, 20)
             line += (f"; daily light integral so far {lm['dli']} mol/m2/day "
-                     "(seedlings want roughly 6-12)")
+                     f"(the grower's seedling target is {lo:g}-{hi:g})")
         L.append(line)
     fan = d.get("fan")
     if fan:

@@ -59,17 +59,16 @@
 
     <div class="dplabel">Daily light integral</div>
     <div class="dlibar">
-      <span class="dliband"></span>
+      <span class="dliband" id="dliband"></span>
       <span class="dlifill" id="dlifill"></span>
       <i class="dlipacemark" id="dlipacemark" title="where today's total should be by now"></i>
     </div>
-    <div class="dliscale" aria-hidden="true">
-      <i style="left:37.5%"></i><i style="left:75%"></i>
+    <div class="dliscale" id="dliscale" aria-hidden="true">
+      <i style="left:62.5%"></i><i style="left:83.33%"></i>
       <span class="s0" style="left:0">0</span>
-      <span style="left:37.5%">6</span>
-      <span class="sband" style="left:56.25%">target</span>
-      <span style="left:75%">12</span>
-      <span class="s16" style="left:100%">16 mol</span>
+      <span style="left:62.5%">15</span>
+      <span style="left:83.33%">20</span>
+      <span class="s16" style="left:100%">24 mol</span>
     </div>
     <div class="dprow">
       <span id="dlival"></span>
@@ -606,7 +605,15 @@
           <input name="humidity_low" type="number" min="0" max="100"></label></div>
         <div><label>Humidity band high (%, 0 = off)
           <input name="humidity_high" type="number" min="0" max="100"></label></div>
+        <div><label>Seedling DLI target low (mol/m&sup2;/day)
+          <input name="dli_target_low" type="number" min="0.5" max="60" step="0.5"></label></div>
+        <div><label>Seedling DLI target high (mol/m&sup2;/day)
+          <input name="dli_target_high" type="number" min="1" max="65" step="0.5"></label></div>
       </div>
+      <p class="fhint">The DLI band drives the Day card's light bar, the Plan
+        verdict and advice, and the AI report. Extension guidance for pepper
+        transplants is 15-20; for vegetable transplants in general, 10-15. The
+        short-day and too-much-light alerts are set separately under Alerts.</p>
     </details>
 
     <details class="fgroup">

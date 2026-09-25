@@ -423,6 +423,7 @@ editable from the dashboard Settings panel; the rest are edited in the file.
 | `ai_report_hour` / `ai_report_minute` | 8:00 | When the daily report runs |
 | `ai_notify` | true | Push the report summary |
 | `ai_notes` | (grow description) | Context handed to the AI; list what you planted here to sharpen species guesses |
+| `dli_target_low` / `dli_target_high` | 15 / 20 | Seedling DLI target band (mol/m2/day), editable in Settings, Targets. Drives the Day card's DLI bar and pace, the Plan verdict and advice, and the AI report. 15-20 is extension guidance for pepper transplants; lower it for younger seedlings or other crops |
 | `alert_dli_low` | 4 | Daily light integral floor (mol/m2/day), judged just after lights-off; 0 disables |
 | `alerts_enabled` | false | Master switch for threshold alerts |
 | `alert_sustain_min` / `alert_cooldown_hours` | 10 / 6 | Sustain window before a rule fires; reminder interval while it persists |

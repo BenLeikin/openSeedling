@@ -440,6 +440,38 @@ def _sec5():
     g.sun_window = real_sw
 
 
+def _dli_band():
+    cfg0 = c.get("/api/status").get_json()["settings"]
+    check((cfg0.get("dli_target_low"), cfg0.get("dli_target_high")) == (15.0, 20.0),
+          "default seedling DLI target is 15-20 and reaches the dashboard")
+    r = c.post("/api/settings", json={"dli_target_low": 18, "dli_target_high": 12}).get_json()
+    check(not r["ok"] and "dli_target_low" in r["errors"] and g.dli_target() == (15.0, 20.0),
+          "a DLI target with low above high is refused and nothing changes")
+    r = c.post("/api/settings", json={"dli_target_low": 10, "dli_target_high": 14}).get_json()
+    check(r["ok"] and g.dli_target() == (10.0, 14.0), "a valid DLI target saves")
+    real_md = g.measured_day
+    g.measured_day = lambda cfg, now, off: {"mol": 12.0, "lit_hours": 12.0, "day": "yesterday"}
+    try:
+        in_band = g.light_plan(dict(g.settings), None, None)["status"]
+        c.post("/api/settings", json={"dli_target_low": 15, "dli_target_high": 20})
+        below = g.light_plan(dict(g.settings), None, None)
+    finally:
+        g.measured_day = real_md
+    check(in_band == "ok" and below["status"] == "low" and any("15 mol" in a for a in below["advice"]),
+          "the Plan verdict and advice follow the configured band (12 mol: in 10-14, short of 15-20)")
+    import alerts
+    alerts.reset()
+    out = alerts.check_all({"_dli": 3.0}, {"dli_low": 4, "dli_target": (15.0, 20.0)})
+    msg = " ".join(str(x) for x in out)
+    check("15-20" in msg and "6-12" not in msg, "the short-day alert quotes the configured band")
+    ctx = ai_report.build_context({"light_metrics": {"ppfd": 200, "dli": 9.0, "dli_target": [15, 20]}})
+    check("15-20" in ctx and "6-12" not in ctx, "the AI report is told the configured band")
+    stale = [f for f in ("static/app.js", "templates/index.html", "growlight.py",
+                         "alerts.py", "ai_report.py")
+             if re.search(r"\b6-12\b", (APP / f).read_text())]
+    check(not stale, "no hardcoded 6-12 band left" + (f" {stale}" if stale else ""))
+
+
 def _shutdown():
     """Last: sets the shutdown flag for good, the way SIGTERM does."""
     with g.settings_lock:
@@ -511,6 +543,7 @@ run('Live stream', _sec2)
 run('Watering', _sec3)
 run('Data', _sec4)
 run('Light schedule', _sec5)
+run('DLI target', _dli_band)
 run('Shutdown', _shutdown)
 
 # --------------------------------------------------------------------------

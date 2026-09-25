@@ -199,8 +199,9 @@ def check_all(snapshot, cfg, unit_temp="F"):
             out.append((act, "dli_low", "Short light day",
                         f"Today finished at {d:.1f} mol/m2, below the "
                         f"{dli_low:g} mol target. The light was off, dimmed, "
-                        "or blocked for part of the photoperiod; seedlings "
-                        "want 6-12 mol/day.", "warn"))
+                        "or blocked for part of the photoperiod; the seedling "
+                        "target is {:g}-{:g} mol/day.".format(*cfg.get(
+                            "dli_target", (15, 20))), "warn"))
         elif act == "clear":
             out.append((act, "dli_low", "Light back on target",
                         f"Today finished at {d:.1f} mol/m2.", "good"))

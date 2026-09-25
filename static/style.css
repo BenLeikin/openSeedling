@@ -611,7 +611,7 @@ body.nocam .amedia{display:none}
    37.5%-75% of the width. */
 .dlibar{position:relative;height:8px;border-radius:5px;background:var(--tint);
   border:1px solid var(--line);overflow:visible}
-.dliband{position:absolute;left:37.5%;width:37.5%;top:0;bottom:0;
+.dliband{position:absolute;left:62.5%;width:20.83%;top:0;bottom:0;
   background:var(--band);pointer-events:none}
 .dlifill{position:relative;display:block;height:100%;border-radius:5px;
   background:linear-gradient(90deg,#cfe3b8,var(--leaf));transition:width .6s ease}
