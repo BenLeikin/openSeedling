@@ -1312,6 +1312,25 @@ def _startup_log_noise():
           "the backfill leaves a photo alone while it is being captured or is under 10 s old")
     photo.unlink(missing_ok=True)
 
+
+def _unsaved_settings():
+    """An edited setting used to revert on the next status (every few seconds,
+    from the live readings) as soon as its field lost focus."""
+    js = (APP / "static" / "app.js").read_text()
+    fh = re.search(r"function formHolds\(key, cfg\)\{[\s\S]*?\n\}", js)
+    ff = re.search(r"function fillForm\(cfg\)\{[\s\S]*?(?=\nlet frames=)", js)
+    check("f.addEventListener('input',markDirty);f.addEventListener('change',markDirty);" in js
+          and fh and "if(formDirty.has(key))return true;" in fh.group(0),
+          "a changed setting is marked unsaved and kept over any incoming status")
+    check(ff and "document.activeElement" not in ff.group(0) and ff.group(0).count("formHolds(") >= 20,
+          "every settings field is repainted only through formHolds, not a focus check")
+    sub = re.search(r"getElementById\('cfgform'\)\.addEventListener\('submit'[\s\S]*?\n\}\);", js)
+    check(sub and "if(!(j.errors&&k in j.errors))formDirty.delete(k);" in sub.group(0),
+          "saving clears the unsaved mark for accepted fields; a rejected field keeps what was typed")
+    check("formDirty.add('usb_width');formDirty.add('usb_height');" in js
+          and "formDirty.add('kasa_host');" in js,
+          "fields filled in by the camera-mode and plug pickers count as unsaved edits too")
+
 def run(name, fn):
     """A section that crashes counts as one failure; the rest still run."""
     section(name)
@@ -1342,6 +1361,7 @@ run('Per-light calibration and per-tray arming', _per_sensor_controls)
 run('Camera canopy trays', _camera_canopy)
 run('AI report by setup', _report_by_setup)
 run('Startup log noise and thumbnail race', _startup_log_noise)
+run('Unsaved settings', _unsaved_settings)
 run('Shutdown', _shutdown)
 
 # --------------------------------------------------------------------------

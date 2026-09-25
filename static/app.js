@@ -701,6 +701,7 @@ async function loadCameraModes(){
       const m=/^(\d+)x(\d+)$/.exec(sel.value);if(!m)return;
       const f=document.getElementById('cfgform');
       f.elements['usb_width'].value=m[1];f.elements['usb_height'].value=m[2];
+      formDirty.add('usb_width');formDirty.add('usb_height');   // set by code: no input event
     });
   }
 }
@@ -874,8 +875,24 @@ function stopAlign(){
 // repaints the form with the OLD value, so a changed dropdown visibly snaps
 // back before snapping forward again.
 let pendingSave={};
+// Fields changed on the page but not saved yet. A status arrives every few
+// seconds (the live readings), and each one repaints the form; guarding only
+// the focused field meant a choice reverted as soon as focus moved on, which
+// on a phone is right after picking from a dropdown. A changed field now keeps
+// the user's value until Save sends it (or the page is reloaded).
+const formDirty=new Set();
+function markDirty(ev){
+  const el=ev.target;
+  if(!el||!el.name||!el.form||el.form.id!=='cfgform')return;
+  formDirty.add(el.name);
+  const msg=document.getElementById('msg');
+  if(msg&&!/Planting/.test(msg.textContent)){msg.textContent='Unsaved changes';msg.className='';}
+}
+{const f=document.getElementById('cfgform');
+ if(f){f.addEventListener('input',markDirty);f.addEventListener('change',markDirty);}}
 function formHolds(key, cfg){
   const f=document.getElementById('cfgform');
+  if(formDirty.has(key))return true;
   if(f&&f.elements[key]&&document.activeElement===f.elements[key])return true;
   if(!(key in pendingSave))return false;
   // eslint-disable-next-line eqeqeq
@@ -913,43 +930,43 @@ function fillForm(cfg){
        f.elements[k].value=cfg[k]||'';
    showScheduleMode(sm?sm.value:'solar');}
   {const cb=f.elements['camera_backend'];
-   if(cb&&document.activeElement!==cb)cb.value=cfg.camera_backend||'rpicam';
+   if(cb&&!formHolds('camera_backend',cfg))cb.value=cfg.camera_backend||'rpicam';
    // only show the UVC controls when a USB camera is selected
    document.querySelectorAll('.usbonly').forEach(el=>
      el.style.display=(cb&&cb.value==='usb')?'':'none');
    for(const [name] of USB_AUTO){
      const el=f.elements[name];
-     if(el&&document.activeElement!==el)el.checked=!!cfg[name];
+     if(el&&!formHolds(name,cfg))el.checked=!!cfg[name];
    }
    syncUsbAuto();}
   {const cr=f.elements['cam_rectify'];
-   if(cr&&document.activeElement!==cr)cr.checked=cfg.cam_rectify!==false;
+   if(cr&&!formHolds('cam_rectify',cfg))cr.checked=cfg.cam_rectify!==false;
    const tf=f.elements['timelapse_flatten'];
-   if(tf&&document.activeElement!==tf)tf.checked=cfg.timelapse_flatten!==false;
+   if(tf&&!formHolds('timelapse_flatten',cfg))tf.checked=cfg.timelapse_flatten!==false;
 }
   {const fw=f.elements['fan_with_light'];
-   if(fw&&document.activeElement!==fw)fw.checked=cfg.fan_with_light!==false;}
+   if(fw&&!formHolds('fan_with_light',cfg))fw.checked=cfg.fan_with_light!==false;}
   {const ae=f.elements['alerts_enabled'];
-   if(ae&&document.activeElement!==ae)ae.checked=cfg.alerts_enabled!==false;
+   if(ae&&!formHolds('alerts_enabled',cfg))ae.checked=cfg.alerts_enabled!==false;
    const lo=f.elements['soil_temp_low_f'];
-   if(lo&&document.activeElement!==lo){
+   if(lo&&!formHolds('soil_temp_low_f',cfg)){
      const fv=+cfg.soil_temp_low_f||0;
      lo.value=fv?Math.round(tFromF(fv)):0;
    }
    const ll=document.getElementById('threshlolbl');
    if(ll)ll.innerHTML=tUnit();}
   {const u=f.elements['units'];
-   if(u&&document.activeElement!==u){u.value=cfg.units||'imperial';units=u.value;}
+   if(u&&!formHolds('units',cfg)){u.value=cfg.units||'imperial';units=u.value;}
    const th=f.elements['soil_temp_high_f'];
-   if(th&&document.activeElement!==th){
+   if(th&&!formHolds('soil_temp_high_f',cfg)){
      const fv=+cfg.soil_temp_high_f||0;
      th.value=fv?Math.round(tFromF(fv)):0;
    }
    const lbl=document.getElementById('threshlbl');
    if(lbl)lbl.innerHTML=tUnit();}
-  if(document.activeElement!==f.elements['capture_enabled'])
+  if(!formHolds('capture_enabled',cfg))
     f.elements['capture_enabled'].checked=!!cfg['capture_enabled'];
-  if(f.elements['camera_enabled']&&document.activeElement!==f.elements['camera_enabled'])
+  if(f.elements['camera_enabled']&&!formHolds('camera_enabled',cfg))
     f.elements['camera_enabled'].checked=!!cfg['camera_enabled'];
   applyTheme(cfg['theme']||'auto');
   for(const k of ['kasa_host','kasa_user'])
@@ -2456,6 +2473,7 @@ function initPlug(){
     if(!b)return;
     const f=document.getElementById('cfgform');
     f.elements['kasa_host'].value=b.dataset.host;
+    formDirty.add('kasa_host');     // set by code: no input event
     list.hidden=true;
     const info=document.getElementById('pluginfo');
     if(info)info.textContent=`${b.dataset.host} selected \u00b7 test it, then save`;
@@ -3038,9 +3056,13 @@ document.getElementById('cfgform').addEventListener('submit',async ev=>{
       const grp=el&&el.closest&&el.closest('details.fgroup');
       if(grp)grp.open=true;
     }
-    // hold every accepted field until the server echoes it back
+    // hold every accepted field until the server echoes it back; it is no
+    // longer an unsaved edit. A rejected one stays as typed, to be fixed.
     for(const k of (j.saved||[]))
       if(k in body)pendingSave[k]=body[k];
+    for(const k of Object.keys(body))
+      if(!(j.errors&&k in j.errors))formDirty.delete(k);
+    formDirty.delete('kasa_pass');
     if(r.ok&&j.ok){msg.textContent='Saved \u{1F331}';msg.className='ok';refresh();}
     else if(errs&&errs.length){
       // everything valid was saved; say exactly which fields were rejected
