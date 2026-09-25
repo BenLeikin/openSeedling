@@ -536,6 +536,40 @@ def _camera_preview():
           f"the align preview uses the photo's own camera mode ({seen.get('size')}), so it shows the same view")
 
 
+def _camera_modes_and_reset():
+    sample = """ioctl: VIDIOC_ENUM_FMT
+\tType: Video Capture
+
+\t[0]: 'MJPG' (Motion-JPEG, compressed)
+\t\tSize: Discrete 1280x720
+\t\t\tInterval: Discrete 0.033s (30.000 fps)
+\t\tSize: Discrete 3264x2448
+\t\tSize: Discrete 2048x1536
+\t[1]: 'YUYV' (YUYV 4:2:2)
+\t\tSize: Discrete 4000x3000
+"""
+    check(g.parse_mjpeg_modes(sample) == [(3264, 2448), (2048, 1536), (1280, 720)],
+          "camera modes are read from v4l2-ctl, MJPEG only, largest first")
+    with g.settings_lock:
+        g.settings.update(usb_width=2048, usb_height=1536, roi="0.1,0.1,0.5,0.5")
+    # the settings form resubmits the crop unchanged along with a new size
+    r = c.post("/api/settings", json={"usb_width": 3264, "usb_height": 2448,
+                                      "roi": "0.1,0.1,0.5,0.5"}).get_json()
+    check(r.get("crop_reset") and g.settings["roi"] == "",
+          "changing the capture size resets the crop, since each size frames a different view")
+    r = c.post("/api/settings", json={"usb_width": 2048, "usb_height": 1536,
+                                      "roi": "0.2,0.2,0.4,0.4"}).get_json()
+    check(not r.get("crop_reset") and g.settings["roi"] == "0.2,0.2,0.4,0.4",
+          "a crop drawn in the same save as a new size is kept")
+    js = (APP / "static" / "app.js").read_text()
+    html = (APP / "templates" / "index.html").read_text()
+    check('id="cropreset"' in html and "getElementById('cropreset')" in js,
+          "a Reset crop button sits beside Crop when a crop is set")
+    check(re.search(r"function startCrop[\s\S]{0,900}/api/preview", js) is not None,
+          "Crop starts from a live full camera frame, not the cropped photo")
+    c.post("/api/settings", json={"roi": ""})
+
+
 def _camera_crop():
     check(g.crop_box({"roi": "0.1,0.2,0.5,0.6"}) == (0.1, 0.2, 0.5, 0.6)
           and g.crop_box({"roi": ""}) is None and g.crop_box({"roi": "junk"}) is None,
@@ -659,6 +693,7 @@ run('Light schedule', _sec5)
 run('DLI target', _dli_band)
 run('Camera flattening', _camera_flatten)
 run('Camera preview', _camera_preview)
+run('Camera modes and crop reset', _camera_modes_and_reset)
 run('Camera crop', _camera_crop)
 run('Shutdown', _shutdown)
 

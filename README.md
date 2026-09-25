@@ -518,17 +518,20 @@ the scrubber thumbnails and the rendered video; turning it off shows raw frames,
 rebuilds the thumbnails automatically, and takes effect in the video on the next
 Render. **Flatten for canopy analysis** only changes what `growth.py` measures.
 
-**Crop.** With flattening off, the **Crop** button on the snapshot shows the
-full frame; drag a rectangle over the area to keep and press **Save crop**
-(**Full frame** clears it). The crop is applied when photos are shown, not when
-they are taken, so it can be changed or removed later without losing anything:
-the snapshot, scrubber thumbnails (rebuilt automatically), the next Render and
-the AI report all use it. The cell grid is drawn to match the cropped view.
+**Full frame and crop.** A USB (UVC) camera frames a different part of its
+sensor at each capture size, so the size decides how much the camera sees, not
+just the resolution. Settings, Camera, **Camera modes** lists the sizes the
+camera offers, largest first; the largest is normally the whole sensor, the
+widest view. Photos, Align and Crop all use the chosen size, so Align frames
+exactly what gets captured. Changing the size resets the crop.
 
-**Align** shows a live preview in the same camera mode as the timelapse photos
-(`usb_width` x `usb_height`), so it frames exactly what will be captured. A UVC
-camera reads a different part of its sensor in each resolution, so a preview in
-another mode shows a different view. Manual captures are tagged `_m` in the filename; they are analyzed
+With flattening off, **Crop** on the snapshot takes a fresh full frame from the
+camera; drag a rectangle over the area to keep and press **Save crop**. **Reset
+crop** (in crop mode, and beside Crop whenever a crop is set) goes back to the
+full frame. The crop is applied when photos are shown, not when they are taken,
+so it can be changed or reset later without losing anything: the snapshot,
+scrubber thumbnails (rebuilt automatically), the next Render and the AI report
+all use it. The cell grid is drawn to match the cropped view. Manual captures are tagged `_m` in the filename; they are analyzed
 only inside the photoperiod, and the daily AI report always prefers the latest
 scheduled frame so an off-schedule dark shot never becomes its input.
 

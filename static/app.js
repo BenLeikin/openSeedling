@@ -387,6 +387,8 @@ function renderPhoto(j){  const card=document.getElementById('photocard');
   const roi=(!flat && !editing)?parseRoi(j.settings&&j.settings.roi):null;
   img.dataset.flat=flat?'1':'';
   img.dataset.crop=roi?roi.join(','):'';
+  {const rb=document.getElementById('cropreset');
+   if(rb)rb.style.display=(j.settings&&parseRoi(j.settings.roi))?'':'none';}
   if(flat){
     img.onerror=()=>{                       // no corners yet, or rectify failed
       if(img.dataset.flat){img.dataset.flat='';img.src='/photo/latest?'+stamp;}
@@ -430,6 +432,31 @@ async function capturePhoto(){
     btn.disabled=false;
   }
 }
+// ---- camera modes: the sizes the USB camera offers, largest first ----
+async function loadCameraModes(){
+  const sel=document.getElementById('usbmodes');
+  if(!sel||sel.dataset.loaded)return;
+  sel.dataset.loaded='1';
+  try{
+    const r=await fetch('/api/camera_modes');const j=await r.json();
+    if(!j.modes||!j.modes.length){sel.innerHTML='<option value="">no modes reported</option>';return;}
+    sel.innerHTML='<option value="">choose\u2026</option>'+j.modes.map((m,i)=>
+      `<option value="${esc(m)}">${esc(m)}${i===0?' (full sensor)':''}</option>`).join('');
+  }catch(e){sel.dataset.loaded='';}
+}
+{
+  const sel=document.getElementById('usbmodes');
+  if(sel){
+    sel.addEventListener('focus',loadCameraModes);
+    sel.addEventListener('pointerdown',loadCameraModes);
+    sel.addEventListener('change',()=>{
+      const m=/^(\d+)x(\d+)$/.exec(sel.value);if(!m)return;
+      const f=document.getElementById('cfgform');
+      f.elements['usb_width'].value=m[1];f.elements['usb_height'].value=m[2];
+    });
+  }
+}
+
 // ---- view crop: drag a rectangle on the full photo ----
 // The crop is a view setting: stored photos stay full, and the snapshot,
 // scrubber, video and AI report are cut to it. Only used when photos are
@@ -461,14 +488,19 @@ function startCrop(){
   cropping=true;
   const img=document.getElementById('photo');
   img.dataset.flat='';img.dataset.crop='';img.onerror=null;
-  img.src='/photo/latest?'+Date.now();          // the whole frame to choose from
+  img.src='/photo/latest?'+Date.now();          // shown until the live frame lands
+  // then a fresh full frame from the camera, uncropped: choose from what the
+  // camera sees now, in the same mode the photos are taken in
+  fetch('/api/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
+    .then(r=>r.json()).then(j=>{if(cropping&&j&&j.ok)img.src='/preview.jpg?'+j.ts;})
+    .catch(()=>{});
   document.getElementById('gridsvg').style.display='none';
   const svg=document.getElementById('guidesvg');
   svg.style.display='';svg.style.pointerEvents='auto';svg.style.cursor='crosshair';
   cropSel=parseRoi(document.querySelector('[name=roi]')&&document.querySelector('[name=roi]').value);
   document.getElementById('cropctl').style.display='';
   // only the crop controls while choosing: fewer buttons, no wrapping
-  for(const id of ['cropbtn','capturebtn','alignbtn']){const b=document.getElementById(id);if(b)b.style.display='none';}
+  for(const id of ['cropbtn','capturebtn','alignbtn','cropreset']){const b=document.getElementById(id);if(b)b.style.display='none';}
   drawCrop();
 }
 function stopCrop(){
@@ -526,6 +558,8 @@ function cropPoint(ev){
   });
   const cf=document.getElementById('cropfull');
   if(cf)cf.addEventListener('click',()=>saveCrop(''));
+  const cr=document.getElementById('cropreset');
+  if(cr)cr.addEventListener('click',()=>saveCrop(''));
   const cc=document.getElementById('cropcancel');
   if(cc)cc.addEventListener('click',stopCrop);
 }

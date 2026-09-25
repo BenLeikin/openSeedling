@@ -4155,6 +4155,37 @@ def api_preview():
                    sharpness=sharpness_score(PREVIEW_PATH))
 
 
+def parse_mjpeg_modes(text):
+    """MJPEG frame sizes from `v4l2-ctl --list-formats-ext`, largest first."""
+    modes, in_mjpg = set(), False
+    for line in text.splitlines():
+        m = re.search(r"\[\d+\]:\s*'(\w+)'", line)
+        if m:
+            in_mjpg = m.group(1) == "MJPG"
+            continue
+        m = re.search(r"Size:\s*Discrete\s+(\d+)x(\d+)", line)
+        if m and in_mjpg:
+            modes.add((int(m.group(1)), int(m.group(2))))
+    return sorted(modes, key=lambda wh: wh[0] * wh[1], reverse=True)
+
+
+@app.route("/api/camera_modes")
+@require_auth
+def api_camera_modes():
+    """The USB camera's MJPEG capture sizes, largest first. The largest is
+    normally the whole sensor: the widest view to crop down from."""
+    with settings_lock:
+        dev = settings.get("usb_device", "/dev/video0")
+    try:
+        r = subprocess.run(["v4l2-ctl", "-d", dev, "--list-formats-ext"],
+                           capture_output=True, timeout=10)
+        modes = parse_mjpeg_modes(r.stdout.decode(errors="replace"))
+    except Exception as e:
+        return jsonify(ok=False, error=str(e), modes=[])
+    return jsonify(ok=bool(modes), modes=[f"{w}x{h}" for w, h in modes],
+                   error=None if modes else "no MJPEG modes reported")
+
+
 @app.route("/preview.jpg")
 def preview_img():
     if not PREVIEW_PATH.exists():
@@ -5673,7 +5704,18 @@ def update_settings():
             was = light_backend(settings)
             flat_was = settings.get("timelapse_flatten", True)
             roi_was = settings.get("roi", "")
+            size_was = (settings.get("usb_width"), settings.get("usb_height"))
             settings.update(new)
+            crop_reset = False
+            # (the settings form resubmits the crop field unchanged, so "the
+            # crop was not edited in this save" is the test, not "absent")
+            if (roi_was and new.get("roi", roi_was) == roi_was and
+                    (settings.get("usb_width"), settings.get("usb_height")) != size_was):
+                # the crop was drawn on the old mode's view, which a UVC camera
+                # frames differently; keeping it would cut the wrong area
+                settings["roi"] = ""
+                crop_reset = True
+                log.info("capture size changed: crop reset to full frame")
             now_backend = light_backend(settings)
             flat_changed = (settings.get("timelapse_flatten", True) != flat_was
                             or settings.get("roi", "") != roi_was)
@@ -5687,7 +5729,8 @@ def update_settings():
             release_backend(was)
             db.log_event("light", f"backend {was} -> {now_backend}")
         wake.set()
-    return jsonify(ok=not errors, saved=sorted(new), errors=errors)
+    return jsonify(ok=not errors, saved=sorted(new), errors=errors,
+                   crop_reset=bool(new) and crop_reset)
 
 
 def _all_off():

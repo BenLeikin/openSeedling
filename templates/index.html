@@ -157,9 +157,10 @@
     <button type="button" id="capturebtn">&#128247; Take photo</button>
     <button type="button" id="alignbtn">&#127919; Align</button>
     <button type="button" id="cropbtn">&#9986; Crop</button>
+    <button type="button" id="cropreset" style="display:none">Reset crop</button>
     <span id="cropctl" style="display:none">
       <button type="button" id="cropsave">Save crop</button>
-      <button type="button" id="cropfull">Full frame</button>
+      <button type="button" id="cropfull">Reset crop</button>
       <button type="button" id="cropcancel">Cancel</button>
     </span>
     <span id="captureinfo" role="status" class="muted"></span>
@@ -350,6 +351,12 @@
             <span class="tx">&times;</span>
             <input name="usb_height" type="number" min="120" max="4096">
           </span></label></div>
+        <div class="usbonly"><label>Camera modes
+          <select id="usbmodes"><option value="">list the camera's sizes&hellip;</option></select></label></div>
+        <div class="usbonly tzrow"><span class="fhint">Each size is a different view on
+          a USB camera, not just a different resolution; the largest is normally
+          the whole sensor. Photos, Align and Crop all use this size. Changing
+          it resets the crop.</span></div>
         <div class="usbonly checkrow"><input type="checkbox" name="usb_auto_focus" id="uaf">
           <label for="uaf">Autofocus</label></div>
         <div class="usbonly manual-focus"><label>Focus (0 = near, 1023 = far)
