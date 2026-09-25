@@ -1160,3 +1160,12 @@ details.fgroup[open]{padding-bottom:12px}
 /* snapshot controls: a button never breaks its own label across lines */
 .capctl button{white-space:nowrap}
 #cropctl{display:inline-flex;flex-wrap:wrap;gap:inherit}
+
+/* grow setups: tabs across the top, and the editor in Settings */
+.setuptabs{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 12px}
+.setuptabs button{white-space:nowrap}
+.setuptabs button.on{outline:2px solid var(--leaf);outline-offset:1px}
+.setupedit{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:0 0 10px}
+.setupsens{display:flex;flex-wrap:wrap;gap:6px 14px;margin:8px 0}
+.setupsens label{white-space:nowrap}
+.setupbtns{display:flex;flex-wrap:wrap;gap:8px;align-items:center}

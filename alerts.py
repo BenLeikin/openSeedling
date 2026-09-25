@@ -191,6 +191,35 @@ def check_all(snapshot, cfg, unit_temp="F"):
     # --- daily light total, judged just after lights-off. The caller only
     # supplies _dli inside that window, so no evaluation (and no clear)
     # happens outside it; a low day fires once, a good day clears.
+    # With several grow setups, each is judged on its own sensor and band.
+    per = snapshot.get("_dli_setups") or {}
+    for st in cfg.get("setups") or []:
+        d = per.get(st.get("id"))
+        if d is None:
+            continue
+        sid, name = st.get("id"), st.get("name") or st.get("id")
+        blo, bhi = st.get("band") or (10, 15)
+        lo_ = cfg.get("dli_low", DEFAULTS["dli_low"])
+        if lo_:
+            act = evaluate(f"dli_low:{sid}", d < lo_, now, hold=0)
+            if act in ("fire", "remind"):
+                out.append((act, f"dli_low:{sid}", f"{name}: short light day",
+                            f"{name} finished at {d:.1f} mol/m2, below the {lo_:g} "
+                            f"mol alert level; its target is {blo:g}-{bhi:g} "
+                            "mol/day.", "warn"))
+            elif act == "clear":
+                out.append((act, f"dli_low:{sid}", f"{name}: light back on target",
+                            f"{name} finished at {d:.1f} mol/m2.", "good"))
+        hi_ = cfg.get("dli_high", DEFAULTS["dli_high"])
+        if hi_:
+            act = evaluate(f"dli_high:{sid}", d > hi_, now, hold=0)
+            if act in ("fire", "remind"):
+                out.append((act, f"dli_high:{sid}", f"{name}: too much light today",
+                            f"{name} finished at {d:.1f} mol/m2, above the {hi_:g} "
+                            "mol ceiling.", "warn"))
+            elif act == "clear":
+                out.append((act, f"dli_high:{sid}", f"{name}: light back under the ceiling",
+                            f"{name} finished at {d:.1f} mol/m2.", "good"))
     dli_low = cfg.get("dli_low", DEFAULTS["dli_low"])
     d = snapshot.get("_dli")
     if d is not None and dli_low:

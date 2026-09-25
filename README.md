@@ -135,6 +135,29 @@ the watering controls, and the daily AI plant-health report.*
   failure, and sensors that stopped reporting (aged out as removed after three
   silent days).
 
+### Grow setups
+
+For separate grow areas, each under its own light (for example seedlings under
+the main fixture and transplants under the second light), define setups in
+Settings, Setups. Each setup has:
+
+- a **light**: the main light, the second light, or none;
+- a **light sensor**: the BH1750 under that light. A second BH1750 on the same
+  I2C bus with its ADDR pin tied high answers at 0x5C and logs as `lux:2`;
+  the first (ADDR low, 0x23) stays `lux`. A light and a sensor can each belong
+  to only one setup;
+- an optional **lux per umol** factor for that light's spectrum (blank uses
+  `lux_to_ppfd_k`);
+- a **DLI target band**;
+- the **sensors** that belong to it. None ticked shows every sensor.
+
+With two or more setups, tabs appear at the top of the dashboard. The chosen
+tab decides whose light the Day card's DLI bar, pace and forecast, and the Plan
+card describe, and which sensor chips and charts are shown. The short-day and
+too-much-light alerts are judged per setup and name it, and the AI report is
+told each setup's light. The photoperiod bar and brightness still show the main
+light's schedule, and the watering controls show every tray.
+
 ### Daily AI report
 
 - Sends the latest scheduled photo plus the environment, canopy trend,
@@ -424,7 +447,8 @@ editable from the dashboard Settings panel; the rest are edited in the file.
 | `ai_report_hour` / `ai_report_minute` | 8:00 | When the daily report runs |
 | `ai_notify` | true | Push the report summary |
 | `ai_notes` | (grow description) | Context handed to the AI; list what you planted here to sharpen species guesses |
-| `dli_target_low` / `dli_target_high` | 15 / 20 | Seedling DLI target band (mol/m2/day), editable in Settings, Targets. Drives the Day card's DLI bar and pace, the Plan verdict and advice, and the AI report. 15-20 is extension guidance for pepper transplants; lower it for younger seedlings or other crops |
+| `setups` | [] | Grow setups, edited in Settings, Setups: each has a name, a light (`main`, `second` or none), a light sensor (`lux` or `lux:2`), an optional lux-to-PPFD factor for that light, a DLI band, and the sensors that belong to it. Empty means one setup, Main, with everything |
+| `dli_target_low` / `dli_target_high` | 10 / 15 | DLI band for the single default setup when `setups` is empty |
 | `alert_dli_low` | 4 | Daily light integral floor (mol/m2/day), judged just after lights-off; 0 disables |
 | `alerts_enabled` | false | Master switch for threshold alerts |
 | `alert_sustain_min` / `alert_cooldown_hours` | 10 / 6 | Sustain window before a rule fires; reminder interval while it persists |

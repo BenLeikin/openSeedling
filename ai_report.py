@@ -164,6 +164,16 @@ def build_context(d):
             line += (f"; daily light integral so far {lm['dli']} mol/m2/day "
                      f"(the grower's seedling target is {lo:g}-{hi:g})")
         L.append(line)
+    sets = lm.get("setups") or []
+    if len(sets) > 1:
+        L.append("The grow is split into separate setups, each under its own light; "
+                 "the photo shows only part of it. Daily light so far per setup:")
+        for st in sets:
+            dli = st.get("dli")
+            lo, hi = st.get("band") or (0, 0)
+            L.append(f"  - {st.get('name')}: "
+                     + (f"{dli} mol/m2/day" if dli is not None else "not measured")
+                     + f" (target {lo:g}-{hi:g})")
     fan = d.get("fan")
     if fan:
         L.append(f"Fan: {fan}")

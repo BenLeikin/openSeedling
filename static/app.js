@@ -432,6 +432,130 @@ async function capturePhoto(){
     btn.disabled=false;
   }
 }
+// ---- grow setups: separate areas, each with its own light and sensors ----
+// The server sends every setup's measured day and verdict in `setups`; the tab
+// chosen here decides which one the Day and Plan cards show and which sensors
+// the chips and charts include. A setup with no sensors ticked shows them all.
+var setupsList=[], selSetup=null;
+try{ selSetup=localStorage.getItem('setup'); }catch(e){}
+function curSetup(){
+  return setupsList.find(s=>s.id===selSetup)||setupsList[0]||null;
+}
+function inSetup(k){
+  const cs=curSetup();
+  if(!cs||!cs.sensors||!cs.sensors.length||setupsList.length<2)return true;
+  if(k===cs.lux||(k==='ppfd'&&cs.lux==='lux'))return true;
+  return cs.sensors.includes(k);
+}
+function applySetup(j){
+  setupsList=j.setups||[];
+  const cs=curSetup();
+  if(cs){
+    // the light views read these; point them at the chosen setup
+    j.day_light=cs.day; j.light_plan=cs.plan;
+    if(j.light_metrics)j.light_metrics={...j.light_metrics,dli:cs.day?cs.day.dli:null};
+    setDliBand({dli_target_low:cs.band[0],dli_target_high:cs.band[1]});
+  }else setDliBand(j.settings);
+  const nav=document.getElementById('setuptabs');
+  if(nav){
+    if(setupsList.length<2){nav.style.display='none';nav.innerHTML='';}
+    else{
+      nav.style.display='';
+      const html=setupsList.map(s=>`<button type="button" data-id="${esc(s.id)}"`
+        +` class="${cs&&s.id===cs.id?'on':''}">${esc(s.name)}</button>`).join('');
+      if(nav.innerHTML!==html)nav.innerHTML=html;
+    }
+  }
+  {const lbl=document.getElementById('dlisetup');
+   if(lbl)lbl.textContent=(setupsList.length>1&&cs)?' \u00b7 '+cs.name:'';}
+  renderSetupConfig(j);
+}
+{
+  const nav=document.getElementById('setuptabs');
+  if(nav)nav.addEventListener('click',ev=>{
+    const b=ev.target.closest('button[data-id]');if(!b)return;
+    selSetup=b.dataset.id;
+    try{localStorage.setItem('setup',selSetup);}catch(e){}
+    window._chartCtxSynced=false;
+    refresh();
+    renderChartGrid();
+  });
+}
+// Settings, Setups: an editable copy, redrawn from the server only when the
+// user is not in the middle of changing it
+var setupDraft=null, setupDirty=false;
+function renderSetupConfig(j){
+  const box=document.getElementById('setupcfg');
+  if(!box||setupDirty)return;
+  setupDraft=JSON.parse(JSON.stringify((j.settings&&j.settings.setups&&j.settings.setups.length)
+    ? j.settings.setups
+    : (j.setups||[]).map(s=>({id:s.id,name:s.name,light:s.light,lux:s.lux,
+        k:null,sensors:s.sensors,dli_low:s.band[0],dli_high:s.band[1]}))));
+  drawSetupConfig();
+}
+function drawSetupConfig(){
+  const box=document.getElementById('setupcfg');
+  if(!box||!setupDraft)return;
+  const keys=Object.keys(sensorData||{}).filter(k=>!k.startsWith('growth')&&!k.startsWith('dry:')
+    &&!k.startsWith('moisture:')).sort();
+  const luxKeys=[...new Set(['lux','lux:2',...keys.filter(k=>k.startsWith('lux'))])];
+  box.innerHTML=setupDraft.map((s,i)=>`<fieldset class="setupedit" data-i="${i}">
+      <div class="frow">
+        <div><label>Name <input data-f="name" value="${esc(s.name||'')}" maxlength="40"></label></div>
+        <div><label>Light <select data-f="light">
+          ${[['main','Main light'],['second','Second light'],['','None']].map(([v,t])=>
+            `<option value="${v}"${(s.light||'')===v?' selected':''}>${t}</option>`).join('')}
+        </select></label></div>
+        <div><label>Light sensor <select data-f="lux">
+          ${[...luxKeys.map(k=>[k,sensorMeta(k,0).label+' ('+k+')'+(k in (sensorData||{})?'':' \u00b7 not detected')]),['','None']].map(([v,t])=>
+            `<option value="${esc(v)}"${(s.lux||'')===v?' selected':''}>${esc(t)}</option>`).join('')}
+        </select></label></div>
+        <div><label>Lux per &micro;mol (blank = global) <input data-f="k" type="number" min="10" max="200" step="1" value="${s.k==null?'':s.k}"></label></div>
+        <div><label>DLI target low <input data-f="dli_low" type="number" min="0.5" max="65" step="0.5" value="${s.dli_low}"></label></div>
+        <div><label>DLI target high <input data-f="dli_high" type="number" min="1" max="65" step="0.5" value="${s.dli_high}"></label></div>
+      </div>
+      <div class="setupsens">${keys.map(k=>`<label><input type="checkbox" data-k="${esc(k)}"`
+        +`${(s.sensors||[]).includes(k)?' checked':''}> ${esc(sensorMeta(k,0).label)}</label>`).join('')}</div>
+      ${setupDraft.length>1?'<button type="button" class="setuprm">Remove</button>':''}
+    </fieldset>`).join('');
+}
+{
+  const box=document.getElementById('setupcfg');
+  if(box){
+    box.addEventListener('input',ev=>{
+      const fs=ev.target.closest('fieldset[data-i]');if(!fs||!setupDraft)return;
+      const s=setupDraft[+fs.dataset.i];setupDirty=true;
+      const f=ev.target.dataset.f, k=ev.target.dataset.k;
+      if(f)s[f]=(f==='dli_low'||f==='dli_high')?parseFloat(ev.target.value)
+        :(f==='k'?(ev.target.value===''?null:parseFloat(ev.target.value)):ev.target.value);
+      if(k){const set=new Set(s.sensors||[]);ev.target.checked?set.add(k):set.delete(k);s.sensors=[...set];}
+    });
+    box.addEventListener('click',ev=>{
+      if(!ev.target.classList.contains('setuprm'))return;
+      const fs=ev.target.closest('fieldset[data-i]');
+      setupDraft.splice(+fs.dataset.i,1);setupDirty=true;drawSetupConfig();
+    });
+  }
+  const add=document.getElementById('setupadd');
+  if(add)add.addEventListener('click',()=>{
+    if(!setupDraft)setupDraft=[];
+    setupDraft.push({name:'Setup '+(setupDraft.length+1),light:'',lux:'',k:null,sensors:[],dli_low:10,dli_high:15});
+    setupDirty=true;drawSetupConfig();
+  });
+  const save=document.getElementById('setupsave');
+  if(save)save.addEventListener('click',async()=>{
+    const msg=document.getElementById('setupmsg');
+    try{
+      const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({setups:setupDraft||[]})});
+      const j=await r.json().catch(()=>({}));
+      if(!r.ok||j.ok===false){if(msg)msg.textContent=(j.errors&&j.errors.setups)||j.error||('HTTP '+r.status);return;}
+      if(msg)msg.textContent='Saved.';
+      setupDirty=false;refresh();
+    }catch(e){if(msg)msg.textContent='Request failed.';}
+  });
+}
+
 // ---- camera modes: the sizes the USB camera offers, largest first ----
 async function loadCameraModes(){
   const sel=document.getElementById('usbmodes');
@@ -648,7 +772,6 @@ function fillForm(cfg){
                   'usb_width','usb_height','usb_exposure_time_absolute','usb_gain',
                   'usb_focus_absolute','usb_white_balance_temperature','humidity_low','humidity_high','fan_humidity_on','fan_min_speed','alert_sustain_min','alert_cooldown_hours',
                   'alert_dry_pct','alert_humidity_high','alert_dli_low','alert_dli_high',
-                  'dli_target_low','dli_target_high',
                   'moisture_threshold_pct','pump_cooldown_min',
                   'fill_max_seconds','pump_daily_max_seconds','pump_max_seconds',
                   'probe_median_depth','auto_wet_cal_max_move','light_floor_pct',
@@ -934,6 +1057,7 @@ function sensorMeta(key, val){
   if(key==='temp:air')   return {group:'Environment', label:'Air',      value:tDisp(val).toFixed(1), unit:tUnit()};
   if(key==='humidity')   return {group:'Environment', label:'Humidity', value:val.toFixed(0),       unit:'%'};
   if(key==='lux')        return {group:'Environment', label:'Light',    value:Math.round(val).toLocaleString(), unit:'lx'};
+  if(key.startsWith('lux:'))return {group:'Environment', label:'Light '+key.slice(4), value:Math.round(val).toLocaleString(), unit:'lx'};
   if(key==='ppfd')       return {group:'Environment', label:'PPFD',     value:Math.round(val).toLocaleString(), unit:'\u00b5mol'};
   if(key==='pressure'){
     const t=presTrend, ar=t?({down:'\u2198',up:'\u2197',flat:'\u2192'}[t.arrow]||''):'';
@@ -1039,7 +1163,7 @@ function renderSensors(j){
     window._chartCtxSynced=true; renderChartGrid();
   }
   const card=document.getElementById('sensorcard');
-  const keys=Object.keys(sensorData);
+  const keys=Object.keys(sensorData).filter(inSetup);
   card.style.display=keys.length?'':'none';
   // grouped readout
   const groups={};
@@ -1117,7 +1241,7 @@ const CHART_SECTIONS=[
   {id:'soil',   title:'Soil',
    match:k=>k.startsWith('temp:soil')||k.startsWith('probe:')},
   {id:'env',    title:'Environment',
-   match:k=>k==='temp:air'||k==='humidity'||k==='lux'||k==='ppfd'||k==='pressure'},
+   match:k=>k==='temp:air'||k==='humidity'||k==='lux'||k.startsWith('lux:')||k==='ppfd'||k==='pressure'},
   {id:'growth', title:'Canopy',           match:k=>k.startsWith('canopy:')},
   {id:'other',  title:'Other',            match:k=>true},
 ];
@@ -1174,7 +1298,7 @@ function renderChartGrid(){
   // PPFD is lux scaled by a constant, so a separate card would draw the same
   // line twice. It rides along on the lux chart as a second unit instead.
   const keys=Object.keys(seriesData).filter(k=>!k.startsWith('float:')
-    &&!k.startsWith('reservoir:')&&k!=='ppfd').sort();
+    &&!k.startsWith('reservoir:')&&k!=='ppfd'&&inSetup(k)).sort();
   if(!keys.length){
     const haveNow=Object.keys(sensorData||{}).length>0;
     grid.innerHTML='<div class="emptystate">'
@@ -2576,7 +2700,7 @@ function applyStatus(j){
     loadFrames();
     applyAuth(j);
     setAiControls(j.settings);
-    setDliBand(j.settings);
+    applySetup(j);
     {const rc=document.getElementById('reportctl');if(rc)rc.style.display=canEdit?'':'none';}
     fetchReport();
     requestAnimationFrame(fitReportHeight);
@@ -2644,7 +2768,7 @@ document.getElementById('cfgform').addEventListener('submit',async ev=>{
                   'moisture_threshold_pct','pump_cooldown_min','fill_max_seconds',
                   'pump_daily_max_seconds','pump_max_seconds','probe_median_depth'])
     if(f.elements[k])body[k]=parseInt(f.elements[k].value||0,10);
-  for(const k of ['alert_dli_low','alert_dli_high','dli_target_low','dli_target_high'])
+  for(const k of ['alert_dli_low','alert_dli_high'])
     if(f.elements[k])body[k]=parseFloat(f.elements[k].value||0);
   if(f.elements['alerts_enabled'])body.alerts_enabled=f.elements['alerts_enabled'].checked;
   if(f.elements['soil_temp_low_f']){
@@ -3400,8 +3524,9 @@ function renderLightPlan(j){
   const title=document.getElementById('lptitle');
   if(title){
     const when = p.day ? ` (${p.day})` : '';
-    title.textContent = p.status==='pending'
-      ? `Measuring \u00b7 ${p.full_day.toFixed(1)} mol so far`
+    title.textContent = p.status==='no_sensor' ? 'No light sensor'
+      : p.status==='pending'
+      ? `Measuring \u00b7 ${(p.full_day||0).toFixed(1)} mol so far`
       : p.status==='ok'
       ? `On track \u00b7 ${p.full_day.toFixed(1)} mol${when}`
       : (p.status==='low'

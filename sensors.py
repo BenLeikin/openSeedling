@@ -422,51 +422,11 @@ def _read_air():
 
 
 # ------------------------------ lux (BH1750) ------------------------------
-
-_lux_dev = None
-_lux_init = False
-
-
-def _read_lux():
-    """BH1750 ambient light, at 0x23 (ADDR low) or 0x5C (ADDR high)."""
-    global _lux_dev, _lux_init
-    if not ENABLED["lux"]:
-        return {}
-    if not _lux_init:
-        _lux_init = True
-        for addr in (0x23, 0x5C):
-            try:
-                import adafruit_bh1750
-                _lux_dev = adafruit_bh1750.BH1750(_i2c(), address=addr)
-                _lux_dev.lux  # probe read
-                log.info(f"lux sensor: BH1750 at {hex(addr)}")
-                break
-            except Exception:
-                _lux_dev = None
-        if _lux_dev is None:
-            if _lux_fail["n"]:
-                # recovering from errors, not a sensor that was never fitted:
-                # keep looking on later reads instead of giving up for good
-                _lux_init = False
-                _lux_fail["n"] += 1
-                if _lux_fail["n"] % 50 == 0:
-                    log.error(f"lux sensor still not answering "
-                              f"({_lux_fail['n']} attempts)")
-            else:
-                log.warning("lux sensor (BH1750) not found at 0x23/0x5C; disabled")
-    if _lux_dev is None:
-        return {}
-    try:
-        with _io_lock:
-            v = round(_lux_dev.lux, 1)
-    except Exception as e:
-        _lux_failed(e)
-        return {}
-    if _lux_fail["n"]:
-        log.info(f"lux sensor recovered after {_lux_fail['n']} failed reads")
-        _lux_fail["n"] = 0
-    return {"lux": v}
-
+# Up to two BH1750s share the bus: ADDR low answers at 0x23 and logs as "lux",
+# ADDR high answers at 0x5C and logs as "lux:2". The keys follow the address,
+# never the order found, so adding a second sensor never renames the first.
+# Each can be assigned to a different grow setup.
+LUX_ADDRS = {0x23: "lux", 0x5C: "lux:2"}
 
 # A BH1750 that loses power, even for a moment through a poor contact, wakes up
 # powered down and needs its measurement mode set again. The driver only does
@@ -476,20 +436,68 @@ def _read_lux():
 # reseated sensor comes back on its own. Errors are logged on the first
 # failure and then sparingly, not once per read.
 LUX_REINIT_AFTER = 3
-_lux_fail = {"n": 0}
+_lux = {a: {"dev": None, "init": False, "fail": 0, "seen": False} for a in LUX_ADDRS}
 
 
-def _lux_failed(err):
-    global _lux_dev, _lux_init
-    _lux_fail["n"] += 1
-    n = _lux_fail["n"]
+def _lux_open(addr, st):
+    st["init"] = True
+    try:
+        import adafruit_bh1750
+        dev = adafruit_bh1750.BH1750(_i2c(), address=addr)
+        with _io_lock:
+            dev.lux                                   # probe read
+        st["dev"], st["seen"] = dev, True
+        log.info(f"lux sensor: BH1750 at {hex(addr)} ({LUX_ADDRS[addr]})")
+    except Exception:
+        st["dev"] = None
+        if st["fail"]:
+            # recovering from errors, not a sensor that was never fitted:
+            # keep looking on later reads instead of giving up for good
+            st["init"] = False
+            st["fail"] += 1
+            if st["fail"] % 50 == 0:
+                log.error(f"lux sensor {hex(addr)} still not answering "
+                          f"({st['fail']} attempts)")
+
+
+def _read_lux():
+    """Every BH1750 on the bus, keyed by address (see LUX_ADDRS)."""
+    if not ENABLED["lux"]:
+        return {}
+    out = {}
+    for addr, key in LUX_ADDRS.items():
+        st = _lux[addr]
+        if not st["init"]:
+            _lux_open(addr, st)
+        if st["dev"] is None:
+            continue
+        try:
+            with _io_lock:
+                v = round(st["dev"].lux, 1)
+        except Exception as e:
+            _lux_failed(addr, e)
+            continue
+        if st["fail"]:
+            log.info(f"lux sensor {hex(addr)} recovered after {st['fail']} failed reads")
+            st["fail"] = 0
+        out[key] = v
+    if not any(st["seen"] for st in _lux.values()) and not getattr(_read_lux, "_warned", False):
+        _read_lux._warned = True
+        log.warning("lux sensor (BH1750) not found at 0x23/0x5C; disabled")
+    return out
+
+
+def _lux_failed(addr, err):
+    st = _lux[addr]
+    st["fail"] += 1
+    n = st["fail"]
     if n == 1 or n % 50 == 0:
-        log.error(f"lux read error ({n} in a row): {err}")
+        log.error(f"lux read error at {hex(addr)} ({n} in a row): {err}")
     if n % LUX_REINIT_AFTER == 0:
-        _lux_dev = None
-        _lux_init = False          # the next read finds and configures it again
+        st["dev"] = None
+        st["init"] = False          # the next read finds and configures it again
         if n == LUX_REINIT_AFTER:
-            log.warning("lux sensor: re-initializing after repeated read errors")
+            log.warning(f"lux sensor {hex(addr)}: re-initializing after repeated read errors")
 
 
 # -------------------------- soil temp (DS18B20) ---------------------------

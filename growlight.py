@@ -80,10 +80,15 @@ DEFAULTS = {
                                 #   close. 0 disables (default, since it only
                                 #   makes sense once a target is chosen).
     # Seedling DLI target band (mol/m2/day): the Day card's DLI bar, the Plan
-    # verdict and advice, and the AI report all judge against it. 15-20 is the
-    # pepper transplant range from OSU/Purdue extension; see the README.
-    "dli_target_low": 15.0,
-    "dli_target_high": 20.0,
+    # verdict and advice, and the AI report all judge against it. 10-15 is the
+    # extension range for vegetable transplants in general; 15-20 is peppers
+    # close to transplant. See the README.
+    "dli_target_low": 10.0,     # band for the default setup when no setups are
+    "dli_target_high": 15.0,    # defined; each setup carries its own band
+    # Grow setups: separate areas, each with its own light, light sensor, DLI
+    # band and a chosen subset of the sensors. Empty = one setup, "Main", with
+    # everything. See setups().
+    "setups": [],
     "alert_dli_low": 4,         # checked once daily just after lights-off:
                                 #   a day that finishes under this many mol/m2
                                 #   means the light was off, dimmed or blocked.
@@ -1903,7 +1908,12 @@ def gather_report_data():
                 + f", mode {cfg.get('fan_mode', 'auto')}") if FAN_HW else None,
         "pressure_trend": pressure_tendency(),
         "light_metrics": {"ppfd": ppfd_from_lux((snap.get("lux") or (None, None))[1]),
-                          "dli": dli_today(), "dli_target": list(dli_target(cfg))},
+                          "dli": dli_today(), "dli_target": list(dli_target(cfg)),
+                          "setups": [{"name": st.get("name"),
+                                      "dli": (dli_today(st["lux"], setup_k(st))
+                                              if st.get("lux") else None),
+                                      "band": list(setup_band(st))}
+                                     for st in setups(cfg)]},
         "planting": planting,
         "germination": germ_out,
         "units": {"temp": temp_unit(), "press": press_unit()},
@@ -2491,6 +2501,8 @@ def run_alerts(readings):
             "dli_high": cfg.get("alert_dli_high", 0),
             "dli_target": dli_target(cfg),
         }
+        acfg["setups"] = [{"id": st.get("id"), "name": st.get("name"),
+                           "band": setup_band(st)} for st in setups(cfg)]
         # The rules judge filtered values: a lone bad reading should not fire a
         # soil-temperature or humidity alert, and the sustain window cannot help
         # when the excursion lasts longer than one sample. Charts and the DLI
@@ -2512,9 +2524,16 @@ def run_alerts(readings):
                                   or cfg.get("alert_dli_high")):
             now_dt = datetime.now(off_t.tzinfo)
             if off_t <= now_dt <= off_t + timedelta(minutes=45):
-                d = dli_today()
-                if d is not None:
-                    snap["_dli"] = d
+                multi = setups(cfg)
+                vals = {st.get("id"): dli_today(st["lux"], setup_k(st))
+                        for st in multi if st.get("lux")}
+                if len(multi) == 1:
+                    d = next(iter(vals.values()), None)
+                    if d is not None:
+                        snap["_dli"] = d
+                else:
+                    snap["_dli_setups"] = {i: v for i, v in vals.items()
+                                           if v is not None}
 
         # tray moisture as percentages, using each tray's calibration
         pcal = cfg.get("probe_cal") or {}
@@ -4222,7 +4241,7 @@ def public_settings(cfg, authed=True):
 # reads the quick sensors every few seconds and pushes them to open pages
 # without storing anything, so the page is live while the record stays sparse.
 live_readings = {"ts": 0.0, "values": {}}
-LIVE_KEYS = ("lux", "temp:air", "humidity", "pressure")
+LIVE_KEYS = ("lux", "lux:2", "temp:air", "humidity", "pressure")
 
 
 def live_loop():
@@ -4430,17 +4449,8 @@ def status_payload(authed=None):
                    if not (k.startswith("dry:") or k.startswith("growth")
                            or k.startswith("moisture:"))
                    and (cam_on or not k.startswith("canopy:"))}
-    day = day_light_summary()
-    if day:
-        # what the rest of today's schedule will deliver, from the measured curve
-        # What the rest of today should add, as the SENSOR recorded it over the
-        # same hours yesterday: every light and every ramp included, with no
-        # model of any fixture. Nothing is forecast without a clean record.
-        now_ = datetime.now(tz)
-        midnight = now_.replace(hour=0, minute=0, second=0, microsecond=0)
-        rest = dli_between(now_.timestamp() - 86400, midnight.timestamp())
-        day["forecast_remaining"] = (rest[0] if rest and rest[1] >= 0.9
-                                     else None)
+    setups_out = [setup_status(cfg, st, s["on"], s["off"], tz) for st in setups(cfg)]
+    day = setups_out[0]["day"]
     return dict(
         now=datetime.now(tz).isoformat(),
         brightness=s["brightness"],
@@ -4525,7 +4535,8 @@ def status_payload(authed=None):
                                 and linear_table(cfg) is None),
         light_curve_effective=effective_curve(cfg),
         day_light=day,
-        light_plan=light_plan(cfg, s["on"], s["off"]),
+        light_plan=setups_out[0]["plan"],
+        setups=setups_out,
         light_metrics=(lambda lx: {
             "k": lux_k(),
             "canopy": canopy_factor(),
@@ -4681,7 +4692,7 @@ def ppfd_from_lux(lux, at_canopy=True):
     return round(lux * (canopy_factor() if at_canopy else 1.0) / k, 1)
 
 
-def dli_between(start, end):
+def dli_between(start, end, key="lux", k=None):
     """Measured light between two unix times: (mol/m2, covered, lit_seconds).
 
     The same integration as dli_today, over any window. `covered` is the
@@ -4690,11 +4701,11 @@ def dli_between(start, end):
     shows up as low coverage instead of as a dim day. lit_seconds is time the
     sensor saw real light, whatever produced it.
     """
-    k = lux_k()
+    k = k or lux_k()
     if not k or end <= start:
         return None
     hours = (time.time() - start) / 3600 + 1
-    pts = [(ts, v) for ts, v in db.series("lux", hours=max(2, hours))
+    pts = [(ts, v) for ts, v in db.series(key, hours=max(2, hours))
            if start <= ts <= end]
     if len(pts) < 2:
         return None
@@ -4713,7 +4724,7 @@ def dli_between(start, end):
             covered / (end - start), lit)
 
 
-def measured_day(cfg, now, off_time):
+def measured_day(cfg, now, off_time, key="lux", k=None):
     """The most recent complete day as the light sensor recorded it.
 
     Today once every light is out (the photoperiod is over and the sensor has
@@ -4723,9 +4734,9 @@ def measured_day(cfg, now, off_time):
     midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
     t_mid, t_now = midnight.timestamp(), now.timestamp()
     if now >= off_time:
-        day_pts = [v for ts, v in db.series("lux", hours=25) if ts >= t_mid]
-        recent = [v for ts, v in db.series("lux", hours=1) if ts >= t_now - 900]
-        today = dli_between(t_mid, t_now)
+        day_pts = [v for ts, v in db.series(key, hours=25) if ts >= t_mid]
+        recent = [v for ts, v in db.series(key, hours=1) if ts >= t_now - 900]
+        today = dli_between(t_mid, t_now, key, k)
         # "every light is out" is judged by the sensor too: the last quarter
         # hour reads under 2% of today's peak (room light is well below that)
         dark = max(50.0, 0.02 * max(day_pts)) if day_pts else 50.0
@@ -4733,19 +4744,19 @@ def measured_day(cfg, now, off_time):
             mol, cov, lit = today
             if cov >= 0.9:
                 return {"mol": mol, "lit_hours": lit / 3600, "day": "today"}
-    y = dli_between(t_mid - 86400, t_mid)
+    y = dli_between(t_mid - 86400, t_mid, key, k)
     if y and y[1] >= 0.9:
         return {"mol": y[0], "lit_hours": y[2] / 3600, "day": "yesterday"}
     return None
 
 
-def dli_today():
+def dli_today(key="lux", k=None):
     """Daily light integral so far today, in mol/m2/day: PPFD integrated over
     time since local midnight. This is the number that actually tracks growth,
     since it folds intensity and duration (ramps included) into one figure.
     Trapezoidal over logged lux; gaps longer than 30 min are skipped rather
     than interpolated, so downtime doesn't invent light that never fell."""
-    k = lux_k()
+    k = k or lux_k()
     if not k:
         return None
     with settings_lock:
@@ -4753,7 +4764,7 @@ def dli_today():
     now = datetime.now(tz)
     midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
     since = int(midnight.timestamp())
-    pts = [(ts, v) for ts, v in db.series("lux", hours=25) if ts >= since]
+    pts = [(ts, v) for ts, v in db.series(key, hours=25) if ts >= since]
     if len(pts) < 2:
         return None
     total = 0.0                       # micromol/m2 accumulated
@@ -4801,7 +4812,7 @@ def run_light_sweep(step=5, settle=2.0, linearize=False):
             time.sleep(settle)                    # let the sensor integrate
             if sweep_state["cancel"]:             # cancelled while settling
                 break
-            lux = (sensors.read_all() or {}).get("lux")
+            lux = (sensors.read_all() or {}).get(main_lux_key())
             if lux is None:
                 sweep_state["error"] = "no lux sensor reading; aborted"
                 break
@@ -4981,8 +4992,8 @@ def api_light_sweep():
         with sweep_lock:
             sweep_state["cancel"] = True     # the worker restores the light
         return jsonify(ok=True, cancelled=True)
-    if sensors.read_all().get("lux") is None:
-        return jsonify(ok=False, error="no lux sensor detected"), 200
+    if sensors.read_all().get(main_lux_key()) is None:
+        return jsonify(ok=False, error="no light sensor assigned to the main light"), 200
     try:
         step = max(1, min(25, int(data.get("step", 5))))
         settle = max(0.5, min(10.0, float(data.get("settle", 2.0))))
@@ -5005,7 +5016,7 @@ def api_light_sweep():
     return jsonify(ok=True, started=True, estimate_seconds=est)
 
 
-def day_light_summary():
+def day_light_summary(key="lux", k=None):
     """Today's light in one shot: DLI so far, the peak intensity reached, and
     how long the light has actually been delivering. Reads the same lux history
     the DLI integration uses, so the numbers always agree."""
@@ -5014,19 +5025,20 @@ def day_light_summary():
     now = datetime.now(tz)
     midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
     since = int(midnight.timestamp())
-    pts = [(ts, v) for ts, v in db.series("lux", hours=25) if ts >= since]
+    pts = [(ts, v) for ts, v in db.series(key, hours=25) if ts >= since]
     if not pts:
         return None
     peak = max(v for _, v in pts)
+    kk = k or lux_k()
     lit_s = 0
     for (t0, v0), (t1, _) in zip(pts, pts[1:]):
         dt = t1 - t0
         if 0 < dt <= 1800 and v0 >= 100:      # 100 lx: light is genuinely on
             lit_s += dt
     return {
-        "dli": dli_today(),
+        "dli": dli_today(key, k),
         "peak_lux": round(peak, 1),                       # sensor plane
-        "peak_ppfd": ppfd_from_lux(peak),                  # canopy
+        "peak_ppfd": (round(peak / kk * canopy_factor(), 1) if kk else None),  # canopy
         "canopy_factor": canopy_factor(),
         "lit_minutes": round(lit_s / 60),
     }
@@ -5082,19 +5094,77 @@ def dli_forecast(cfg, now, on_time, off_time):
     return round(total / 1_000_000, 2)
 
 
-def dli_target(cfg=None):
-    """The seedling DLI target band (low, high) in mol/m2/day, from settings."""
+MAX_SETUPS = 8
+
+
+def setups(cfg=None):
+    """The configured grow setups, or one default setup covering everything.
+
+    Each: id, name, light ("main", "second" or "" for none), lux (the light
+    sensor key or ""), k (lux-to-PPFD factor for that light's spectrum, None
+    for the global one), sensors (keys shown for it; empty = all), and a DLI
+    band dli_low / dli_high."""
     if cfg is None:
         with settings_lock:
             cfg = dict(settings)
-    lo = float(cfg.get("dli_target_low") or DEFAULTS["dli_target_low"])
-    hi = float(cfg.get("dli_target_high") or DEFAULTS["dli_target_high"])
-    if hi <= lo:                         # a hand-edited config.json; keep it usable
+    got = [x for x in (cfg.get("setups") or []) if isinstance(x, dict)]
+    if got:
+        return got
+    return [{"id": "main", "name": "Main", "light": "main", "lux": "lux",
+             "k": None, "sensors": [],
+             "dli_low": float(cfg.get("dli_target_low") or DEFAULTS["dli_target_low"]),
+             "dli_high": float(cfg.get("dli_target_high") or DEFAULTS["dli_target_high"])}]
+
+
+def setup_band(setup):
+    lo, hi = float(setup.get("dli_low") or 0), float(setup.get("dli_high") or 0)
+    if not 0 < lo < hi:                   # a hand-edited config.json; keep it usable
         lo, hi = DEFAULTS["dli_target_low"], DEFAULTS["dli_target_high"]
     return lo, hi
 
 
-def light_plan(cfg, on_time, off_time):
+def setup_k(setup):
+    try:
+        k = float(setup.get("k") or 0)
+    except (TypeError, ValueError):
+        k = 0
+    return k if k > 0 else lux_k()
+
+
+def main_lux_key(cfg=None):
+    """The light sensor under the main light: what a calibration sweep reads."""
+    for st in setups(cfg):
+        if st.get("light") == "main" and st.get("lux"):
+            return st["lux"]
+    return "lux"
+
+
+def dli_target(cfg=None):
+    """The first setup's DLI band (low, high) in mol/m2/day."""
+    return setup_band(setups(cfg)[0])
+
+
+def setup_status(cfg, setup, on_time, off_time, tz):
+    """One setup as the dashboard shows it: its measured day and verdict."""
+    key, k = setup.get("lux") or "", setup_k(setup)
+    day = day_light_summary(key, k) if key else None
+    if day:
+        # What the rest of today should add, as the SENSOR recorded it over the
+        # same hours yesterday: every light and every ramp included, with no
+        # model of any fixture. Nothing is forecast without a clean record.
+        now_ = datetime.now(tz)
+        midnight = now_.replace(hour=0, minute=0, second=0, microsecond=0)
+        rest = dli_between(now_.timestamp() - 86400, midnight.timestamp(), key, k)
+        day["forecast_remaining"] = rest[0] if rest and rest[1] >= 0.9 else None
+    lo, hi = setup_band(setup)
+    return {"id": setup.get("id"), "name": setup.get("name"),
+            "light": setup.get("light", ""), "lux": key, "k": k,
+            "sensors": list(setup.get("sensors") or []),
+            "band": [lo, hi], "day": day,
+            "plan": light_plan(cfg, on_time, off_time, setup)}
+
+
+def light_plan(cfg, on_time, off_time, setup=None):
     """Judge a whole day's light from what the sensor measured.
 
     The last complete day as recorded, whatever lit it: one fixture, two, a
@@ -5104,17 +5174,24 @@ def light_plan(cfg, on_time, off_time):
     with settings_lock:
         tz = ZoneInfo(settings["timezone"])
     now = datetime.now(tz)
-    m = measured_day(cfg, now, off_time)
+    setup = setup or setups(cfg)[0]
+    key, k = setup.get("lux") or "", setup_k(setup)
+    if not key:
+        return {"status": "no_sensor", "full_day": None, "day": None,
+                "advice": [f"{setup.get('name', 'This setup')} has no light sensor "
+                           "assigned, so its daily light is not measured."]}
+    m = measured_day(cfg, now, off_time, key, k)
     if m is None:
-        so_far = dli_today()
+        so_far = dli_today(key, k)
         return {"status": "pending", "full_day": so_far or 0.0, "day": None,
                 "advice": ["Waiting for a full day measured by the light "
                            "sensor; the first one completes tonight."]}
     full, lit_h = m["mol"], m["lit_hours"]
-    DLI_TARGET_LOW, DLI_TARGET_HIGH = dli_target(cfg)
+    DLI_TARGET_LOW, DLI_TARGET_HIGH = setup_band(setup)
     # average light per lit hour, measured: what an hour more or less is worth
     per_hour = full / lit_h if lit_h > 0 else 0.0
-    mx = float(cfg.get("max_bright", 100))
+    mx = float(cfg.get("light2_bright", 100) if setup.get("light") == "second"
+               else cfg.get("max_bright", 100))
     plan = {"full_day": full, "per_hour": round(per_hour, 2),
             "hours": round(lit_h, 1), "status": "ok", "day": m["day"],
             "advice": [f"Measured by the light sensor {m['day']}: {full:.1f} mol "
@@ -5585,6 +5662,62 @@ def _v_usb_device(v):
     return v
 
 
+def _v_setups(v):
+    """A list of grow setups; see setups(). An empty list means one default."""
+    if not isinstance(v, list):
+        raise ValueError("must be a list")
+    if len(v) > MAX_SETUPS:
+        raise ValueError(f"at most {MAX_SETUPS} setups")
+    out, ids, lights, luxes = [], set(), set(), set()
+    for i, x in enumerate(v, 1):
+        if not isinstance(x, dict):
+            raise ValueError(f"setup {i} is not an object")
+        name = str(x.get("name") or "").strip()[:40]
+        if not name:
+            raise ValueError(f"setup {i} needs a name")
+        sid = re.sub(r"[^a-z0-9]+", "-", str(x.get("id") or name).lower()).strip("-")[:24] or f"setup{i}"
+        while sid in ids:
+            sid += "x"
+        light = x.get("light") or ""
+        if light not in ("main", "second", ""):
+            raise ValueError(f"{name}: light must be main, second or none")
+        if light and light in lights:
+            raise ValueError(f"{name}: the {light} light is already assigned to another setup")
+        lux = str(x.get("lux") or "")
+        if lux and not re.fullmatch(r"lux(:\d)?", lux):
+            raise ValueError(f"{name}: light sensor must be lux or lux:2")
+        if lux and lux in luxes:
+            raise ValueError(f"{name}: {lux} is already assigned to another setup")
+        k = x.get("k")
+        if k in (None, "", 0):
+            k = None
+        else:
+            try:
+                k = float(k)
+            except (TypeError, ValueError):
+                raise ValueError(f"{name}: the lux-to-PPFD factor must be a number")
+            if not 10 <= k <= 200:
+                raise ValueError(f"{name}: the lux-to-PPFD factor must be 10 to 200")
+        sens = x.get("sensors") or []
+        if not isinstance(sens, list) or len(sens) > 64 or not all(
+                isinstance(q, str) and re.fullmatch(r"[a-z_]+(:[A-Za-z0-9_]+)?", q) for q in sens):
+            raise ValueError(f"{name}: sensors must be a list of sensor keys")
+        try:
+            lo, hi = float(x.get("dli_low")), float(x.get("dli_high"))
+        except (TypeError, ValueError):
+            raise ValueError(f"{name}: the DLI band needs a low and a high")
+        if not (0.5 <= lo < hi <= 65):
+            raise ValueError(f"{name}: the DLI band low must be below the high (0.5 to 65)")
+        ids.add(sid)
+        if light:
+            lights.add(light)
+        if lux:
+            luxes.add(lux)
+        out.append({"id": sid, "name": name, "light": light, "lux": lux, "k": k,
+                    "sensors": sorted(set(sens)), "dli_low": lo, "dli_high": hi})
+    return out
+
+
 SETTINGS_VALIDATORS = {
     "latitude": _v_float(-90, 90, clamp=False),
     "longitude": _v_float(-180, 180, clamp=False),
@@ -5624,6 +5757,7 @@ SETTINGS_VALIDATORS = {
     "alert_humidity_high": _v_int(0, 100),
     "alert_dli_low": _v_float(0, 30),
     "alert_dli_high": _v_float(0, 80),
+    "setups": _v_setups,
     "dli_target_low": _v_float(0.5, 60, clamp=False),
     "dli_target_high": _v_float(1, 65, clamp=False),
     "fan_mode": _v_choice("auto", "on", "off"),

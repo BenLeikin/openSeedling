@@ -446,15 +446,15 @@ def _sec5():
 
 def _dli_band():
     cfg0 = c.get("/api/status").get_json()["settings"]
-    check((cfg0.get("dli_target_low"), cfg0.get("dli_target_high")) == (15.0, 20.0),
-          "default seedling DLI target is 15-20 and reaches the dashboard")
+    check((cfg0.get("dli_target_low"), cfg0.get("dli_target_high")) == (10.0, 15.0),
+          "default seedling DLI target is 10-15 and reaches the dashboard")
     r = c.post("/api/settings", json={"dli_target_low": 18, "dli_target_high": 12}).get_json()
-    check(not r["ok"] and "dli_target_low" in r["errors"] and g.dli_target() == (15.0, 20.0),
+    check(not r["ok"] and "dli_target_low" in r["errors"] and g.dli_target() == (10.0, 15.0),
           "a DLI target with low above high is refused and nothing changes")
     r = c.post("/api/settings", json={"dli_target_low": 10, "dli_target_high": 14}).get_json()
     check(r["ok"] and g.dli_target() == (10.0, 14.0), "a valid DLI target saves")
     real_md = g.measured_day
-    g.measured_day = lambda cfg, now, off: {"mol": 12.0, "lit_hours": 12.0, "day": "yesterday"}
+    g.measured_day = lambda *a, **kw: {"mol": 12.0, "lit_hours": 12.0, "day": "yesterday"}
     try:
         in_band = g.light_plan(dict(g.settings), None, None)["status"]
         c.post("/api/settings", json={"dli_target_low": 15, "dli_target_high": 20})
@@ -661,6 +661,83 @@ def _ai_reply():
           "thinking blocks before the JSON are skipped")
 
 
+def _setups():
+    st = c.get("/api/status").get_json()
+    one = st.get("setups") or []
+    check(len(one) == 1 and one[0]["lux"] == "lux" and one[0]["sensors"] == [],
+          "with no setups defined there is one, covering every sensor")
+    good = [{"name": "Seedlings", "light": "main", "lux": "lux", "sensors": ["temp:soil", "probe:1"],
+             "dli_low": 10, "dli_high": 15},
+            {"name": "Transplants", "light": "second", "lux": "lux:2", "k": 70,
+             "sensors": ["probe:2"], "dli_low": 15, "dli_high": 20},
+            {"name": "Shelf", "light": "", "lux": "", "sensors": [], "dli_low": 6, "dli_high": 12}]
+    bad_light = [dict(good[0]), dict(good[1], light="main")]
+    bad_lux = [dict(good[0]), dict(good[1], lux="lux")]
+    bad_band = [dict(good[0], dli_low=15, dli_high=10)]
+    errs = [c.post("/api/settings", json={"setups": b}).get_json() for b in (bad_light, bad_lux, bad_band)]
+    check(all(not e["ok"] and "setups" in e["errors"] for e in errs),
+          "a light or light sensor used twice, or a backwards band, is refused")
+    r = c.post("/api/settings", json={"setups": good}).get_json()
+    check(r["ok"] and [x["id"] for x in g.settings["setups"]] == ["seedlings", "transplants", "shelf"],
+          "three setups save, each with an id")
+    now = int(time.time())
+    midnight = int(datetime.now(ZoneInfo(g.settings["timezone"])).replace(
+        hour=0, minute=0, second=0, microsecond=0).timestamp())
+    t0 = max(midnight + 60, now - 3 * 3600)
+    rows = []
+    for t in range(t0, now, 300):
+        rows += [("lux", 12000.0, t), ("lux:2", 24000.0, t)]
+    for key, v, t in rows:
+        db.log_many([(key, v)], ts=t)
+    out = {x["id"]: x for x in c.get("/api/status").get_json()["setups"]}
+    d1, d2 = (out["seedlings"]["day"] or {}).get("dli"), (out["transplants"]["day"] or {}).get("dli")
+    check(d1 and d2 and abs(d2 / d1 - 2 * 60 / 70) < 0.02,
+          f"each setup's DLI comes from its own sensor and factor ({d1} vs {d2})")
+    check(out["transplants"]["band"] == [15.0, 20.0] and out["shelf"]["plan"]["status"] == "no_sensor",
+          "each setup keeps its own band; a setup without a light sensor says so")
+    import alerts
+    alerts.reset()
+    acts = alerts.check_all({"_dli_setups": {"seedlings": 3.0, "transplants": 16.0}},
+                            {"dli_low": 4, "setups": [{"id": "seedlings", "name": "Seedlings", "band": (10, 15)},
+                                                      {"id": "transplants", "name": "Transplants", "band": (15, 20)}]})
+    fired = [a[1] for a in acts if a[0] == "fire"]
+    check(fired == ["dli_low:seedlings"] and "Seedlings" in acts[0][2],
+          "the short-day alert is judged per setup and names it")
+    ctx = ai_report.build_context({"light_metrics": {"ppfd": 200, "dli": 5, "setups": [
+        {"name": "Seedlings", "dli": 5, "band": [10, 15]}, {"name": "Transplants", "dli": None, "band": [15, 20]}]}})
+    check("Seedlings: 5 mol" in ctx and "Transplants: not measured" in ctx,
+          "the AI report is told about each setup")
+    js = (APP / "static" / "app.js").read_text()
+    check('id="setuptabs"' in (APP / "templates" / "index.html").read_text()
+          and "Object.keys(sensorData).filter(inSetup)" in js and "&&inSetup(k)" in js,
+          "setup tabs exist and filter the sensor chips and charts")
+    # two BH1750s, keyed by address
+    import types as _types
+    vals = {0x23: 111.0, 0x5C: 222.0}
+
+    class FakeBH:
+        def __init__(self, i2c, address):
+            self.a = address
+
+        @property
+        def lux(self):
+            return vals[self.a]
+    real_i2c, real_mod = sensors._i2c, sys.modules.get("adafruit_bh1750")
+    sensors._i2c = lambda: None
+    sys.modules["adafruit_bh1750"] = _types.SimpleNamespace(BH1750=FakeBH)
+    for st_ in sensors._lux.values():
+        st_.update(dev=None, init=False, fail=0)
+    try:
+        got = sensors._read_lux()
+    finally:
+        sensors._i2c = real_i2c
+        sys.modules["adafruit_bh1750"] = real_mod
+        for st_ in sensors._lux.values():
+            st_.update(dev=None, init=False, fail=0)
+    check(got == {"lux": 111.0, "lux:2": 222.0}, f"two light sensors read as lux and lux:2 ({got})")
+    c.post("/api/settings", json={"setups": []})
+
+
 def _shutdown():
     """Last: sets the shutdown flag for good, the way SIGTERM does."""
     with g.settings_lock:
@@ -738,6 +815,7 @@ run('Camera preview', _camera_preview)
 run('Camera modes and crop reset', _camera_modes_and_reset)
 run('Camera crop', _camera_crop)
 run('AI report reply', _ai_reply)
+run('Grow setups', _setups)
 run('Shutdown', _shutdown)
 
 # --------------------------------------------------------------------------

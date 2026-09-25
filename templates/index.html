@@ -29,6 +29,8 @@
 </header>
 <div class="vine" aria-hidden="true"></div>
 
+<nav class="setuptabs" id="setuptabs" style="display:none" aria-label="Grow setups"></nav>
+
 <main class="glayout">
 
 <div class="aleft">
@@ -57,7 +59,7 @@
     <div class="dpbar"><span id="dpfill"></span><i id="dpnow"></i></div>
     <div class="dprow"><span id="dpleft">&nbsp;</span><span id="dplit"></span></div>
 
-    <div class="dplabel">Daily light integral</div>
+    <div class="dplabel">Daily light integral<span id="dlisetup"></span></div>
     <div class="dlibar">
       <span class="dliband" id="dliband"></span>
       <span class="dlifill" id="dlifill"></span>
@@ -623,15 +625,25 @@
           <input name="humidity_low" type="number" min="0" max="100"></label></div>
         <div><label>Humidity band high (%, 0 = off)
           <input name="humidity_high" type="number" min="0" max="100"></label></div>
-        <div><label>Seedling DLI target low (mol/m&sup2;/day)
-          <input name="dli_target_low" type="number" min="0.5" max="60" step="0.5"></label></div>
-        <div><label>Seedling DLI target high (mol/m&sup2;/day)
-          <input name="dli_target_high" type="number" min="1" max="65" step="0.5"></label></div>
       </div>
-      <p class="fhint">The DLI band drives the Day card's light bar, the Plan
-        verdict and advice, and the AI report. Extension guidance for pepper
-        transplants is 15-20; for vegetable transplants in general, 10-15. The
-        short-day and too-much-light alerts are set separately under Alerts.</p>
+      <p class="fhint">Daily light targets are set per setup, under Setups.</p>
+    </details>
+
+    <details class="fgroup">
+      <summary><h3>Setups</h3></summary>
+      <p class="fhint">Separate grow areas, each under its own light. Give each a
+        light, the light sensor under it, a daily light target, and the sensors
+        that belong to it (none ticked = show every sensor). The tabs at the top
+        switch the dashboard between setups. A second BH1750 with its ADDR pin
+        tied high reads as <code>lux:2</code>. DLI targets: 10-15 mol/day suits
+        young seedlings (vegetable transplants in general); 15-20 is peppers close
+        to transplant.</p>
+      <div id="setupcfg"></div>
+      <div class="setupbtns">
+        <button type="button" id="setupadd">Add setup</button>
+        <button type="button" id="setupsave">Save setups</button>
+        <span id="setupmsg" role="status" class="fhint"></span>
+      </div>
     </details>
 
     <details class="fgroup">
