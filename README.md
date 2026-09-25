@@ -156,7 +156,10 @@ Settings, Setups. Each setup has:
   auto mode then runs on this setup's light hours; the camera captures during
   them, its capture brightness is applied only when this setup is on the main
   light, and the snapshot, timelapse and AI report show on this tab only (the
-  report judges this setup's light). The fan controls show on this tab only;
+  report judges this setup's light). Canopy is measured only for this setup's
+  trays, left to right across the grid, so set the grid's rows and columns to
+  those trays; other trays' old canopy readings drop out of the chips, charts
+  and report. The fan controls show on this tab only;
 - the **trays** that belong to it. None ticked shows every tray. A tray's own
   probe, float and canopy readings come with it;
 - the **sensors** that belong to it. None ticked shows every sensor.

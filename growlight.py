@@ -1797,6 +1797,8 @@ def gather_report_data():
     for k, (ts, v) in snap.items():
         if k.startswith("canopy:"):
             tid = k[7:]
+            if tid not in camera_trays(cfg):
+                continue                  # an old reading from a tray it no longer sees
             label = ((trays_cfg.get(tid) or {}).get("label")
                      or f"Tray {tid}")
             canopy[label] = round(v, 1)
@@ -3024,8 +3026,11 @@ def record_growth(path, cfg, now):
         return
     # tray column spans, left to right, mirroring how the trays sit under the
     # camera (tray 1 leftmost)
+    # only the trays the camera's setup covers: the grid spans those, left to
+    # right, and nothing else is in the frame to measure
+    mine = set(camera_trays(cfg))
     trays = [{"id": tid, "cols": int((t or {}).get("cols", 3))}
-             for tid, t in sorted((cfg.get("trays") or {}).items())]
+             for tid, t in sorted((cfg.get("trays") or {}).items()) if tid in mine]
     payload = {"corners": grid["corners"],
                "rows": grid.get("rows", 4), "cols": grid.get("cols", 4),
                "trays": trays,
@@ -4516,6 +4521,7 @@ def status_payload(authed=None):
     stf = latest_soil_temp_f(snap)
     pcal = cfg.get("probe_cal") or {}
     cam_on = bool(cfg.get("camera_enabled"))
+    _cam_trays = set(camera_trays(cfg))
     sensors_out = {k: {"ts": ts,
                        "value": (compensated_volts(v, pcal.get(k[6:]) or {}, stf)
                                  if k.startswith("probe:") else v)}
@@ -4524,7 +4530,8 @@ def status_payload(authed=None):
                    # no longer written or shown; canopy hides with the camera
                    if not (k.startswith("dry:") or k.startswith("growth")
                            or k.startswith("moisture:"))
-                   and (cam_on or not k.startswith("canopy:"))}
+                   and (cam_on or not k.startswith("canopy:"))
+                   and (not k.startswith("canopy:") or k[7:] in _cam_trays)}
     setups_out = [setup_status(cfg, st, s["on"], s["off"], tz) for st in setups(cfg)]
     day = setups_out[0]["day"]
     return dict(
@@ -5284,6 +5291,16 @@ def setup_window(cfg, setup, main_on, main_off):
     return min(main_on, on2), max(main_off, off2)
 
 
+def camera_trays(cfg):
+    """Tray ids the camera measures: its setup's trays, or every tray when the
+    camera is not assigned to a setup with trays. Canopy is only computed,
+    shown and reported for these; another tray's old canopy readings are the
+    past, not the present."""
+    cam = setup_with(cfg, "camera")
+    got = [str(t) for t in ((cam or {}).get("trays") or [])]
+    return got or sorted(str(t) for t in (cfg.get("trays") or {}))
+
+
 def setup_with(cfg, flag):
     """The setup that has the fan or the camera ("fan" / "camera"), or None."""
     return next((st for st in setups(cfg) if st.get(flag)), None)
@@ -5761,7 +5778,10 @@ def series_all():
     out = {}
     with settings_lock:
         camera_on = bool(settings.get("camera_enabled"))
+        _cam_t = set(camera_trays(dict(settings)))
     for k in snap.keys():
+        if k.startswith("canopy:") and k[7:] not in _cam_t:
+            continue                      # a tray the camera no longer watches
         if (k.startswith("float:") or k.startswith("reservoir:")):
             continue                      # binary states aren't charted
         if (k.startswith("dry:") or k.startswith("growth")

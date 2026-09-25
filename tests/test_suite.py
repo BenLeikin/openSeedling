@@ -885,6 +885,47 @@ def _per_sensor_controls():
     c.post("/api/settings", json={"setups": []})
 
 
+def _camera_canopy():
+    with g.settings_lock:
+        g.settings["trays"] = {"1": {"label": "Seedling 1", "rows": 4, "cols": 3, "cells": {}},
+                               "2": {"label": "Seedling 2", "rows": 4, "cols": 3, "cells": {}},
+                               "T3": {"label": "Transplants", "rows": 4, "cols": 5, "cells": {}}}
+    base = [{"name": "Seedlings", "light": "second", "lux": "", "sensors": [], "trays": ["1", "2"],
+             "dli_low": 10, "dli_high": 15},
+            {"name": "Transplants", "light": "main", "lux": "lux", "sensors": [], "trays": ["T3"],
+             "camera": True, "dli_low": 15, "dli_high": 20}]
+    c.post("/api/settings", json={"setups": base})
+    import json as _json
+    seen = {}
+
+    class R:
+        returncode, stdout, stderr = 0, b'{"ok": true, "trays": {}}', b""
+
+    def fake_run(cmd, **kw):
+        seen["payload"] = _json.loads(cmd[-1])
+        return R()
+    real_run = g.subprocess.run
+    g.subprocess.run = fake_run
+    try:
+        g.record_growth(WORK / "x.jpg", dict(g.settings), datetime.now(ZoneInfo(g.settings["timezone"])))
+    finally:
+        g.subprocess.run = real_run
+    ids = [t["id"] for t in (seen.get("payload") or {}).get("trays", [])]
+    check(ids == ["T3"], f"canopy is measured only for the camera setup's trays ({ids})")
+    db.log_many([("canopy:1", 3.1), ("canopy:T3", 7.5)])
+    with g.settings_lock:
+        g.settings["camera_enabled"] = True
+    shown = set(c.get("/api/status").get_json()["sensors"])
+    charted = set(c.get("/api/series_all?hours=1").get_json()["series"])
+    ai = g.gather_report_data().get("canopy") or {}
+    check("canopy:T3" in shown and "canopy:1" not in shown and "canopy:1" not in charted
+          and list(ai) == ["Transplants"],
+          "trays the camera no longer watches drop out of the chips, charts and AI report")
+    c.post("/api/settings", json={"setups": []})
+    shown2 = set(c.get("/api/status").get_json()["sensors"])
+    check("canopy:1" in shown2, "with the camera not assigned, every tray's canopy shows")
+
+
 def _shutdown():
     """Last: sets the shutdown flag for good, the way SIGTERM does."""
     with g.settings_lock:
@@ -966,6 +1007,7 @@ run('Grow setups', _setups)
 run('Fan, camera and verdict timing', _fan_camera_timing)
 run('Probe names', _probe_names)
 run('Per-light calibration and per-tray arming', _per_sensor_controls)
+run('Camera canopy trays', _camera_canopy)
 run('Shutdown', _shutdown)
 
 # --------------------------------------------------------------------------
