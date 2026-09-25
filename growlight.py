@@ -200,7 +200,8 @@ DEFAULTS = {
     "pump_daily_max_seconds": 180,  # runaway backstop
     "fill_max_seconds": 60,     # hard cap on a fill-to-float run (if float never trips)
     "probe_cal": {},            # per-tray {wet,dry} raw ADC anchors -> probe moisture %
-    "probe_names": {"1": "Tray 1", "2": "Tray 2"},  # ADS1115 A0 = tray 1, A1 = tray 2
+    "probe_names": {},          # custom probe labels; default "Soil moisture 1/2"
+                                # (ADS1115 A0 = probe 1 in tray 1, A1 = probe 2)
     "ai_enabled": False,        # daily Claude vision report (needs an API key, see ai_report.py)
     "ai_model": "claude-sonnet-5",   # any Claude model with vision; config.json only
     "ai_report_hour": 8,        # local hour (0-23) to run the daily report
@@ -420,6 +421,19 @@ def _migrate_trays():
         except Exception as e:
             log.warning(f"tray migration not persisted ({e})")
 _migrate_trays()
+
+# The probes were once labeled by tray ("Tray 1"), which read as the tray
+# itself and went stale when a tray was renamed. Drop those stored old
+# defaults so the new default name applies; a name someone chose stays.
+_pn = settings.get("probe_names") or {}
+_old = {t: n for t, n in _pn.items() if n == f"Tray {t}"}
+if _old:
+    settings["probe_names"] = {t: n for t, n in _pn.items() if t not in _old}
+    try:
+        save_config()
+    except Exception as e:
+        log.warning(f"probe name update not persisted ({e})")
+
 
 # config.json stores every key, so the old default model was written into it
 # and would stay forever. Move that one value (and only that value) to the
@@ -1745,7 +1759,7 @@ def gather_report_data():
         if k.startswith("canopy:"):
             tid = k[7:]
             label = ((trays_cfg.get(tid) or {}).get("label")
-                     or pnames.get(tid) or f"Tray {tid}")
+                     or f"Tray {tid}")
             canopy[label] = round(v, 1)
         elif k.startswith("probe:"):
             t = k[6:]
@@ -1754,7 +1768,7 @@ def gather_report_data():
             if fv is None:
                 fv = v
             pm, approx = probe_moisture_any(fv, tcal, stf)
-            nm = pnames.get(t, f"Tray {t}")
+            nm = pnames.get(t) or f"Soil moisture {t}"
             flag = probe_cal_flag(fv, tcal)
             if flag:
                 nm += (" (reading beyond the wet anchor - recalibrate wet)"
@@ -2553,7 +2567,7 @@ def run_alerts(readings):
             pct, approx = probe_moisture_any(fv if fv is not None else v,
                                              pcal.get(t) or {}, stf)
             if pct is not None and not approx:      # only alert on real calibration
-                moist[names.get(t, f"Tray {t}")] = pct
+                moist[names.get(t) or f"Soil moisture {t}"] = pct
         snap["_moisture"] = moist
 
         with state_lock:

@@ -135,7 +135,8 @@ for mod in ("board", "busio", "adafruit_extended_bus", "adafruit_ads1x15",
 os.chdir(APP)
 sys.path.insert(0, str(APP))
 # a config written by an older version, to check the model migration
-(APP / "config.json").write_text('{"ai_model": "claude-opus-4-8"}')
+(APP / "config.json").write_text('{"ai_model": "claude-opus-4-8", '
+                                 '"probe_names": {"1": "Tray 1", "2": "Left bench"}}')
 
 # --------------------------------------------------------------------------
 # reporting
@@ -821,6 +822,17 @@ def _fan_camera_timing():
     c.post("/api/settings", json={"setups": []})
 
 
+def _probe_names():
+    js = (APP / "static" / "app.js").read_text()
+    check("'Soil moisture '+t" in js and "trayLabels[t]||('Tray '+t)" in js,
+          "probes read as Soil moisture 1 and 2; canopy and watering rows use the tray's name")
+    check(g.settings.get("probe_names") == {"2": "Left bench"},
+          f"an old default probe name is cleared, a chosen one kept ({g.settings.get('probe_names')})")
+    gl = (APP / "growlight.py").read_text()
+    check('"probe_names": {},' in gl and 'n == f"Tray {t}"' in gl,
+          "the old stored probe names (Tray 1, Tray 2) are cleared so the new ones show")
+
+
 def _shutdown():
     """Last: sets the shutdown flag for good, the way SIGTERM does."""
     with g.settings_lock:
@@ -900,6 +912,7 @@ run('Camera crop', _camera_crop)
 run('AI report reply', _ai_reply)
 run('Grow setups', _setups)
 run('Fan, camera and verdict timing', _fan_camera_timing)
+run('Probe names', _probe_names)
 run('Shutdown', _shutdown)
 
 # --------------------------------------------------------------------------

@@ -1185,13 +1185,14 @@ function sensorMeta(key, val){
                          return {group:'Soil',        label:'Soil temp '+key.split('_')[1], value:tDisp(val).toFixed(1), unit:tUnit()};
   if(key.startsWith('canopy:')){
     const t=key.slice(7);
-    const nm=(probeNames[t]?probeNames[t]:'Tray '+t)+' canopy';
+    // canopy is measured over the tray's area, so it carries the tray's name
+    const nm=((trayLabels[t])||('Tray '+t))+' canopy';
     return {group:'Growth', label:nm, value:val.toFixed(1), unit:'%',
             title:'share of plant pixels across the whole tray'};
   }
   if(key.startsWith('probe:')){
     const t=key.slice(6);
-    const nm=probeNames[t]||('Tray '+t);
+    const nm=probeNames[t]||('Soil moisture '+t);
     const m=probeMoisture(t, val);
     // server-side flag: the live reading sits outside this tray's anchors, so
     // the percentage is pegged and the dry alert is blind until recalibration
@@ -1251,10 +1252,13 @@ function renderQuality(j){
   body.innerHTML=h;
 }
 
+var trayLabels={};
 function renderSensors(j){
   sensorData=j.sensors||{};
   probeCal=(j.settings&&j.settings.probe_cal)||{};
   probeNames=(j.settings&&j.settings.probe_names)||{};
+  trayLabels=Object.fromEntries(Object.entries((j.settings&&j.settings.trays)||{})
+    .map(([id,t])=>[id,(t&&t.label)||('Tray '+id)]));
   probeFlags=j.probe_cal_flags||{};
   filteredVals=j.filtered||{};   // smoothed values for the chips; charts stay raw
   if(j.probe_default_cal)probeDefaultCal=j.probe_default_cal;
@@ -1779,8 +1783,9 @@ function renderWater(j){
         const secs=+document.getElementById('pumpsecs'+t).value||3;
         waterAct(t,{seconds:secs},'starting...');});
     }
+    // the pump and float belong to the tray: name the row after it
     const lbl=document.getElementById('wlabel'+t);
-    if(lbl&&probeNames[t])lbl.textContent=probeNames[t];
+    if(lbl)lbl.textContent=trayLabels[t]||('Tray '+t);
     document.getElementById('floatstate'+t).textContent=floatLabel(tw.float);
     document.getElementById('pumptoday'+t).textContent=tw.today_seconds;
     const pb=document.getElementById('pumpbtn'+t), fb=document.getElementById('fillbtn'+t);

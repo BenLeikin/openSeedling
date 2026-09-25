@@ -481,7 +481,7 @@ editable from the dashboard Settings panel; the rest are edited in the file.
 | `alert_dry_pct` / `alert_humidity_high` | 15 / 80 | Dry-tray and high-humidity alert thresholds |
 | `fan_mode` / `fan_speed` / `fan_auto_speed` / `fan_min_speed` / `fan_humidity_on` | auto / 100 / 70 / 25 / 65 | Fan behaviour: mode, manual and auto speeds, stall floor, humidity trigger |
 | `probe_cal` | {} | Per-tray ADC wet/dry anchors for the soil probes, set from the dashboard. A live reading outside its anchors shows a red "recal" badge: the percentage is pegged and the dry alert is blind until the anchor is recaptured |
-| `probe_names` | Tray 1 / Tray 2 | Labels for the two probes (A0 = tray 1, A1 = tray 2) |
+| `probe_names` | {} | Custom labels for the two soil moisture probes; default "Soil moisture 1" and "Soil moisture 2" (A0 = probe 1 in tray 1, A1 = probe 2 in tray 2). Canopy readings and the watering rows are named after the tray instead. Stored old defaults ("Tray 1", "Tray 2") are cleared on startup |
 
 ### Secrets (all gitignored)
 
