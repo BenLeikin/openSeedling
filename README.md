@@ -419,7 +419,7 @@ editable from the dashboard Settings panel; the rest are edited in the file.
 | `ntfy_topic` | "" | Set to enable ntfy push |
 | `discord_webhook` | "" | Set to enable Discord alerts |
 | `ai_enabled` | false | Daily AI report on/off |
-| `ai_model` | `claude-opus-4-8` | Claude model for the report |
+| `ai_model` | `claude-sonnet-5` | Claude model for the report; any model with vision. A stored `claude-opus-4-8` (the former default) is moved to this on startup |
 | `ai_report_hour` / `ai_report_minute` | 8:00 | When the daily report runs |
 | `ai_notify` | true | Push the report summary |
 | `ai_notes` | (grow description) | Context handed to the AI; list what you planted here to sharpen species guesses |
@@ -527,9 +527,10 @@ off, running pumps stop within a tenth of a second, and nothing may turn back
 on: pump starts are refused and light and fan writes can only go dark. The
 outputs are switched off a second time after running pumps finish, to catch
 any write that was already in flight. A fill cut short this way is not treated
-as a failure, so `auto_water` comes back up the way it went down. Keep `auto_water` off until the
-probes are calibrated and the seedlings are established; overwatering
-(damping-off) is the number-one seedling killer.
+as a failure, so `auto_water` comes back up the way it went down.
+
+Keep `auto_water` off until the probes are calibrated and the seedlings are
+established; overwatering (damping-off) is the number-one seedling killer.
 
 ### Reservoir level
 
@@ -549,6 +550,17 @@ the dashboard while pushing the summary to ntfy/Discord. A restart does **not**
 regenerate the report; it keeps the last one. New reports come only from crossing
 the scheduled time or pressing "Generate now". Cost is roughly a cent or two per
 report.
+
+The prompt tells the model that grow lights tint the photo without assuming a
+color. To be specific, describe your light in `ai_notes`. There is no dashboard
+field for it; from the Pi (the first line is only needed with a password set):
+
+```bash
+curl -s -c /tmp/gl -H 'Content-Type: application/json' -d '{"password": "YOUR-PASSWORD"}' http://127.0.0.1:5000/api/login
+curl -s -b /tmp/gl -H 'Content-Type: application/json' \
+  -d '{"ai_notes": "Full-spectrum white LED fixture. Peat/perlite seed starter, bottom-watered."}' \
+  http://127.0.0.1:5000/api/ai_settings
+```
 
 ### Alerts
 

@@ -25,7 +25,7 @@ from pathlib import Path
 
 API_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
-DEFAULT_MODEL = "claude-opus-4-8"
+DEFAULT_MODEL = "claude-sonnet-5"
 KEY_FILE = Path(__file__).with_name(".anthropic_key")
 MAX_IMG_W = 1024   # downscale the photo before sending to keep token cost low
 
@@ -66,10 +66,11 @@ def _image_b64(path):
 
 
 PROMPT = """You are an expert horticulturist reviewing a daily top-down photo of \
-a seedling tray grown indoors under a magenta/pink LED grow light. IMPORTANT: the \
-pink cast comes from the light, not the plants -- judge leaf colour and health \
-relative to that tint, and don't call healthy green leaves "discoloured" just \
-because the light makes them look magenta.
+a seedling tray grown indoors under an LED grow light. IMPORTANT: grow lights \
+tint photos (magenta or pink from red/blue LEDs, warm yellow from white ones). \
+The cast comes from the light, not the plants: judge leaf color and health \
+relative to whatever tint this photo has, and don't call healthy leaves \
+"discolored" because of it. The grower notes, if any, may describe the light.
 
 Study the photo together with the controller data provided, then return ONE JSON \
 object and nothing else (no prose, no code fences) with exactly these fields:
@@ -127,8 +128,8 @@ def build_context(d):
     cp = d.get("canopy") or {}
     if cp:
         L.append("Canopy coverage % per tray (camera-measured share of plant "
-                 "pixels; useful as a trend, understated under the magenta "
-                 "light): " + ", ".join(f"{k}={v}" for k, v in sorted(cp.items())))
+                 "pixels; useful as a trend, understated under a strongly "
+                 "tinted light): " + ", ".join(f"{k}={v}" for k, v in sorted(cp.items())))
     pm = d.get("probe_moisture") or {}
     if pm:
         L.append("Soil-probe moisture % per tray (direct sensor, more reliable than "

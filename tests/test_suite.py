@@ -134,6 +134,8 @@ for mod in ("board", "busio", "adafruit_extended_bus", "adafruit_ads1x15",
 
 os.chdir(APP)
 sys.path.insert(0, str(APP))
+# a config written by an older version, to check the model migration
+(APP / "config.json").write_text('{"ai_model": "claude-opus-4-8"}')
 
 # --------------------------------------------------------------------------
 # reporting
@@ -192,6 +194,11 @@ g.state.update(on=now.replace(hour=7), off=now.replace(hour=19),
                brightness=0, override="auto")
 c = g.app.test_client()
 check(c.get("/api/status").status_code == 200, "app imports and /api/status answers")
+check(g.settings.get("ai_model") == g.DEFAULTS["ai_model"] != "claude-opus-4-8",
+      f"a stored former-default AI model is moved to the current one ({g.settings.get('ai_model')})")
+import ai_report          # noqa: E402
+check("magenta/pink LED" not in ai_report.PROMPT and "tint" in ai_report.PROMPT,
+      "AI prompt does not assume the light's color")
 
 # a password check fast enough for tests (the real one is scrypt)
 FAST_HASH = generate_password_hash("pw", method="pbkdf2:sha256:1000")
@@ -289,6 +296,30 @@ def _sec2():
     except StopIteration:
         ended = True
     check(ended, "a dropped subscriber's stream ends instead of idling")
+
+    # three open tabs, one change: the status is built once and shared
+    gens = []
+    for _ in range(3):
+        with g.app.test_request_context("/api/stream"):
+            gi = iter(g.api_stream().response)
+        next(gi); next(gi)                    # retry line + the fresh status
+        gens.append(gi)
+    builds = {"n": 0}
+    real_sp = g.status_payload
+
+    def counting(*a, **k):
+        builds["n"] += 1
+        return real_sp(*a, **k)
+    g.status_payload = counting
+    try:
+        g.publish("test")
+        texts = [next(gi) for gi in gens]
+    finally:
+        g.status_payload = real_sp
+    check(builds["n"] == 1 and len(set(texts)) == 1,
+          f"one change is rendered once for all open tabs ({builds['n']} builds for 3 tabs)")
+    for gi in gens:
+        gi.close()
 
 
 def _sec3():
@@ -422,6 +453,16 @@ def _shutdown():
         sensors._float_devs.clear()
         fl = sensors._floats()
     fl["1"].is_pressed = True              # not full: the fill keeps running
+    with g.app.test_request_context("/api/stream"):
+        sg = iter(g.api_stream().response)
+    next(sg); next(sg)
+    ended = {}
+
+    def drain():
+        for _ in sg:
+            pass
+        ended["at"] = time.time()
+    threading.Thread(target=drain, daemon=True).start()
     out = {}
     t = threading.Thread(target=lambda: out.update(r=g.run_pump_until_full("1", "auto")))
     t.start()
@@ -434,6 +475,9 @@ def _shutdown():
         exited = e.code in (0, None)
     t.join(3)
     check(exited, "cleanup finishes with a clean exit")
+    time.sleep(0.2)
+    check("at" in ended and ended["at"] - t0 < 1.5,
+          "an open live stream ends at shutdown instead of holding the server for 5 s")
     ok, why = out.get("r", (True, ""))
     check(not ok and "shutting down" in why and time.time() - t0 < 2.5,
           f"a running fill stops when shutdown starts ({why})")

@@ -188,7 +188,7 @@ DEFAULTS = {
     "probe_cal": {},            # per-tray {wet,dry} raw ADC anchors -> probe moisture %
     "probe_names": {"1": "Tray 1", "2": "Tray 2"},  # ADS1115 A0 = tray 1, A1 = tray 2
     "ai_enabled": False,        # daily Claude vision report (needs an API key, see ai_report.py)
-    "ai_model": "claude-opus-4-8",
+    "ai_model": "claude-sonnet-5",   # any Claude model with vision; config.json only
     "ai_report_hour": 8,        # local hour (0-23) to run the daily report
     "ai_report_minute": 0,      # minute (0-59) within that hour
     "ai_notify": True,          # push the report summary to Discord and ntfy
@@ -406,6 +406,19 @@ def _migrate_trays():
         except Exception as e:
             log.warning(f"tray migration not persisted ({e})")
 _migrate_trays()
+
+# config.json stores every key, so the old default model was written into it
+# and would stay forever. Move that one value (and only that value) to the
+# current default; a model chosen deliberately is left alone.
+_RETIRED_AI_DEFAULTS = ("claude-opus-4-8",)
+if settings.get("ai_model") in _RETIRED_AI_DEFAULTS:
+    log.info(f"AI report model: {settings['ai_model']} -> {DEFAULTS['ai_model']} "
+             "(former default; set ai_model in config.json to choose another)")
+    settings["ai_model"] = DEFAULTS["ai_model"]
+    try:
+        save_config()
+    except Exception as e:
+        log.warning(f"AI model change not persisted ({e})")
 
 # the soil low bound used to live under an alerts-only key; adopt it once so
 # the chart and the alerts can never disagree. Checked against the file's own
@@ -4146,6 +4159,40 @@ STREAM_HEARTBEAT = 10.0     # seconds. Also how quickly a closed tab frees its
 _subs = set()
 _subs_lock = threading.Lock()
 
+# One rendered status per change, shared by every open tab. Without this each
+# subscriber built its own copy on every push: with six tabs open, six times
+# the SQLite work on a Pi Zero for the same answer. Two variants at most,
+# because a signed-out viewer gets a redacted copy.
+_pub_seq = [0]                     # bumped by every publish()
+_status_cache = {}                 # authed -> (seq it was built at, SSE text)
+_status_build_lock = threading.Lock()
+
+
+def _status_event(authed):
+    """The SSE message for the current status, built at most once per change."""
+    authed = bool(authed)
+    with _status_build_lock:
+        seq = _pub_seq[0]
+        hit = _status_cache.get(authed)
+        if hit and hit[0] == seq:
+            return hit[1]
+        text = f"event: status\ndata: {json.dumps(status_payload(authed))}\n\n"
+        _status_cache[authed] = (seq, text)
+        return text
+
+
+def _end_streams():
+    """Shutdown: release every stream at once. Each one holds a server thread,
+    and the server gives threads 5 s to finish before it exits anyway."""
+    with _subs_lock:
+        subs = list(_subs)
+        _subs.clear()
+    for q in subs:
+        try:
+            q.put_nowait("shutdown")
+        except queue.Full:
+            pass                   # it is awake already and sees the flag
+
 
 def publish(reason="update"):
     """Hand the current status to every listening browser.
@@ -4156,6 +4203,7 @@ def publish(reason="update"):
     subscriber whose queue has backed up is dropped rather than waited for.
     """
     with _subs_lock:
+        _pub_seq[0] += 1
         subs = list(_subs)
     if not subs:
         return
@@ -4198,21 +4246,25 @@ def api_stream():
     def gen():
         try:
             yield "retry: 5000\n\n"          # how soon the browser retries
+            # a new tab gets a fresh status, not the last push's copy, which
+            # may predate things that changed without a push (the clock)
             yield f"event: status\ndata: {json.dumps(status_payload(authed))}\n\n"
             while True:
                 with _subs_lock:
                     culled = q not in _subs
-                if culled:
-                    return      # publish() dropped us; the browser reconnects
+                if culled or SHUTTING_DOWN.is_set():
+                    return      # dropped or shutting down; the browser reconnects
                 try:
                     q.get(timeout=STREAM_HEARTBEAT)
+                    if SHUTTING_DOWN.is_set():
+                        return
                     # coalesce a burst: one render per batch of changes
                     while True:
                         try:
                             q.get_nowait()
                         except queue.Empty:
                             break
-                    yield f"event: status\ndata: {json.dumps(status_payload(authed))}\n\n"
+                    yield _status_event(authed)
                 except queue.Empty:
                     # a comment keeps the connection warm and, more usefully,
                     # fails here when the peer has gone so the thread is freed
@@ -5523,6 +5575,7 @@ def cleanup(*_):
     # not leave a pump relying on gpiozero's atexit teardown and a gate pulldown.
     SHUTTING_DOWN.set()
     _all_off()
+    _end_streams()
     # A pump thread or control pass already past its check could still write
     # once more. They poll every 0.1 s and now see the flag; wait for running
     # pumps to finish, then turn everything off a second time to be sure.
