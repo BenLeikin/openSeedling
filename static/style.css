@@ -598,8 +598,12 @@ body.nocam .amedia{display:none}
   box-shadow:none}
 .tacts button:hover{background:var(--tint)}
 .tcell.sprouted .tage{color:var(--good);font-weight:700}
-.dlipacemark{position:absolute;top:-3px;width:2px;height:14px;background:var(--fir);
-  border-radius:1px;transform:translateX(-1px);transition:left .6s ease;z-index:2}
+/* Where today's total should be BY NOW: the 6-12 mol target scaled by how far
+   through the photoperiod we are. A range rather than one tick, so "on pace"
+   means inside it, just as "in target" means inside the full band at night. */
+.dlipacemark{position:absolute;top:-3px;height:14px;box-sizing:border-box;
+  border:1.5px solid var(--fir);border-radius:3px;background:transparent;
+  transition:left .6s ease,width .6s ease;z-index:2;pointer-events:none}
 /* The DLI bar, matching the photoperiod bar above it. It had no styling at all:
    the spans rendered as zero-size inline elements, so the only visible part was
    the pace marker, which read as a stray tick.
@@ -611,6 +615,10 @@ body.nocam .amedia{display:none}
   background:var(--band);pointer-events:none}
 .dlifill{position:relative;display:block;height:100%;border-radius:5px;
   background:linear-gradient(90deg,#cfe3b8,var(--leaf));transition:width .6s ease}
+/* colored by the same verdict as the label: yellow short, green right, red over */
+.dlifill.low{background:linear-gradient(90deg,#f3e2a4,#e0b02e)}
+.dlifill.ok{background:linear-gradient(90deg,#cfe3b8,var(--leaf))}
+.dlifill.high{background:linear-gradient(90deg,#f1b9a6,#d4553a)}
 .dlipace{font-size:11px;color:var(--muted);white-space:nowrap}
 .dlipace b{font-size:12px}
 .dlipace.ok{color:var(--good)}
@@ -625,6 +633,7 @@ body.nocam .amedia{display:none}
 .lpdot.low{background:#e0a13a}
 .lpdot.high{background:var(--bad)}
 .lpdot.ok{background:var(--series)}
+.lpdot.pending{background:var(--muted)}
 .lplan ul{margin:0;padding-left:16px;color:var(--leaf);line-height:1.5}
 .lplan li{margin-bottom:2px}
 .modeblock{margin-top:4px}
@@ -871,7 +880,11 @@ body.readonly .tcell textarea{background:var(--surface-2);border-color:transpare
 .walker .eye{fill:var(--fir)}
 .walker .mouth{stroke:var(--fir);stroke-width:1.2;stroke-linecap:round;fill:none}
 .walker .cheek{fill:#e9a17c;opacity:.5}
-.walker .arm{stroke:var(--leaf);stroke-width:2.6;stroke-linecap:round}
+/* .arm marks whatever waves during the pause; it must not also decide the
+   colour, or it repaints a bee's wing green and overrides a ladybug's antenna.
+   Each sprite names its own arm colour below. */
+.walker .arm{stroke-width:2;stroke-linecap:round}
+.walker .sarm{stroke:var(--leaf)}
 .walker .pot{fill:#cb8f6a}
 .walker .pot-rim{fill:#b87a56}
 /* chile pepper */
@@ -920,6 +933,51 @@ body.readonly .tcell textarea{background:var(--surface-2);border-color:transpare
   @keyframes step-a{50%{transform:rotate(24deg)}}
   @keyframes step-b{0%,100%{transform:rotate(24deg)}50%{transform:rotate(0deg)}}
   @keyframes wave{0%,100%{transform:rotate(-8deg)}50%{transform:rotate(-46deg)}}
+
+  /* ---- flyers (bee, ladybug) ----
+     Three layers, so no two motions share one transform and nothing snaps:
+       svg     the flight across, easing into the hover spot and out of it
+       .bob    a steady bob up and down, running the whole time
+       .flyer  the loop-the-loop, only during the pause
+     The loop rotates about a point one radius ABOVE the sprite, carrying it up,
+     over the top upside down and back down with the body following the curve.
+     Negative rotation loops forward; flipped to fly left, it mirrors. */
+  .walker.flying{overflow:visible;
+    animation:fly-across var(--walk-dur,11s) linear forwards}
+  @keyframes fly-across{
+    0%  {transform:translateX(var(--walk-from)) scaleX(var(--walk-dir,1));
+         animation-timing-function:cubic-bezier(.25,.6,.35,1)}
+    36% {transform:translateX(var(--walk-mid))  scaleX(var(--walk-dir,1));
+         animation-timing-function:linear}
+    64% {transform:translateX(var(--walk-mid))  scaleX(var(--walk-dir,1));
+         animation-timing-function:cubic-bezier(.65,0,.75,.4)}
+    100%{transform:translateX(var(--walk-to))   scaleX(var(--walk-dir,1))}
+  }
+  .walker.flying .bob{animation:bob .8s ease-in-out infinite alternate}
+  @keyframes bob{from{transform:translateY(3.5px)}to{transform:translateY(-3.5px)}}
+  .walker.flying .body{animation:none}
+  .walker.flying .arm{opacity:1;animation:none}
+  .walker.flying.pausing .arm{animation:none}
+  /* each wing flaps about its own root, mirrored */
+  .walker.flying .wing-l{animation:flap-l .09s ease-in-out infinite alternate}
+  .walker.flying .wing-r{animation:flap-r .09s ease-in-out infinite alternate}
+  @keyframes flap-l{from{transform:rotate(12deg)}to{transform:rotate(-26deg)}}
+  @keyframes flap-r{from{transform:rotate(-12deg)}to{transform:rotate(26deg)}}
+  /* ladybug: the shell halves swing open about their hinge behind the head
+     and stay there, and the wings that were folded under them flap */
+  .walker.flying .elytron-l{transform:rotate(50deg)}
+  .walker.flying .elytron-r{transform:rotate(-50deg)}
+  .walker.flying .lwing-l{animation:lflap-l .1s ease-in-out infinite alternate}
+  .walker.flying .lwing-r{animation:lflap-r .1s ease-in-out infinite alternate}
+  @keyframes lflap-l{from{transform:rotate(-16deg)}to{transform:rotate(18deg)}}
+  @keyframes lflap-r{from{transform:rotate(16deg)}to{transform:rotate(-18deg)}}
+  /* the loop starts from rest and ends at rest (-360 is the same pose as 0),
+     so going into and out of it is seamless; the delay lets the flyer settle
+     from its deceleration first */
+  .walker.flying.pausing .flyer{
+    transform-origin:15px 1px;
+    animation:loop 1.9s cubic-bezier(.45,0,.55,1) .3s 1 both}
+  @keyframes loop{from{transform:rotate(0deg)}to{transform:rotate(-360deg)}}
 }
 
 /* checkboxes that sit inline inside a label (Daily report, Show cell grid)
@@ -943,6 +1001,7 @@ body.readonly .tcell textarea{background:var(--surface-2);border-color:transpare
 .walker .foot{stroke:#c9b79a;stroke-width:2.6;stroke-linecap:round}
 .walker .foot-pad{fill:#c9b79a}
 .walker .shell{fill:#cb8f6a}
+.walker .snail-head{fill:#c9b79a}
 .walker .shell-line{stroke:#b87a56;stroke-width:1.4}
 .walker .stalk{stroke:#c9b79a;stroke-width:1;stroke-linecap:round}
 .walker .stalk-wave{stroke:#c9b79a;stroke-width:1;stroke-linecap:round}
@@ -950,11 +1009,18 @@ body.readonly .tcell textarea{background:var(--surface-2);border-color:transpare
 .walker .shell-red{fill:#d85a30}
 .walker .shell-dark{fill:#c14d27}
 .walker .wing-split{stroke:#4a1b0c;stroke-width:.9}
+.walker .shell-edge{stroke:#4a1b0c;stroke-width:.8;stroke-linecap:round}
+.walker .bug-belly{fill:#2f2b27}
+.walker .lwing-m{fill:#e6ecef;fill-opacity:.82;stroke:#b3c2c9;stroke-width:.35}
+.walker .lwing-v{fill:none;stroke:#b3c2c9;stroke-width:.3;stroke-linecap:round}
+/* folded away under the closed shell; they only show once it opens */
+.walker .lwing{opacity:0}
+.walker.flying .lwing{opacity:1}
 .walker .spot{fill:#4a1b0c}
 .walker .head-dark{fill:#3d3a35}
 .walker .eye-white{fill:#fff}
 .walker .antenna{stroke:#3d3a35;stroke-width:1;stroke-linecap:round;fill:none}
-.walker .bug-leg{stroke:#27432e;stroke-width:1.4}
+.walker .bug-leg{stroke:#3d3a35;stroke-width:1.1;stroke-linecap:round}
 /* raindrop */
 .walker .drop{fill:#8fb8c9}
 .walker .glint{stroke:#b9d6e2;stroke-width:1.3;stroke-linecap:round}
@@ -963,7 +1029,7 @@ body.readonly .tcell textarea{background:var(--surface-2);border-color:transpare
 .walker .drop-arm{stroke:#6f9db0}
 /* bee */
 .walker .bee-body{fill:#efb32a}
-.walker .wing{fill:#dfe9ef;opacity:.85}
+.walker .wing{fill:#dfe9ef;opacity:.85;stroke:none}
 .walker .stripe{stroke:#412402;stroke-width:1.9;fill:none}
 .walker .beye{fill:#412402}
 .walker .bmouth{stroke:#412402;stroke-width:.8;stroke-linecap:round;fill:none}
@@ -1035,3 +1101,58 @@ details.fgroup[open]{padding-bottom:12px}
   gap:8px;padding:10px 0 4px;margin-top:6px;
   background:linear-gradient(to top,var(--glass) 70%,transparent);
   border-top:1px solid var(--line)}
+
+/* ---- smart plug setup ---- */
+.plugrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.plugrow button{margin:0;padding:6px 14px;font-size:13px}
+.pluglist{display:flex;flex-direction:column;gap:6px;margin-bottom:10px}
+.pluglist[hidden]{display:none}
+.plugpick{display:flex;align-items:baseline;gap:10px;width:100%;margin:0;
+  padding:8px 12px;font-size:13px;font-weight:400;text-align:left;
+  color:var(--fir);background:var(--tint);box-shadow:none;
+  border:1px solid var(--line);border-radius:10px}
+.plugpick:hover{background:var(--surface-2);border-color:var(--leaf)}
+.plughost{color:var(--muted);font-variant-numeric:tabular-nums}
+.plugstate{margin-left:auto;color:var(--good);font-size:12px}
+.plugauth{margin-left:auto;color:var(--warn);font-size:12px}
+.plugok{color:var(--good)}
+.plugbad{color:var(--bad)}
+.calokmsg{color:var(--good)}
+.calwarnmsg{color:var(--warn)}
+.calbadmsg{color:var(--bad)}
+.calforce{margin:0 0 0 6px;padding:2px 10px;font-size:12px;font-weight:600;
+  color:var(--bad);background:none;box-shadow:none;
+  border:1px solid var(--bad);border-radius:8px}
+.calforce:hover{background:var(--bad-bg)}
+
+/* ---- thunderstorm button ---- */
+.stormrow{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:6px 0 12px}
+.stormrow button{margin:0;padding:6px 14px;font-size:13px}
+.stormrow button:disabled{opacity:.55;cursor:default}
+
+/* ---- light calibration ---- */
+.calbox{margin:4px 0 12px;padding:10px 12px;border:1px solid var(--line);
+  border-radius:10px;background:var(--surface-2)}
+.calhead{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.calhead button{margin:0;padding:6px 14px;font-size:13px}
+.calhead button:disabled{opacity:.55;cursor:default}
+.calbox .fhint{margin:8px 0 0}
+
+/* ---- second light status ---- */
+.l2line{margin:4px 0 0;font-size:12px;color:var(--muted)}
+.l2bad{color:var(--warn)}
+/* pace / target verdict on the DLI line */
+.dliok b{color:var(--good)}
+.dlilow b{color:#c9961c}
+.dlihigh b{color:var(--bad)}
+
+/* ---- DLI scale ----
+   The bar reads as a progress bar without it; labels and ticks make plain that
+   it is a scale in mol/m2, 0 to 16, with the 6-12 seedling target marked. */
+.dliscale{position:relative;height:14px;margin-top:2px;font-size:10px;
+  color:var(--muted);font-variant-numeric:tabular-nums;line-height:14px}
+.dliscale span{position:absolute;top:0;transform:translateX(-50%);white-space:nowrap}
+.dliscale .s0{transform:none}
+.dliscale .s16{transform:translateX(-100%)}
+.dliscale .sband{color:var(--good);opacity:.85}
+.dliscale i{position:absolute;top:-4px;width:1px;height:4px;background:var(--line)}

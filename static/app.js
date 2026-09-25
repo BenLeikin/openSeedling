@@ -208,7 +208,7 @@ function render(){
      if(m===pendingMode)pendingMode=null;      // server agrees; release
      else m=pendingMode;
    }
-   showLightMode(m, S.manual_bright);}
+   showLightMode(m, S.manual_bright, true);}   // from a status: may release
   document.getElementById('bulb').style.setProperty('--glow',S.brightness/100);
   const[p,n,stage]=phaseOf();
   document.getElementById('phase').textContent=p;
@@ -227,7 +227,7 @@ function render(){
 
 let lightMode='auto', dragging=false;
 let pendingMode=null;   // mode the user just picked, held until status agrees
-function showLightMode(mode, bright){
+function showLightMode(mode, bright, fromStatus){
   mode = mode || 'auto';
   lightMode = mode;
   document.querySelectorAll('.lcbtn:not(.fanbtn)').forEach(b=>
@@ -241,6 +241,13 @@ function showLightMode(mode, bright){
       if(k.ok===false)t=(t?t+' \u00b7 ':'')+'plug not responding: '+(k.error||'');
       else t=(t?t+' \u00b7 ':'')+'smart plug'+(k.on==null?'':(k.on?' on':' off'));
     }
+    // Below the driver's minimum every setting gives the same light, so say
+    // so rather than letting the slider imply a dimness it cannot produce.
+    const lin=S&&S.light_linear, floor=lin&&lin.min_output_pct;
+    const b=S?Number(S.brightness):null;
+    if(floor>2 && S && S.light_linear_on && b>0 && b<floor)
+      t=(t?t+' \u00b7 ':'')+`below the fixture's minimum: holding `
+        +`${Math.round(floor)}%`;
     info.textContent=t;
     info.className=(lightBackend==='kasa'&&S&&S.kasa&&S.kasa.ok===false)?'err':'';
   }
@@ -258,22 +265,48 @@ function showLightMode(mode, bright){
   const live = mode==='on';
   wrap.classList.toggle('dim', !live);
   rng.disabled = !live;
-  if(bright!=null && !dragging){      // never move the thumb under the user
+  // Never move the thumb under the user, and never repaint a status that was
+  // built before their change landed: hold the requested value until the
+  // server reports it, or until the hold times out.
+  if(brightHold!=null){
+    // Only a STATUS can release the hold. The reply to the POST echoes the
+    // value back, so releasing on that let the next status, still carrying
+    // the old brightness, repaint it and snap the slider back.
+    if(fromStatus && bright!=null && Math.round(bright)===Math.round(brightHold)){
+      brightHold=null;
+    }else{
+      rng.value=brightHold;
+      if(val)val.textContent=Math.round(brightHold)+'%';
+      return;
+    }
+  }
+  if(bright!=null && !dragging){
     rng.value=bright;
     if(val)val.textContent=bright+'%';
   }
 }
+// The brightness the user asked for, held until the server confirms it. A
+// status built before the POST landed would otherwise repaint the old value
+// and then correct itself, which reads as the slider jumping back.
+let brightHold=null, brightHoldTimer=null;
+function holdBright(v){
+  brightHold=v;
+  clearTimeout(brightHoldTimer);
+  brightHoldTimer=setTimeout(()=>{brightHold=null; refresh();}, 6000);
+}
+
 async function setLight(mode, brightness, quiet){
   const info=document.getElementById('lightinfo');
   if(info && !quiet)info.textContent='...';
   const body={};
   if(mode!=null)body.mode=mode;
-  if(brightness!=null)body.brightness=brightness;
+  if(brightness!=null){body.brightness=brightness; holdBright(brightness);}
   try{
     const r=await fetch('/api/light',{method:'POST',
       headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     const j=await r.json().catch(()=>({}));
     if(r.ok&&j.ok){
+      if(j.brightness!=null)holdBright(j.brightness);   // what it accepted
       if(quiet){lightMode=j.mode;}          // mid-drag: don't touch the slider
       else {
         pendingMode=j.mode;
@@ -470,7 +503,9 @@ function fillForm(cfg){
                   'alert_dry_pct','alert_humidity_high','alert_dli_low','alert_dli_high',
                   'moisture_threshold_pct','pump_cooldown_min',
                   'fill_max_seconds','pump_daily_max_seconds','pump_max_seconds',
-                  'probe_median_depth'])
+                  'probe_median_depth','auto_wet_cal_max_move','light_floor_pct',
+                  'live_interval_s',
+                  'light2_start','light2_end','light2_bright','light2_ramp_min'])
     if(f.elements[k] && !formHolds(k, cfg))
       f.elements[k].value=cfg[k];
   {// schedule mode: populate its fields and show only that mode's block
@@ -520,8 +555,20 @@ function fillForm(cfg){
   if(f.elements['camera_enabled']&&document.activeElement!==f.elements['camera_enabled'])
     f.elements['camera_enabled'].checked=!!cfg['camera_enabled'];
   applyTheme(cfg['theme']||'auto');
+  for(const k of ['kasa_host','kasa_user'])
+    if(f.elements[k]&&!formHolds(k,cfg))f.elements[k].value=cfg[k]||'';
   if(f.elements['little_buddy']&&!formHolds('little_buddy',cfg))
     f.elements['little_buddy'].checked=cfg['little_buddy']!==false;
+  if(f.elements['auto_wet_cal']&&!formHolds('auto_wet_cal',cfg))
+    f.elements['auto_wet_cal'].checked=!!cfg['auto_wet_cal'];
+  if(f.elements['light_linear_on']&&!formHolds('light_linear_on',cfg))
+    f.elements['light_linear_on'].checked=!!cfg['light_linear_on'];
+  if(f.elements['dim_below_min']&&!formHolds('dim_below_min',cfg))
+    f.elements['dim_below_min'].value=cfg['dim_below_min']||'hold';
+  if(f.elements['light2_on']&&!formHolds('light2_on',cfg))
+    f.elements['light2_on'].checked=!!cfg['light2_on'];
+  if(f.elements['light2_override']&&!formHolds('light2_override',cfg))
+    f.elements['light2_override'].value=cfg['light2_override']||'auto';
   buddyOn = cfg['little_buddy']!==false;
   if(f.elements['buddy_model']&&!formHolds('buddy_model',cfg))
     f.elements['buddy_model'].value=cfg['buddy_model']||'sprout';
@@ -1350,7 +1397,13 @@ function renderWater(j){
     fb.textContent=tw.running?'Filling...':'Fill to float';
     const info=document.getElementById('pumpinfo'+t);
     if(dead)info.textContent='no pump hardware';
-    else if(tw.last&&!tw.running)info.textContent='last: '+tw.last;
+    else if(tw.last&&!tw.running){
+      // when as well as what: "how long since it was watered" is the question
+      // the tray card is usually asked, and it now survives a restart
+      // agoStr takes a timestamp in milliseconds; last_run is in seconds
+      const ago=tw.last_run ? agoStr(tw.last_run*1000) : '';
+      info.textContent='last: '+tw.last+(ago?` \u00b7 ${ago}`:'');
+    }
   }
 }
 let lightBackend='pwm';  // 'kasa' means on/off only: no slider, no sweep
@@ -1384,19 +1437,36 @@ async function waterAct(tray, body, msg){
     // progress/result arrives via the status poll (running/last) + live float
   }catch(e){if(info)info.textContent='request failed';}
 }
-async function calibrateProbe(tray, point){
-  const info=document.getElementById('probecalinfo');if(info)info.textContent='sampling\u2026 (~2s)';
+async function calibrateProbe(tray, point, force, volts){
+  const info=document.getElementById('probecalinfo');
+  if(info){
+    info.className='';
+    info.textContent=force ? 'storing it\u2026'
+      : 'watching the probe for 15s to be sure it has settled\u2026';
+  }
   try{
     const r=await fetch('/api/probe_cal',{method:'POST',
-      headers:{'Content-Type':'application/json'},body:JSON.stringify({tray,point})});
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({tray,point,force:!!force,
+                           volts:(force&&volts!=null)?volts:undefined})});
     const j=await r.json().catch(()=>({}));
-    if(r.ok&&j.ok){
-      if(info)info.textContent=`Tray ${tray} ${point} = ${j.volts}V`
-        + (j.noisy?` (noisy, spread ${j.spread}V)`:'');
+    if(r.status===401){if(info)info.textContent='log in to calibrate';return;}
+    if(!info)return;
+    if(j.ok){
+      const extra=(j.notes&&j.notes.length)?' \u00b7 '+esc(j.notes.join('; ')):'';
+      info.className=j.forced?'calwarnmsg':'calokmsg';
+      info.innerHTML=`Tray ${esc(tray)} ${esc(point)} anchor set to `
+        +`<b>${j.volts}V</b>${j.forced?' (stored despite the warning)':''}${extra}`;
       refresh();
+      return;
     }
-    else if(info)info.textContent = r.status===401?'log in to calibrate'
-                        :('failed: '+(j.error||('HTTP '+r.status)));
+    // refused: say why, and offer the override rather than hiding it
+    info.className='calbadmsg';
+    const why=(j.problems&&j.problems.length)?j.problems:[j.error||'could not capture'];
+    info.innerHTML='<b>Not stored.</b> '+esc(why.join(' Also: '))
+      + (j.can_force ? ` <button type="button" class="calforce" `
+          +`data-tray="${esc(tray)}" data-point="${esc(point)}" `
+          +`data-volts="${j.volts}">store ${j.volts}V anyway</button>` : '');
   }catch(e){if(info)info.textContent='calibration failed';}
 }
 async function checkTempComp(tray, apply){
@@ -1827,6 +1897,79 @@ function renderPlantings(){
 function applyAuthTo(el){
   el.querySelectorAll('.editonly').forEach(e=>{e.style.display=canEdit?'':'none';});
 }
+// ---- smart plug setup ----
+// Scan, pick, test. The password field is never populated from the server (it
+// is redacted like the dashboard hash), so a blank one means "leave it alone"
+// rather than "clear it".
+async function plugScan(){
+  const info=document.getElementById('pluginfo');
+  const list=document.getElementById('pluglist');
+  const f=document.getElementById('cfgform');
+  if(info)info.textContent='scanning the local network\u2026';
+  if(list){list.hidden=true;list.innerHTML='';}
+  try{
+    const r=await fetch('/api/plug_discover',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({user:f.elements['kasa_user'].value,
+                           pass:f.elements['kasa_pass'].value})});
+    const j=await r.json().catch(()=>({}));
+    if(r.status===401){info.textContent='log in first';return;}
+    if(!j.ok){info.textContent=j.error||'scan failed';return;}
+    const devs=j.devices||[];
+    if(!devs.length){info.textContent='no plugs found on this subnet';return;}
+    info.textContent=`${devs.length} found \u00b7 pick one to use it`;
+    list.innerHTML=devs.map(d=>{
+      const why=d.needs_auth ? '<span class="plugauth">needs your TP-Link login</span>'
+             : (d.error ? `<span class="plugauth">${esc(d.error)}</span>`
+                        : `<span class="plugstate">${d.on?'on':'off'}</span>`);
+      return `<button type="button" class="plugpick" data-host="${esc(d.host)}">
+                <b>${esc(d.alias||d.model||'plug')}</b>
+                <span class="plughost">${esc(d.host)}</span>${why}</button>`;
+    }).join('');
+    list.hidden=false;
+  }catch(e){if(info)info.textContent='scan failed';}
+}
+
+async function plugTest(){
+  const info=document.getElementById('pluginfo');
+  const f=document.getElementById('cfgform');
+  if(info)info.textContent='connecting\u2026';
+  try{
+    const r=await fetch('/api/plug_test',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({host:f.elements['kasa_host'].value,
+                           user:f.elements['kasa_user'].value,
+                           pass:f.elements['kasa_pass'].value})});
+    const j=await r.json().catch(()=>({}));
+    if(r.status===401){info.textContent='log in first';return;}
+    if(!j.ok){
+      info.textContent=(j.error||'could not connect')+(j.hint?' \u2014 '+j.hint:'');
+      info.className='fhint plugbad';
+      return;
+    }
+    info.className='fhint plugok';
+    info.textContent=`${j.alias||j.model||'plug'} responded \u00b7 currently `
+      +`${j.on?'on':'off'} \u00b7 remember to save`;
+  }catch(e){if(info)info.textContent='request failed';}
+}
+
+function initPlug(){
+  const scan=document.getElementById('plugscan');
+  const test=document.getElementById('plugtest');
+  const list=document.getElementById('pluglist');
+  if(scan)scan.addEventListener('click',plugScan);
+  if(test)test.addEventListener('click',plugTest);
+  if(list)list.addEventListener('click',ev=>{
+    const b=ev.target.closest('.plugpick');
+    if(!b)return;
+    const f=document.getElementById('cfgform');
+    f.elements['kasa_host'].value=b.dataset.host;
+    list.hidden=true;
+    const info=document.getElementById('pluginfo');
+    if(info)info.textContent=`${b.dataset.host} selected \u00b7 test it, then save`;
+  });
+}
+
 function initBackup(){
   const box=document.getElementById('backupsecrets');
   const btn=document.getElementById('backupbtn');
@@ -1909,6 +2052,126 @@ async function toggleTheme(){
     pendingSave.theme=next;             // hold it until a status echoes it back
   }catch(e){}
 }
+// ---- thunderstorm ----
+// A button in the Light settings, shown only on the wiring that can do it:
+// an AC fixture on a 0-10V dim line. The 5V panel has too little range and
+// the smart plug cannot dim at all, so on those the server refuses and the
+// button stays hidden rather than offering something that will not work.
+let stormBusy=false;
+async function summonStorm(){
+  if(stormBusy)return;
+  const btn=document.getElementById('stormbtn');
+  const info=document.getElementById('storminfo');
+  stormBusy=true;
+  if(btn)btn.disabled=true;
+  try{
+    const r=await fetch('/api/lightning',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({seconds:20,style:'storm'})});
+    const j=await r.json().catch(()=>({}));
+    if(r.status===401){
+      if(info)info.textContent='log in first';
+      stormBusy=false; if(btn)btn.disabled=false; return;
+    }
+    if(!j.ok){
+      if(info)info.textContent=j.error||'could not start';
+      stormBusy=false; if(btn)btn.disabled=false; return;
+    }
+    const secs=j.seconds||20;
+    let left=secs;
+    if(info)info.textContent=`storm running \u2014 ${left}s`;
+    const tick=setInterval(()=>{
+      left-=1;
+      if(info)info.textContent=`storm running \u2014 ${left}s`;
+      if(left<=0){
+        clearInterval(tick);
+        stormBusy=false;
+        if(btn)btn.disabled=false;
+        if(info)info.textContent='done, back to the schedule';
+      }
+    },1000);
+  }catch(e){
+    if(info)info.textContent='request failed';
+    stormBusy=false; if(btn)btn.disabled=false;
+  }
+}
+function renderStorm(j){
+  const row=document.getElementById('stormrow');
+  if(!row)return;
+  // the server decides: it knows the wiring and whether the channel opened
+  row.style.display=(j.lightning && j.lightning.available && canEdit) ? '' : 'none';
+}
+// ---- light calibration ----
+// A fine raw sweep (every percent) and an inverse lookup, so the dashboard's
+// percent means a fraction of the fixture's real output. The sweep's own
+// progress is shown by the existing sweep card; this just starts it and
+// reports what the calibration found.
+async function startCalibration(){
+  const info=document.getElementById('lininfo');
+  const btn=document.getElementById('linbtn');
+  try{
+    const r=await fetch('/api/light_sweep',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({linearize:true})});
+    const j=await r.json().catch(()=>({}));
+    if(r.status===401){if(info)info.textContent='log in first';return;}
+    if(!j.ok){if(info)info.textContent=j.error||'could not start';return;}
+    if(btn)btn.disabled=true;
+    if(info)info.textContent=`calibrating, about ${Math.round((j.estimate_seconds||180)/60)} minutes. `
+      +'The light will step through its whole range.';
+  }catch(e){if(info)info.textContent='request failed';}
+}
+function renderCalibration(j){
+  const info=document.getElementById('lininfo');
+  const btn=document.getElementById('linbtn');
+  const running=!!(j.sweep&&j.sweep.running);
+  if(btn)btn.disabled=running;
+  const lin=j.light_linear;
+  if(!info||running)return;
+  if(j.light_linear_stale){
+    info.textContent='The stored calibration was built by an older version and '
+      +'is not being used. Press Calibrate to rebuild it.';
+    return;
+  }
+  if(lin&&lin.table===undefined&&lin.cutoff_raw!==undefined){
+    const when=lin.ts?new Date(lin.ts*1000).toLocaleDateString():'';
+    const floorNote = (lin.min_output_pct>2)
+      ? ` The driver cannot hold less than about ${Math.round(lin.min_output_pct)}% `
+        +`of full, so settings below that hold that lowest level, or cycle on `
+        +`and off to average down if you switch that on.`
+      : '';
+    info.textContent=`Calibrated ${when}: light appears at ${lin.cutoff_raw}% `
+      +`and reaches full output by ${lin.saturation_raw}% raw, `
+      +`${Math.round(lin.peak_lux).toLocaleString()} lx peak.${floorNote} `
+      +(j.light_linear_on?'In use.':'Not in use; tick the box to apply it.');
+  }
+}
+
+// ---- second light ----
+function renderLight2(j){
+  const el=document.getElementById('l2line');
+  if(!el)return;
+  const l=j.light2;
+  if(!l||!l.enabled){el.style.display='none';return;}
+  el.style.display='';
+  const name=l.fixture==='pwm'?'5V panel':(l.fixture==='dim'?'dim fixture':'second light');
+  if(!l.fixture){
+    el.textContent=`Second light: ${l.why}`;
+    el.className='l2line l2bad';
+    return;
+  }
+  el.className='l2line';
+  const sched=l.override==='auto'?` \u00b7 ${l.start}\u2013${l.end}`:'';
+  el.textContent=`Second light (${name}): ${Math.round(l.level)}% \u00b7 ${l.why}${sched}`;
+}
+
+function initStorm(){
+  const btn=document.getElementById('stormbtn');
+  if(btn)btn.addEventListener('click',summonStorm);
+  const lb=document.getElementById('linbtn');
+  if(lb)lb.addEventListener('click',startCalibration);
+}
+
 function initTheme(){
   const btn=document.getElementById('themebtn');
   if(btn)btn.addEventListener('click',toggleTheme);
@@ -1931,6 +2194,12 @@ function initSensors(){
   const pmap={probewet1:['1','wet'],probedry1:['1','dry'],probewet2:['2','wet'],probedry2:['2','dry']};
   for(const id in pmap){const b=document.getElementById(id);
     if(b)b.addEventListener('click',()=>calibrateProbe(pmap[id][0],pmap[id][1]));}
+  {const info=document.getElementById('probecalinfo');
+   if(info)info.addEventListener('click',ev=>{
+     const b=ev.target.closest('.calforce');
+     if(b)calibrateProbe(b.dataset.tray, b.dataset.point, true,
+                         b.dataset.volts!=null?parseFloat(b.dataset.volts):null);
+   });}
   {const t1=document.getElementById('tc1');if(t1)t1.addEventListener('click',()=>checkTempComp('1'));
    const t2=document.getElementById('tc2');if(t2)t2.addEventListener('click',()=>checkTempComp('2'));}
   const hc=document.getElementById('chartgrid');
@@ -2118,6 +2387,13 @@ async function refresh(){
     document.getElementById('phase').textContent='Controller unreachable';
     return;
   }
+  applyStatus(j);
+}
+
+// The whole render, split out so a pushed status and a polled one go through
+// exactly the same path. Anything that renders differently depending on how
+// the data arrived is a bug waiting to happen.
+function applyStatus(j){
   try{
     S={...j,now:new Date(j.now),on:new Date(j.on),off:new Date(j.off),
        sunrise:new Date(j.sunrise),sunset:new Date(j.sunset)};
@@ -2148,6 +2424,9 @@ async function refresh(){
     handleGrid(j);
     renderSensors(j);
     renderQuality(j);
+    renderStorm(j);
+    renderCalibration(j);
+    renderLight2(j);
     renderTrays(j);
     renderTrayConfig(j.settings);
     renderSweep(j);
@@ -2192,6 +2471,8 @@ document.getElementById('cfgform').addEventListener('submit',async ev=>{
   if(f.elements['cam_rectify'])body.cam_rectify=f.elements['cam_rectify'].checked;
   for(const k of ['humidity_low','humidity_high','fan_humidity_on','fan_min_speed'])
     if(f.elements[k])body[k]=parseInt(f.elements[k].value||0,10);
+  if(f.elements['live_interval_s'])
+    body.live_interval_s=parseInt(f.elements['live_interval_s'].value||0,10);
   if(f.elements['schedule_mode'])body.schedule_mode=f.elements['schedule_mode'].value;
   if(f.elements['light_backend'])body.light_backend=f.elements['light_backend'].value;
   for(const k of ['fixed_on','fixed_off','duration_end'])
@@ -2222,6 +2503,26 @@ document.getElementById('cfgform').addEventListener('submit',async ev=>{
     body.camera_enabled=f.elements['camera_enabled'].checked;
   if(f.elements['little_buddy'])
     body.little_buddy=f.elements['little_buddy'].checked;
+  if(f.elements['auto_wet_cal'])
+    body.auto_wet_cal=f.elements['auto_wet_cal'].checked;
+  if(f.elements['light_linear_on'])
+    body.light_linear_on=f.elements['light_linear_on'].checked;
+  if(f.elements['dim_below_min'])body.dim_below_min=f.elements['dim_below_min'].value;
+  if(f.elements['light2_on'])body.light2_on=f.elements['light2_on'].checked;
+  for(const k of ['light2_start','light2_end','light2_override'])
+    if(f.elements[k])body[k]=f.elements[k].value;
+  for(const k of ['light2_bright','light2_ramp_min'])
+    if(f.elements[k])body[k]=parseInt(f.elements[k].value||0,10);
+  if(f.elements['auto_wet_cal_max_move'])
+    body.auto_wet_cal_max_move=parseFloat(f.elements['auto_wet_cal_max_move'].value||0.1);
+  if(f.elements['light_floor_pct'])
+    body.light_floor_pct=parseFloat(f.elements['light_floor_pct'].value||0);
+  for(const k of ['kasa_host','kasa_user'])
+    if(f.elements[k])body[k]=f.elements[k].value.trim();
+  // blank means "keep the stored one": the field is never filled from the
+  // server, so submitting an empty string would silently wipe the password
+  if(f.elements['kasa_pass']&&f.elements['kasa_pass'].value)
+    body.kasa_pass=f.elements['kasa_pass'].value;
 
   if(f.elements['buddy_model'])
     body.buddy_model=f.elements['buddy_model'].value;
@@ -2394,7 +2695,33 @@ function initReport(){
   fetchReport();
 }
 
-setInterval(refresh,15000);
+// ---- live updates ----
+// EventSource pushes a status the moment something changes. The poll stays,
+// slowed right down: a stream that dies quietly would otherwise freeze the
+// page, and this way the worst case is the old 15-second behaviour.
+const POLL_FAST=15000, POLL_SLOW=60000;
+let pollTimer=null, es=null, streamOk=false;
+function setPoll(ms){
+  if(pollTimer)clearInterval(pollTimer);
+  pollTimer=setInterval(refresh, ms);
+}
+function initStream(){
+  if(!('EventSource' in window))return;        // old browser: polling only
+  try{ es=new EventSource('/api/stream'); }catch(e){ return; }
+  es.addEventListener('status', ev=>{
+    let j=null;
+    try{ j=JSON.parse(ev.data); }catch(e){ return; }
+    if(j && j.error==='warming up')return;
+    if(!streamOk){ streamOk=true; setPoll(POLL_SLOW); }
+    applyStatus(j);
+  });
+  es.onerror=()=>{
+    // the browser reconnects on its own; until it does, poll at full speed
+    if(streamOk){ streamOk=false; setPoll(POLL_FAST); }
+  };
+}
+setPoll(POLL_FAST);
+initStream();
 setInterval(render,60000);
 setInterval(pollFloat,1500);
 function curveLuxAt(pts, pct){
@@ -2429,13 +2756,28 @@ function drawLightCurve(curve, sweeping, nowPct){
   let h='';
   for(let i=0;i<=2;i++){const y=P+(H-B-P)*i/2;
     h+=`<line x1="${L}" y1="${y}" x2="${W-P}" y2="${y}" stroke="#e6f0de" stroke-width="1"/>`;}
-  // straight line from origin to peak: how linear the dimming actually is
-  h+=`<line x1="${sx(0)}" y1="${sy(0)}" x2="${sx(100)}" y2="${sy(maxL)}"
-        stroke="#c9c9c9" stroke-width="1" stroke-dasharray="4 3"/>`;
+  // the ideal straight line. Raw: origin to peak, showing how far the fixture
+  // is from linear. Calibrated: 1% (the dimmest lit level) to full, which the
+  // calibrated curve should sit right on top of.
+  if(curve.calibrated){
+    h+=`<line x1="${sx(0)}" y1="${sy(0)}" x2="${sx(100)}" y2="${sy(maxL)}"
+          stroke="#c9c9c9" stroke-width="1" stroke-dasharray="4 3"/>`;
+    // the raw fixture, faint, for comparison
+    const raw=(curve.rawPoints||[]);
+    if(raw.length){
+      const rl=raw.map(p=>`${sx(p[0]).toFixed(1)},${sy(p[1]).toFixed(1)}`).join(' ');
+      h+=`<polyline fill="none" stroke="#e8b04b" stroke-opacity="0.28" stroke-width="1.2"
+            points="${rl}" vector-effect="non-scaling-stroke"/>`;
+    }
+  } else {
+    h+=`<line x1="${sx(0)}" y1="${sy(0)}" x2="${sx(100)}" y2="${sy(maxL)}"
+          stroke="#c9c9c9" stroke-width="1" stroke-dasharray="4 3"/>`;
+  }
   const line=pts.map(p=>`${sx(p[0]).toFixed(1)},${sy(p[1]).toFixed(1)}`).join(' ');
   h+=`<polyline fill="none" stroke="#e8b04b" stroke-width="2" points="${line}"
         vector-effect="non-scaling-stroke"/>`;
-  pts.forEach(p=>{h+=`<circle cx="${sx(p[0]).toFixed(1)}" cy="${sy(p[1]).toFixed(1)}" r="1.7" fill="#c98a1e"/>`;});
+  if(!curve.calibrated)
+    pts.forEach(p=>{h+=`<circle cx="${sx(p[0]).toFixed(1)}" cy="${sy(p[1]).toFixed(1)}" r="1.7" fill="#c98a1e"/>`;});
   h+=`<text x="${L}" y="${H-5}" font-size="9" fill="#7a8a72">0%</text>`;
   h+=`<text x="${W-P}" y="${H-5}" font-size="9" fill="#7a8a72" text-anchor="end">100%</text>`;
   h+=`<text x="2" y="${P+8}" font-size="9" fill="#7a8a72">${Math.round(maxL).toLocaleString()}</text>`;
@@ -2460,9 +2802,17 @@ function drawLightCurve(curve, sweeping, nowPct){
   svg.innerHTML=h;
   const info=document.getElementById('sweepinfo');
   if(info&&!sweeping&&curve.ts){
-    const half=pts.find(p=>p[1]>=maxL/2);
-    info.textContent=`peak ${Math.round(maxL).toLocaleString()} lx`
-      +(half?` \u00b7 50% output at ${half[0]}% set`:'');
+    if(curve.stale){
+      info.textContent='calibration is out of date \u00b7 press Calibrate';
+    } else if(curve.calibrated){
+      info.textContent=`calibrated \u00b7 linear to `
+        +`${Math.round(maxL).toLocaleString()} lx`;
+    } else {
+      const half=pts.find(p=>p[1]>=maxL/2);
+      info.textContent=`peak ${Math.round(maxL).toLocaleString()} lx`
+        +(half?` \u00b7 50% output at ${half[0]}% set`:'')
+        +' \u00b7 raw, not calibrated';
+    }
   }
 }
 async function startSweep(){
@@ -2475,12 +2825,16 @@ async function startSweep(){
   }
   if(info)info.textContent='starting\u2026';
   try{
+    // One button does the whole job: a fine raw sweep, then the calibration
+    // built from it and switched on. A plain measure only ever showed the
+    // fixture's physical curve, which never changes shape, while the button
+    // that straightened it lived somewhere else in Settings.
     const r=await fetch('/api/light_sweep',{method:'POST',
-      headers:{'Content-Type':'application/json'},body:JSON.stringify({step:5,settle:2})});
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({linearize:true})});
     const j=await r.json().catch(()=>({}));
     if(r.status===401){if(info)info.textContent='log in first';return;}
     if(!j.ok){if(info)info.textContent=j.error||'failed';return;}
-    if(info)info.textContent=`measuring\u2026 (~${j.estimate_seconds}s)`;
+    if(info)info.textContent=`calibrating\u2026 about ${Math.round((j.estimate_seconds||180)/60)} min`;
     if(btn)btn.textContent='Cancel';
   }catch(e){if(info)info.textContent='request failed';}
 }
@@ -2525,7 +2879,7 @@ function buddySprout(){
       <circle class="eye" cx="12.6" cy="26.4" r="0.9"/>
       <circle class="eye" cx="17.4" cy="26.4" r="0.9"/>
       <path class="mouth" d="M13.2 28.6q1.8 1.4 3.6 0"/>
-      <line class="arm" x1="20.6" y1="25.4" x2="25" y2="21.6" style="transform-origin:20.6px 25.4px"/>
+      <line class="arm sarm" x1="20.6" y1="25.4" x2="25" y2="21.6" style="transform-origin:20.6px 25.4px"/>
     </g>`;
 }
 
@@ -2575,45 +2929,59 @@ function buddySnail(){
   // the slow one: SNAIL_DUR overrides the shared duration so it actually
   // reads as a snail rather than a shell on a normal walk cycle
   return `<g class="legs">
-      <line class="leg-a stalk" x1="6.5" y1="24" x2="5" y2="19.5" style="transform-origin:6.5px 24px"/>
-      <line class="leg-b stalk" x1="9.5" y1="24" x2="10.5" y2="19.5" style="transform-origin:9.5px 24px"/>
+      <line class="leg-a stalk" x1="7" y1="23.5" x2="5.2" y2="17.6" style="transform-origin:7px 23.5px"/>
+      <line class="leg-b stalk" x1="9.8" y1="23.5" x2="10.6" y2="17.6" style="transform-origin:9.8px 23.5px"/>
     </g>
-    <g class="body" style="transform-origin:15px 26px">
-      <path class="foot" d="M6 26h13c1.6 0 2.6-1 2.6-2.3 0-1.4-1.1-2.2-2.6-2.2h-2" fill="none"/>
-      <ellipse class="foot-pad" cx="8" cy="26" rx="6.5" ry="1.8"/>
-      <circle class="shell" cx="17" cy="19" r="6.4"/>
-      <path class="shell-line" d="M17 19a3.6 3.6 0 1 1 3.6-3.6" fill="none"/>
-      <path class="shell-line" d="M17 19a5.6 5.6 0 1 0 5.6-5.6" fill="none"/>
-      <circle class="eye" cx="5" cy="19" r="1.1"/>
-      <circle class="eye" cx="10.5" cy="19" r="1.1"/>
-      <path class="mouth" d="M6 27.4q1.6 1.2 3.2 0"/>
-      <line class="arm stalk-wave" x1="9.5" y1="24" x2="10.5" y2="19.5" style="transform-origin:9.5px 24px"/>
+    <g class="body" style="transform-origin:15px 27px">
+      <ellipse class="foot-pad" cx="14" cy="28.4" rx="11" ry="2.4"/>
+      <path class="snail-head" d="M4.6 28.4c0-4 1.7-6.6 4.6-6.6 2.6 0 4.2 2.2 4.4 6.6z"/>
+      <circle class="shell" cx="18.4" cy="20.6" r="7.4"/>
+      <path class="shell-line" d="M18.4 20.6a4 4 0 1 1 4-4" fill="none"/>
+      <path class="shell-line" d="M18.4 20.6a6.4 6.4 0 1 0 6.4-6.4" fill="none"/>
+      <circle class="eye" cx="5.2" cy="17.2" r="1.3"/>
+      <circle class="eye" cx="10.6" cy="17.2" r="1.3"/>
+      <path class="mouth" d="M6.6 26.2q1.8 1.3 3.6 0"/>
+      <line class="arm stalk-wave" x1="9.8" y1="23.5" x2="10.6" y2="17.6" style="transform-origin:9.8px 23.5px"/>
     </g>`;
 }
 
 function buddyLadybug(){
-  return `<g class="legs">
-      <line class="leg-a bug-leg" x1="9" y1="27" x2="6" y2="31" style="transform-origin:9px 27px"/>
-      <line class="leg-b bug-leg" x1="21" y1="27" x2="24" y2="31" style="transform-origin:21px 27px"/>
-      <line class="leg-b bug-leg" x1="15" y1="27.5" x2="15" y2="31.5" style="transform-origin:15px 27.5px"/>
-    </g>
-    <g class="body" style="transform-origin:15px 27px">
-      <ellipse class="shell-red" cx="15" cy="21" rx="8" ry="7"/>
-      <path class="shell-dark" d="M15 14a8 7 0 0 0-8 7h8z"/>
-      <line class="wing-split" x1="15" y1="14" x2="15" y2="28"/>
-      <circle class="spot" cx="10.5" cy="19.5" r="1.5"/>
-      <circle class="spot" cx="19.5" cy="19.5" r="1.5"/>
-      <circle class="spot" cx="11.5" cy="24.5" r="1.2"/>
-      <circle class="spot" cx="18.5" cy="24.5" r="1.2"/>
+  // In flight a ladybug lifts its two shell halves (the elytra) up and out,
+  // and the thin wings folded underneath do the flapping. So the shell is
+  // drawn as two halves hinged behind the head, with the body and wings
+  // beneath them: closed, the halves cover the wings entirely.
+  return `<g class="body">
+      <g class="lwing lwing-l" style="transform-origin:13.5px 17.5px">
+        <path class="lwing-m" d="M13.5 17.5C8.5 14.2 .5 14.8 -2.8 18.4C-4.4 20.4 -2.6 23.4 1 22.9C6 22.2 11 20.4 13.5 17.5z"/>
+        <path class="lwing-v" d="M13.5 17.5Q5 18.2 -2.4 20.3"/>
+      </g>
+      <g class="lwing lwing-r" style="transform-origin:16.5px 17.5px">
+        <path class="lwing-m" d="M16.5 17.5C21.5 14.2 29.5 14.8 32.8 18.4C34.4 20.4 32.6 23.4 29 22.9C24 22.2 19 20.4 16.5 17.5z"/>
+        <path class="lwing-v" d="M16.5 17.5Q25 18.2 32.4 20.3"/>
+      </g>
+      <ellipse class="bug-belly" cx="15" cy="21.5" rx="5.2" ry="6.2"/>
+      <g class="elytron elytron-l" style="transform-origin:15px 15.5px">
+        <path class="shell-red" d="M15 14a8 7 0 0 0 0 14z"/>
+        <path class="shell-edge" d="M15 14.4v13.2"/>
+        <circle class="spot" cx="10.5" cy="19.5" r="1.5"/>
+        <circle class="spot" cx="11.5" cy="24.5" r="1.2"/>
+      </g>
+      <g class="elytron elytron-r" style="transform-origin:15px 15.5px">
+        <path class="shell-red" d="M15 14a8 7 0 0 1 0 14z"/>
+        <path class="shell-edge" d="M15 14.4v13.2"/>
+        <circle class="spot" cx="19.5" cy="19.5" r="1.5"/>
+        <circle class="spot" cx="18.5" cy="24.5" r="1.2"/>
+      </g>
       <circle class="head-dark" cx="15" cy="13.5" r="4.4"/>
       <circle class="eye-white" cx="13.3" cy="13" r="1"/>
       <circle class="eye-white" cx="16.7" cy="13" r="1"/>
-      <path class="antenna" d="M12.4 10.4l-2.2-3"/>
-      <path class="antenna arm" d="M17.6 10.4l2.2-3" style="transform-origin:17.6px 10.4px"/>
-      <circle class="head-dark" cx="10.2" cy="7.4" r=".9"/>
-      <circle class="head-dark" cx="19.8" cy="7.4" r=".9"/>
+      <path class="antenna" d="M12.8 10.6l-1.5-2.2"/>
+      <path class="antenna" d="M17.2 10.6l1.5-2.2"/>
+      <circle class="head-dark" cx="11.1" cy="8" r=".7"/>
+      <circle class="head-dark" cx="18.9" cy="8" r=".7"/>
     </g>`;
 }
+
 
 function buddyDrop(){
   return `<g class="legs">
@@ -2633,14 +3001,10 @@ function buddyDrop(){
 }
 
 function buddyBee(){
-  // the wings take the place of the wave: they blur during the pause
-  return `<g class="legs">
-      <line class="leg-a bug-leg" x1="12" y1="27" x2="10" y2="31.5" style="transform-origin:12px 27px"/>
-      <line class="leg-b bug-leg" x1="18" y1="27" x2="20" y2="31.5" style="transform-origin:18px 27px"/>
-    </g>
-    <g class="body" style="transform-origin:15px 27px">
-      <ellipse class="wing arm" cx="9.5" cy="14" rx="5.5" ry="3.6" style="transform-origin:13px 15px"/>
-      <ellipse class="wing" cx="20.5" cy="14" rx="5.5" ry="3.6"/>
+  // a flyer: no legs, and two wings that flap about their own roots, mirrored
+  return `<g class="body">
+      <ellipse class="wing wing-l" cx="9.5" cy="14" rx="5.5" ry="3.6" style="transform-origin:13.5px 15.5px"/>
+      <ellipse class="wing wing-r" cx="20.5" cy="14" rx="5.5" ry="3.6" style="transform-origin:16.5px 15.5px"/>
       <ellipse class="bee-body" cx="15" cy="21" rx="7.4" ry="6.6"/>
       <path class="stripe" d="M9.2 17.6h11.6"/>
       <path class="stripe" d="M8 22h14"/>
@@ -2652,6 +3016,7 @@ function buddyBee(){
       <path class="antenna dark" d="M17 15.5l1.4-3.4"/>
     </g>`;
 }
+
 
 function buddyGnome(){
   return `<g class="legs">
@@ -2683,10 +3048,23 @@ const BUDDY_DURATION={snail:20000};
 // moonwalks in one direction. Front-facing sprites are symmetric enough that
 // either sign looks correct.
 const BUDDY_FACES_LEFT={cat:true, snail:true};
+// Characters that would naturally fly cruise through the card instead of
+// walking along its floor, and at the pause they loop the loop instead of
+// waving. The raindrop falls rather than flies, so it keeps walking.
+const BUDDY_FLIES={bee:true, ladybug:true};
+// headroom a loop needs above the flyer: two radii plus its own height
+const LOOP_HEADROOM=76;
 
 function walkerSvg(model){
   const draw=BUDDY_SPRITES[model]||buddySprout;
-  return `<svg class="walker buddy-${model in BUDDY_SPRITES ? model : 'sprout'}" viewBox="0 0 30 36" aria-hidden="true" focusable="false">${draw()}</svg>`;
+  const name=model in BUDDY_SPRITES ? model : 'sprout';
+  // flyers get an inner group so the hover and the loop can move the whole
+  // sprite without fighting the travel transform on the svg itself
+  // two layers so the bob and the loop never fight over one transform: the
+  // outer one bobs the whole time, the inner one does the loop inside it
+  const inner=BUDDY_FLIES[name]
+    ? `<g class="bob"><g class="flyer">${draw()}</g></g>` : draw();
+  return `<svg class="walker buddy-${name}${BUDDY_FLIES[name]?' flying':''}" viewBox="0 0 30 36" aria-hidden="true" focusable="false">${inner}</svg>`;
 }
 
 function walkOnce(){
@@ -2718,6 +3096,13 @@ function walkOnce(){
   walker.style.setProperty('--walk-dir',
     facesLeft ? (rtl ? 1 : -1) : (rtl ? -1 : 1));
   walker.style.setProperty('--walk-dur',  dur+'ms');
+  if(BUDDY_FLIES[model]){
+    // cruise somewhere in the upper-middle of the card, low enough that the
+    // loop still fits under the top edge on a short card
+    const h=card.clientHeight;
+    const want=Math.round(h*(0.35+Math.random()*0.25));
+    walker.style.bottom=Math.max(10, Math.min(want, h-LOOP_HEADROOM))+'px';
+  }
   // legs stop and the arm waves only while it is standing still
   const pauseAt=setTimeout(()=>walker.classList.add('pausing'), dur*PAUSE_START);
   const resumeAt=setTimeout(()=>walker.classList.remove('pausing'), dur*PAUSE_END);
@@ -2814,11 +3199,14 @@ function renderLightPlan(j){
   if(dot)dot.className='lpdot '+p.status;
   const title=document.getElementById('lptitle');
   if(title){
-    title.textContent = p.status==='ok'
-      ? `On track \u00b7 ${p.full_day.toFixed(1)} mol/day`
+    const when = p.day ? ` (${p.day})` : '';
+    title.textContent = p.status==='pending'
+      ? `Measuring \u00b7 ${p.full_day.toFixed(1)} mol so far`
+      : p.status==='ok'
+      ? `On track \u00b7 ${p.full_day.toFixed(1)} mol${when}`
       : (p.status==='low'
-         ? `Short on light \u00b7 ${p.full_day.toFixed(1)} mol/day`
-         : `More light than needed \u00b7 ${p.full_day.toFixed(1)} mol/day`);
+         ? `Short on light \u00b7 ${p.full_day.toFixed(1)} mol${when}`
+         : `More light than needed \u00b7 ${p.full_day.toFixed(1)} mol${when}`);
   }
   const ul=document.getElementById('lpadvice');
   if(ul)ul.innerHTML=(p.advice||[]).map(a=>`<li>${a}</li>`).join('');
@@ -2853,19 +3241,38 @@ function renderDayProgress(j){
   const pace=document.getElementById('dlipace');
   if(dfill)dfill.style.width=Math.max(0,Math.min(100,(d||0)/16*100)).toFixed(1)+'%';
 
-  // pace marker: where the total should be right now to finish at the 6 mol
-  // floor, so a mid-day number can be read as on track or behind
-  const paceTarget=6*frac;
+  // Follow the schedule. During the photoperiod the fair comparison is not the
+  // whole day's 6-12 target but where the total should be by NOW: that target
+  // scaled by how far through the lit day we are. Judging a noon total of 5.0
+  // against the full-day 6 called it "below target" while it was exactly on
+  // pace. After lights out the full band applies again.
+  const lo=6*frac, hi=12*frac;
+  const during=frac>0&&frac<1;
   const pm=document.getElementById('dlipacemark');
   if(pm){
-    pm.style.left=Math.max(0,Math.min(100,paceTarget/16*100)).toFixed(1)+'%';
-    pm.style.display=(frac>0&&frac<1)?'':'none';
+    pm.style.left=Math.max(0,Math.min(100,lo/16*100)).toFixed(1)+'%';
+    pm.style.width=Math.max(0.6,Math.min(100,(hi-lo)/16*100)).toFixed(1)+'%';
+    pm.style.display=during?'':'none';
+    pm.title=`where today\u2019s total should be by now: ${lo.toFixed(1)}\u2013${hi.toFixed(1)} mol`;
   }
+  // one verdict drives both the words and the fill color, so they can never
+  // disagree: pace while the lights are on, the full-day target after
+  let state='';
+  if(d!=null){
+    state = during ? (d<lo?'low':(d<=hi?'ok':'high'))
+                   : (d<6?'low':(d<=12?'ok':'high'));
+  }
+  if(dfill)dfill.className='dlifill'+(state?' '+state:'');
   if(dval){
     if(d==null){dval.textContent='building today\u2019s total';}
-    else{
-      const band=d<6?'below target':(d<=12?'in target':'above target');
+    else if(during){
+      const where={low:'behind pace',ok:'on pace',high:'ahead of pace'}[state];
+      dval.innerHTML=`<b>${d.toFixed(1)}</b> mol \u00b7 ${where}`;
+      dval.className='dli'+state;
+    }else{
+      const band={low:'below target',ok:'in target',high:'above target'}[state];
       dval.innerHTML=`<b>${d.toFixed(1)}</b> mol \u00b7 ${band}`;
+      dval.className='dli'+state;
     }
   }
   if(pace){
@@ -3006,10 +3413,15 @@ function renderSweep(j){
   const info=document.getElementById('sweepinfo');
   const sw=j.sweep||{};
   const was=sweepRunning; sweepRunning=!!sw.running;
-  if(btn)btn.textContent=sweepRunning?'Cancel':'Measure';
+  if(btn)btn.textContent=sweepRunning?'Cancel':'Calibrate';
   if(sweepRunning&&info)info.textContent=`measuring\u2026 ${sw.pct}%`;
   if(was&&!sweepRunning&&info&&sw.error)info.textContent=sw.error;
-  lastCurve=j.light_curve||null;
+  // with a calibration in use, chart what the dashboard DELIVERS (a straight
+  // line if it worked) rather than the raw fixture, which never changes shape
+  lastCurve = j.light_curve_effective
+    ? {points:j.light_curve_effective, ts:(j.light_curve||{}).ts, calibrated:true,
+       rawPoints:(j.light_curve||{}).points||[]}
+    : (j.light_curve ? {...j.light_curve, stale:!!j.light_linear_stale} : null);
   if(!dragging)                                   // a drag owns the marker
     drawLightCurve(lastCurve, sweepRunning,
                    sweepRunning?null:(j.brightness!=null?j.brightness:null));
@@ -3121,6 +3533,6 @@ function initLight(){
     if(!dragging)setLight(null, +rng.value);
   });
 }
-[initAuth, initSensors, initGridSvg, initReport, initLight, initTrays, initSchedule, initTrayConfig, initCameraBackend, initPlantings, initBackup, initTheme, startWalker].forEach(fn=>{  try{ fn(); }catch(e){ console.error(fn.name+' init failed:', e); }
+[initAuth, initSensors, initGridSvg, initReport, initLight, initTrays, initSchedule, initTrayConfig, initCameraBackend, initPlantings, initBackup, initPlug, initTheme, initStorm, startWalker].forEach(fn=>{  try{ fn(); }catch(e){ console.error(fn.name+' init failed:', e); }
 });
 refresh();

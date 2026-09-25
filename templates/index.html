@@ -63,6 +63,14 @@
       <span class="dlifill" id="dlifill"></span>
       <i class="dlipacemark" id="dlipacemark" title="where today's total should be by now"></i>
     </div>
+    <div class="dliscale" aria-hidden="true">
+      <i style="left:37.5%"></i><i style="left:75%"></i>
+      <span class="s0" style="left:0">0</span>
+      <span style="left:37.5%">6</span>
+      <span class="sband" style="left:56.25%">target</span>
+      <span style="left:75%">12</span>
+      <span class="s16" style="left:100%">16 mol</span>
+    </div>
     <div class="dprow">
       <span id="dlival"></span>
       <span class="dlipace" id="dlipace"></span>
@@ -85,6 +93,7 @@
     <b id="lcval">100%</b>
   </div>
   <span id="lightinfo" role="status"></span>
+  <div id="l2line" class="l2line" style="display:none"></div>
   <div class="lcrow fanrow" id="fanrow" style="display:none">
     <span class="lclabel">Fan</span>
     <button type="button" class="lcbtn fanbtn" data-mode="auto">Auto</button>
@@ -293,6 +302,17 @@
         <div><label>Manual dose cap (s)
           <input name="pump_max_seconds" type="number" min="1" max="120"></label></div>
       </div>
+      <p class="fhint">Fill-to-float saturates the medium, so the settled reading
+        afterwards is a fair wet reference. This only acts on a fill that actually
+        tripped the float, only if the reading passes every check a manual capture
+        must pass, and only within the movement limit below. Anything larger is
+        left for you to look at.</p>
+      <div class="checkrow"><input type="checkbox" name="auto_wet_cal" id="awetcal">
+        <label for="awetcal">Recalibrate the wet anchor after a fill</label></div>
+      <div class="frow">
+        <div><label>Most one auto-recalibration may move it (V)
+          <input name="auto_wet_cal_max_move" type="number" min="0.01" max="1" step="0.01"></label></div>
+      </div>
     </details>
 
     <details class="fgroup">
@@ -411,6 +431,12 @@
 
     <details class="fgroup">
       <summary><h3>Light</h3></summary>
+      <p class="fhint">One fixture at a time. Whichever is selected gets the
+        brightness and the other outputs are driven off, so nothing is left
+        running unnoticed. The two PWM wirings need separate pins, since a
+        MOSFET wants duty high for bright and an optocoupler wants it high for
+        dark: GROWLIGHT_LIGHT_PIN is the panel, GROWLIGHT_DIM_PIN the 0-10V
+        fixture.</p>
       <p class="fhint">The PWM backend drives a dimmable panel on the GPIO. The
         smart plug backend switches an AC fixture on and off over the network:
         there is no dimming, so the fixture's own knob sets intensity and
@@ -418,10 +444,40 @@
       <div class="frow">
         <div><label>Light output
           <select name="light_backend">
-            <option value="pwm">Dimmable panel (GPIO PWM)</option>
+            <option value="pwm">5V panel on a MOSFET (GPIO PWM)</option>
+            <option value="dim">AC fixture on a 0-10V dim line (optocoupler)</option>
             <option value="kasa">Smart plug (on/off)</option>
           </select></label></div>
+      </div>
+      <div class="stormrow" id="stormrow" style="display:none">
+        <button type="button" id="stormbtn">Run a thunderstorm</button>
+        <span id="storminfo" class="fhint">20 seconds of lightning on the dim
+          fixture, then the light goes back to its schedule</span>
+      </div>
+      <div class="frow">
         <div><label>Max brightness (%) <input name="max_bright" type="number" min="1" max="100" required></label></div>
+        <div><label>Minimum brightness (%, where the light first comes on)
+          <input name="light_floor_pct" type="number" min="0" max="50" step="0.1"></label></div>
+        <div><label>Below the fixture's minimum
+          <select name="dim_below_min">
+            <option value="hold">Hold its lowest level</option>
+            <option value="cycle">Cycle on and off to average down</option>
+          </select></label></div>
+      </div>
+      <div class="calbox">
+        <div class="calhead">
+          <button type="button" id="linbtn">Calibrate light response</button>
+          <label class="bsec"><input type="checkbox" name="light_linear_on" id="linon">
+            use calibration</label>
+        </div>
+        <p id="lininfo" class="fhint">Steps the fixture through every percent and
+          measures it, about three minutes, then maps the dashboard onto real output
+          so the response is a straight line: 50% is half the light. Below the
+          driver's minimum the light cycles on and off to average down to the
+          setting. Keep the sensor under the
+          fixture and nothing else moving the light.</p>
+      </div>
+      <div class="frow">
         <div><label>Ramp length (min) <input name="ramp_min" type="number" min="0" max="240" required></label></div>
       </div>
     </details>
@@ -487,6 +543,53 @@
           <div><label>Day length (hours) <input name="duration_hours" type="number" min="0" max="24" step="0.25"></label></div>
           <div><label>Lights off <input name="duration_end" type="time"></label></div>
         </div>
+      </div>
+    </details>
+
+    <details class="fgroup">
+      <summary><h3>Second light</h3></summary>
+      <p class="fhint">Runs on whichever PWM fixture the main light is not
+        using, on its own schedule. The main light keeps all its settings,
+        calibration and planning; this one is a simple window with a ramp at
+        each end. Needs both GROWLIGHT_LIGHT_PIN and GROWLIGHT_DIM_PIN set.</p>
+      <div class="checkrow"><input type="checkbox" name="light2_on" id="l2on">
+        <label for="l2on">Run a second light</label></div>
+      <div class="frow">
+        <div><label>Mode
+          <select name="light2_override">
+            <option value="auto">Auto (schedule)</option>
+            <option value="on">On</option>
+            <option value="off">Off</option>
+          </select></label></div>
+        <div><label>On at <input name="light2_start" type="time"></label></div>
+        <div><label>Off at <input name="light2_end" type="time"></label></div>
+        <div><label>Brightness (%)
+          <input name="light2_bright" type="number" min="0" max="100"></label></div>
+        <div><label>Ramp (minutes)
+          <input name="light2_ramp_min" type="number" min="0" max="120"></label></div>
+      </div>
+    </details>
+
+    <details class="fgroup">
+      <summary><h3>Smart plug</h3></summary>
+      <p class="fhint">Only used by the smart plug light backend. Scan finds
+        plugs on the Pi's own subnet. Newer firmware needs your TP-Link account;
+        older models (HS103 and similar) need nothing at all.</p>
+      <div class="plugrow">
+        <button type="button" id="plugscan">Scan for plugs</button>
+        <button type="button" id="plugtest">Test connection</button>
+        <span id="pluginfo" class="fhint"></span>
+      </div>
+      <div id="pluglist" class="pluglist" hidden></div>
+      <div class="frow">
+        <div><label>Plug address
+          <input name="kasa_host" type="text" inputmode="numeric"
+                 placeholder="10.0.3.177" autocomplete="off"></label></div>
+        <div><label>TP-Link email (newer firmware only)
+          <input name="kasa_user" type="text" autocomplete="off"></label></div>
+        <div><label>TP-Link password
+          <input name="kasa_pass" type="password" autocomplete="new-password"
+                 placeholder="unchanged"></label></div>
       </div>
     </details>
 

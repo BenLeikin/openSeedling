@@ -20,6 +20,7 @@ Usage:
   db.downsample_and_prune()                   # daily housekeeping
 """
 
+import json
 import sqlite3
 import time
 from pathlib import Path
@@ -61,6 +62,11 @@ def init():
             PRIMARY KEY (sensor, ts)
         );
 
+        CREATE TABLE IF NOT EXISTS kv (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            ts    INTEGER NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS events (
             ts     INTEGER NOT NULL,
             type   TEXT    NOT NULL,
@@ -108,6 +114,37 @@ def log_many(pairs, ts=None):
 
 def log_reading(sensor, value, ts=None):
     log_many([(sensor, value)], ts=ts)
+
+
+def kv_set(key, obj):
+    """Store a small piece of runtime state that must survive a restart.
+
+    For state that lives in memory while the app runs but that a restart must
+    not forget: the pump's daily total and last run time are what enforce the
+    daily cap and the auto-water cooldown, so losing them on a restart would
+    quietly loosen both.
+    """
+    c = _c()
+    with c:
+        c.execute("INSERT INTO kv(key, value, ts) VALUES (?,?,?) "
+                  "ON CONFLICT(key) DO UPDATE SET value=excluded.value, "
+                  "ts=excluded.ts",
+                  (str(key), json.dumps(obj), int(time.time())))
+
+
+def kv_get(key, default=None):
+    """Read state stored with kv_set; default if absent or unreadable."""
+    try:
+        row = _c().execute("SELECT value FROM kv WHERE key=?",
+                           (str(key),)).fetchone()
+    except sqlite3.Error:
+        return default
+    if not row:
+        return default
+    try:
+        return json.loads(row[0])
+    except (TypeError, ValueError):
+        return default
 
 
 def log_event(etype, detail="", ts=None):

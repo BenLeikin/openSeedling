@@ -75,6 +75,20 @@ def spike_or_step(values, jump=0.08, confirm=3, window=9):
     outright, while a real change is adopted after `confirm` samples rather
     than being averaged away.
     """
+    # A reading can arrive as None (a failed read logged as a gap) or as
+    # something non-numeric from an older schema. Comparing those against a
+    # float raises, and because the live stream rebuilds the status on every
+    # push, one bad row took the whole stream down repeatedly. Drop what
+    # cannot be compared rather than trusting the caller.
+    clean = []
+    for v in values or []:
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            continue
+        if f == f:                 # drop NaN, which compares false against all
+            clean.append(f)
+    values = clean
     if not values:
         return None, "no data"
     newest = values[0]

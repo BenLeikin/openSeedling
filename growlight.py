@@ -22,6 +22,7 @@ import re
 import secrets
 import subprocess
 import sys
+import queue
 import signal
 import sqlite3
 import statistics
@@ -130,11 +131,17 @@ DEFAULTS = {
                                 #   capture exhausts the Pi Zero 2 W's 512MB RAM, so
                                 #   default to the 2304x1296 binned mode (same view).
                                 #   Raise to 4608x2592 only on a Pi with more memory
+    "live_interval_s": 10,      # how often the quick sensors are re-read for
+                                # the dashboard only, nothing written; 0 off
     "sample_interval_min": 5,   # how often to read + log sensors
     "ntfy_topic": "",           # set to enable push notifications (see notify.py)
     "discord_webhook": "",      # set to enable Discord alerts (see discord_alert.py)
     "password_hash": "",        # set to enable login (see README); blank = open
     "cookie_secure": True,      # True for HTTPS; set False only for local http testing
+    "auto_wet_cal": False,      # re-capture the wet anchor after a fill that
+                                # actually tripped the float, if the reading
+                                # passes every check a manual capture must
+    "auto_wet_cal_max_move": 0.10,   # volts one auto-capture may move it
     "probe_median_depth": 5,    # smoothing depth: how many recent readings the
                                 # spike/step filter looks at. Applies to every
                                 # smoothed sensor, not just probes; 1 disables
@@ -142,7 +149,32 @@ DEFAULTS = {
     "little_buddy": True,       # the character that wanders across a card every
                                 # half minute. Purely decorative; off by choice.
     "buddy_model": "sprout",    # which character walks; "random" picks per outing
-    "light_backend": "pwm",     # "pwm" = dimmable panel on GPIO; "kasa" = smart
+    "kasa_host": "",            # smart plug IP; set from Settings > Smart plug
+    "kasa_user": "",            # TP-Link account, only for KLAP firmware
+    "kasa_pass": "",            # ...redacted from every response, like the
+                                #    dashboard password hash
+    "light2_on": False,         # a second light, independently scheduled, on
+                                # whichever PWM fixture the main light is not
+    "light2_start": "08:00",
+    "light2_end": "20:00",
+    "light2_bright": 50,
+    "light2_ramp_min": 5,
+    "light2_override": "auto",  # "auto" follows its schedule; "on" / "off"
+    "dim_below_min": "hold",    # what to do when asked for less light than
+                                # the driver can hold: "hold" its lowest
+                                # level, or "cycle" on and off to average
+                                # down to the setting. Cycling is exact for
+                                # a daily total but visibly blinks.
+    "light_linear_on": False,   # map dashboard % onto measured light output
+    "light_linear": {},         # the table built by a calibration sweep
+    "light_floor_pct": 0,       # the brightness at which the fixture first
+                                # lights. 1-100% is mapped onto floor..100
+                                # so no part of the scale is dead; 0 is
+                                # still hard off. Measure it with the
+                                # light response sweep.
+    "light_backend": "pwm",     # "pwm" 5V panel on a MOSFET, "dim" an AC
+                                # fixture on a 0-10V line through an
+                                # optocoupler, "kasa" a smart
                                 # plug (on/off only, fixture knob sets intensity)
     "auto_water": False,        # master switch; keep OFF until moisture calibrated
     "moisture_threshold_pct": 30,  # CALIBRATION TODO: "dry" trigger, per-probe
@@ -177,6 +209,23 @@ try:
     GPIO_PIN = int(os.environ.get("GROWLIGHT_LIGHT_PIN", GPIO_PIN))
 except ValueError:
     pass
+
+# Each wiring gets its own pin, because the two cannot share one: a MOSFET
+# driving a 5V panel wants duty high for bright, while an optocoupler on a
+# 0-10V dim line wants duty high for DARK. On one pin they are always opposed
+# and one of them runs backwards.
+#
+# GROWLIGHT_LIGHT_PIN is the MOSFET panel, GROWLIGHT_DIM_PIN the optocoupler.
+# Both must be in the overlay:
+#   dtoverlay=pwm-2chan,pin=18,func=2,pin2=19,func2=2
+GPIO_PIN2 = None
+try:
+    _p2 = (os.environ.get("GROWLIGHT_DIM_PIN")
+           or os.environ.get("GROWLIGHT_LIGHT2_PIN") or "").strip()
+    if _p2:
+        GPIO_PIN2 = int(_p2)
+except ValueError:
+    GPIO_PIN2 = None
 PWM_FREQ      = 1000
 LOOP_SECONDS  = 30
 HTTP_PORT     = 5000
@@ -254,6 +303,55 @@ pump_lock = threading.Lock()   # also serializes the two pumps: one at a time
 # alert state machine (fires on the next sample tick, reminds while unresolved)
 # and is cleared by the next successful fill
 fill_failure = {"msg": ""}
+
+# What a restart must not forget. last_run drives the auto-water cooldown and
+# today_seconds the daily pump cap; both used to live only in memory, so a
+# restart reset them, and a service that restarted repeatedly could water past
+# the cap. "running" is deliberately not kept: after a restart no pump is on.
+PERSIST_PUMP_KEYS = ("last_run", "today_seconds", "day", "last_detail")
+
+
+def save_persistent_state():
+    """Write pump history and the failed-fill notice to the database."""
+    try:
+        data = {t: {k: st.get(k) for k in PERSIST_PUMP_KEYS}
+                for t, st in pump_state.items()}
+        db.kv_set("pump_state", data)
+        db.kv_set("fill_failure", {"msg": fill_failure.get("msg", "")})
+    except Exception as e:
+        print(f"could not save pump state: {e}")
+
+
+def restore_persistent_state():
+    """Load what save_persistent_state wrote, validating as it goes."""
+    try:
+        db.init()
+        data = db.kv_get("pump_state") or {}
+    except Exception as e:
+        print(f"could not restore pump state: {e}")
+        return
+    today = _today_str()
+    for tray, saved in (data.items() if isinstance(data, dict) else []):
+        st = pump_state.get(str(tray))
+        if st is None or not isinstance(saved, dict):
+            continue                  # a tray that is no longer wired
+        try:
+            st["last_run"] = max(0.0, float(saved.get("last_run") or 0))
+            st["today_seconds"] = max(0.0, float(saved.get("today_seconds") or 0))
+        except (TypeError, ValueError):
+            continue
+        st["day"] = str(saved.get("day") or "")
+        st["last_detail"] = str(saved.get("last_detail") or "")
+        # a new day since it was saved: the daily total starts over, but the
+        # last run time still stands for the cooldown
+        if st["day"] != today:
+            st["day"] = today
+            st["today_seconds"] = 0.0
+    ff = db.kv_get("fill_failure")
+    if isinstance(ff, dict):
+        fill_failure["msg"] = str(ff.get("msg") or "")
+    restored = {t: round(st["today_seconds"], 1) for t, st in pump_state.items()}
+    print(f"restored pump state: today {restored}s")
 
 settings = dict(DEFAULTS)
 _file_keys = set()
@@ -366,11 +464,30 @@ GROWTH_SCRIPT = Path(__file__).with_name("growth.py")
 try:
     pwm = HardwarePWM(pwm_channel=(1 if GPIO_PIN == 19 else 0),
                       hz=PWM_FREQ, chip=0)
-    pwm.start(0)
+    # Start DARK, not at duty 0: on inverted wiring duty 0 is full brightness,
+    # so a plain start(0) would blast the light on at boot until the control
+    # loop's first pass caught up.
+    pwm.start(100.0 if (settings.get("light_backend") == "dim"
+                        or settings.get("light_invert")) else 0.0)  # start dark
 except Exception as e:
     sys.exit(f"Hardware PWM unavailable ({e}). Check that "
              f"'dtoverlay=pwm,pin=18,func=2' is in /boot/firmware/config.txt "
              f"and reboot after adding it.")
+
+pwm2 = None
+if GPIO_PIN2 and GPIO_PIN2 != GPIO_PIN:
+    try:
+        pwm2 = HardwarePWM(pwm_channel=(1 if GPIO_PIN2 == 19 else 0),
+                           hz=PWM_FREQ, chip=0)
+        pwm2.start(100.0)          # the dim channel: start pulled down = dark
+        print(f"dim-line fixture on GPIO{GPIO_PIN2}")
+    except Exception as e:
+        # a missing second channel must not stop the controller: the main
+        # light, the pumps and the sensors all still work without it
+        print(f"dim-line fixture on GPIO{GPIO_PIN2} unavailable ({e}); disabled")
+        pwm2 = None
+elif GPIO_PIN2:
+    print("GROWLIGHT_DIM_PIN is the same pin as the panel; ignored")
 
 
 # ---- light output backends ----
@@ -378,9 +495,22 @@ except Exception as e:
 # "kasa" drives a TP-Link smart plug for an AC fixture that has no controllable
 # dimming, so output is on/off and the fixture's own knob sets intensity.
 # Both are kept: switching backends is a settings change, not a redeploy.
-KASA_HOST = (os.environ.get("GROWLIGHT_KASA_HOST") or "").strip()
-KASA_USER = (os.environ.get("GROWLIGHT_KASA_USER") or "").strip()
-KASA_PASS = os.environ.get("GROWLIGHT_KASA_PASS") or ""
+# Plug connection details. The environment still wins, so an existing .env
+# keeps working untouched; otherwise these come from settings, which is what
+# lets a plug be set up from the dashboard instead of over SSH.
+KASA_HOST_ENV = (os.environ.get("GROWLIGHT_KASA_HOST") or "").strip()
+KASA_USER_ENV = (os.environ.get("GROWLIGHT_KASA_USER") or "").strip()
+KASA_PASS_ENV = os.environ.get("GROWLIGHT_KASA_PASS") or ""
+
+
+def kasa_conf(cfg=None):
+    """(host, username, password) for the plug, environment taking precedence."""
+    if cfg is None:
+        with settings_lock:
+            cfg = dict(settings)
+    return (KASA_HOST_ENV or str(cfg.get("kasa_host") or "").strip(),
+            KASA_USER_ENV or str(cfg.get("kasa_user") or "").strip(),
+            KASA_PASS_ENV or str(cfg.get("kasa_pass") or ""))
 KASA_ON_AT = 1.0        # brightness above this percent means "on"
 
 kasa_state = {"on": None,        # last state we believe the plug is in
@@ -410,18 +540,22 @@ def _kasa_run(coro, timeout=12):
     return fut.result(timeout=timeout)
 
 
+async def _kasa_connect(host, user, password):
+    """Connect to one plug. Credentials only when the device needs them:
+    legacy models (HS103 and friends) reject the authenticated path."""
+    from kasa import Device, DeviceConfig, Credentials
+    if user or password:
+        cfg = DeviceConfig(host=host, credentials=Credentials(user, password))
+        return await Device.connect(config=cfg)
+    return await Device.connect(host=host)
+
+
 async def _kasa_device():
     global _kasa_dev
     if _kasa_dev is not None:
         return _kasa_dev
-    from kasa import Device, DeviceConfig, Credentials
-    if KASA_USER or KASA_PASS:
-        cfg = DeviceConfig(host=KASA_HOST,
-                           credentials=Credentials(KASA_USER, KASA_PASS))
-        _kasa_dev = await Device.connect(config=cfg)
-    else:
-        # legacy devices (HS103 and friends) need no credentials at all
-        _kasa_dev = await Device.connect(host=KASA_HOST)
+    host, user, password = kasa_conf()
+    _kasa_dev = await _kasa_connect(host, user, password)
     return _kasa_dev
 
 
@@ -440,9 +574,10 @@ def kasa_apply(on, retries=1):
     fails both attempts and is recorded for the alert rules.
     """
     global _kasa_dev
-    if not KASA_HOST:
+    if not kasa_conf()[0]:
         with _kasa_lock:
-            kasa_state.update(ok=False, error="no GROWLIGHT_KASA_HOST configured")
+            kasa_state.update(ok=False,
+                              error="no smart plug configured (Settings > Smart plug)")
         return False
     last = ""
     for attempt in range(retries + 1):
@@ -475,37 +610,446 @@ def release_backend(old):
         if old == "kasa":
             kasa_apply(False)
         else:
-            pwm.change_duty_cycle(0)
+            # The duty that means dark depends on the backend being ABANDONED,
+            # not the new one: settings have already been updated by the time
+            # this runs, so asking pwm_duty_for would use the wrong wiring and
+            # leave the old fixture at full brightness.
+            pwm.change_duty_cycle(100.0 if old == "dim" else 0.0)
         print(f"light backend released: {old} set to off")
     except Exception as e:
         print(f"could not release the {old} light backend: {e}")
 
 
 def light_backend(cfg=None):
+    """Which wiring drives the light: "pwm", "dim" or "kasa".
+
+    "pwm"  a MOSFET driving a 5V panel: duty goes straight through
+    "dim"  an optocoupler sinking an AC driver's 0-10V dim line: inverted,
+           and it dims all the way to dark, so no separate switch is needed
+    "kasa" a smart plug: on/off only
+
+    These were once "pwm" plus a light_invert checkbox, which allowed the
+    nonsense combination of invert on a backend that cannot invert. A config
+    still carrying light_invert is read as "dim" so nothing breaks on upgrade.
+    """
     if cfg is None:
         with settings_lock:
             cfg = dict(settings)
-    return "kasa" if cfg.get("light_backend") == "kasa" else "pwm"
+    val = cfg.get("light_backend")
+    if val == "kasa":
+        return "kasa"
+    if val == "dim" or cfg.get("light_invert"):
+        return "dim"
+    return "pwm"
 
 
 def set_brightness(percent):
-    """Apply a brightness percent through whichever backend is configured.
+    """Apply a dashboard brightness through the fixture's calibration.
 
-    On the kasa backend there is no dimming: anything above KASA_ON_AT turns the
-    plug on, at or below turns it off. The percent is still carried through the
-    rest of the app unchanged so schedules, ramps and the DLI code need no
-    special cases; the plug simply cannot express the middle of a ramp.
+    The dashboard speaks in intended light output. The hardware speaks in
+    duty cycle, and the two are not the same shape: a fixture has a cutoff at
+    the bottom, usually saturates well before the top, and bends in between.
+    hw_percent() maps one onto the other; this just applies it.
     """
     percent = max(0.0, min(100.0, percent))
-    if light_backend() == "kasa":
-        want = percent > KASA_ON_AT
-        with _kasa_lock:
-            believed = kasa_state["on"]
-        if believed is want and kasa_state["ok"]:
-            return                      # already there; don't poll the plug
-        kasa_apply(want)
-        return
-    pwm.change_duty_cycle(percent)
+    frac = _below_minimum(percent)
+    if frac is None:
+        _dither_stop()
+        set_brightness_raw(hw_percent(percent))
+    else:
+        _dither_set(frac, hw_percent(percent))
+
+
+# ---- reaching below the driver's minimum ------------------------------------
+# The dim-line driver holds about 20% of full and then cuts out, so nothing
+# between off and that minimum exists as a steady level. To follow the straight
+# response line down to zero anyway, the light cycles between off and the
+# minimum with the on-time set so the AVERAGE lands on the line. Plants
+# integrate light over far longer than this period, so for growth it is the
+# same as a steady dim level; the daily light integral is identical.
+DITHER_PERIOD_S = 20.0
+_dither = {"frac": 0.0, "raw": 0.0, "on": False}
+_dither_lock = threading.Lock()
+_dither_wake = threading.Event()
+
+
+def _below_minimum(percent, cfg=None):
+    """On-fraction for a target below the fixture's minimum, else None.
+
+    None also when cycling is switched off, which is the default: the light
+    then simply holds the lowest level it can, and the bottom of a ramp is a
+    short steady dim instead of a fixture flicking on and off.
+    """
+    if cfg is None:
+        with settings_lock:
+            cfg = dict(settings)
+    if percent <= 0 or not linear_table(cfg):
+        return None
+    if cfg.get("dim_below_min", "hold") != "cycle":
+        return None
+    lin = cfg.get("light_linear") or {}
+    min_f = float(lin.get("min_output_pct") or 0) / 100.0
+    if min_f <= 0 or percent / 100.0 >= min_f:
+        return None
+    return (percent / 100.0) / min_f
+
+
+def _dither_set(frac, raw):
+    with _dither_lock:
+        _dither.update(frac=max(0.0, min(1.0, frac)), raw=raw, on=True)
+    _dither_wake.set()
+
+
+def _dither_stop():
+    with _dither_lock:
+        was = _dither["on"]
+        _dither.update(on=False, frac=0.0)
+    if was:
+        _dither_wake.set()
+
+
+def _dither_loop():
+    """Cycle between off and the minimum while a sub-minimum target is set."""
+    while True:
+        with _dither_lock:
+            on, frac, raw = _dither["on"], _dither["frac"], _dither["raw"]
+        if not on:
+            _dither_wake.wait()
+            _dither_wake.clear()
+            continue
+        lit = DITHER_PERIOD_S * frac
+        try:
+            if lit > 0:
+                set_brightness_raw(raw)
+                if _dither_wake.wait(lit):
+                    _dither_wake.clear(); continue   # target changed; restart
+            set_brightness_raw(0)
+            if _dither_wake.wait(DITHER_PERIOD_S - lit):
+                _dither_wake.clear()
+        except Exception as e:
+            print(f"dimming below the minimum failed: {e}")
+            time.sleep(1)
+
+
+threading.Thread(target=_dither_loop, daemon=True, name="dither").start()
+
+
+def set_brightness_raw(percent):
+    """Drive the hardware directly, with no calibration applied.
+
+    Used by the response sweep, which must measure the fixture as it really
+    is. Building a calibration from a sweep that was itself calibrated would
+    correct the correction.
+    """
+    percent = max(0.0, min(100.0, percent))
+    with settings_lock:
+        cfg = dict(settings)
+    mode = light_backend(cfg)
+
+    # The second light, if one is running, keeps its own level on its own
+    # fixture. Every OTHER output is driven OFF, not merely skipped: an output
+    # left alone holds whatever it had when the selection changed, which on a
+    # grow light means a fixture quietly running with nothing pointing at it.
+    # A sweep measures the main fixture alone, so the second one goes dark
+    # while it runs rather than adding its light to the calibration.
+    l2 = light2_fixture(cfg)
+    l2_level = (0.0 if (l2 is None or sweep_state["running"])
+                else float(light2_state["level"]))
+
+    if mode == "dim" and pwm2 is None:
+        # Only one channel configured: the dim fixture is on the main pin.
+        pwm.change_duty_cycle(100.0 - percent)
+    else:
+        panel = percent if mode == "pwm" else (l2_level if l2 == "pwm" else 0.0)
+        pwm.change_duty_cycle(panel)                              # MOSFET panel
+        if pwm2 is not None:
+            dim = percent if mode == "dim" else (l2_level if l2 == "dim" else 0.0)
+            # the dim line: 0% duty is full brightness, so dark is 100
+            pwm2.change_duty_cycle(100.0 - dim)
+    if KASA_HOST_ENV or cfg.get("kasa_host"):
+        set_plug(percent if mode == "kasa" else 0)
+
+
+# ---- the second light -------------------------------------------------------
+# Independently scheduled, on whichever PWM fixture the main light is not
+# using. It deliberately has fewer features than the main light: no
+# calibration, no DLI plan, no lightning. It runs a simple window with a ramp
+# at each end, or a manual on/off.
+light2_state = {"level": 0.0, "why": "off"}
+
+
+
+def light2_fixture(cfg=None):
+    """"pwm" or "dim" for the second light, or None when it cannot run.
+
+    It takes the fixture the main light is NOT on, and needs both hardware
+    PWM channels: with one channel the pin is already the main light's.
+    """
+    if cfg is None:
+        with settings_lock:
+            cfg = dict(settings)
+    if not cfg.get("light2_on") or pwm2 is None:
+        return None
+    main = light_backend(cfg)
+    return "pwm" if main != "pwm" else "dim"
+
+
+def light2_level(cfg, now):
+    """Brightness for the second light at `now`, and a short reason."""
+    ov = cfg.get("light2_override", "auto")
+    top = max(0.0, min(100.0, float(cfg.get("light2_bright", 50))))
+    if ov == "on":
+        return top, "manual on"
+    if ov == "off":
+        return 0.0, "manual off"
+    tz = now.tzinfo
+    start = _clock(now.date(), tz, cfg.get("light2_start"), "08:00")
+    end = _clock(now.date(), tz, cfg.get("light2_end"), "20:00")
+    if end <= start:
+        # a window across midnight: yesterday's start or today's end
+        if now < end:
+            start -= timedelta(days=1)
+        else:
+            end += timedelta(days=1)
+    if not (start <= now < end):
+        return 0.0, "outside its schedule"
+    ramp = max(0.0, float(cfg.get("light2_ramp_min", 5))) * 60
+    span = (end - start).total_seconds()
+    ramp = min(ramp, span / 2)
+    since = (now - start).total_seconds()
+    until = (end - now).total_seconds()
+    if ramp > 0 and since < ramp:
+        return top * since / ramp, "ramping up"
+    if ramp > 0 and until < ramp:
+        return top * until / ramp, "ramping down"
+    return top, "on schedule"
+
+
+def hw_percent(percent, cfg=None):
+    """Dashboard brightness -> the raw hardware percent that produces it.
+
+    With a linear calibration on file, 50% means half of the fixture's real
+    maximum output, the cutoff and the saturation both disappear from the
+    scale, and 0% is still hard off. Without one, the simpler floor applies.
+    """
+    if cfg is None:
+        with settings_lock:
+            cfg = dict(settings)
+    percent = max(0.0, min(100.0, percent))
+    if percent <= 0:
+        return 0.0
+    table = linear_table(cfg)
+    if table:
+        i = int(percent)
+        if i >= 100:
+            return float(table[100])
+        frac = percent - i
+        return float(table[i] + (table[i + 1] - table[i]) * frac)
+    return apply_floor(percent, cfg)
+
+
+def dashboard_lux(pct, cfg, pts):
+    """Average lux a dashboard brightness delivers, through the calibration.
+
+    Above the driver's minimum it is the raw curve at the calibrated duty.
+    Below it the light is time-averaged, so the delivered light is the on
+    fraction of the minimum level.
+    """
+    if pct <= 0:
+        return _curve_lux(pts, 0)
+    frac = _below_minimum(pct, cfg)
+    raw = hw_percent(pct, cfg)
+    if frac is None:
+        # holding: below the minimum the fixture cannot go lower, so the
+        # response flattens there rather than following the line down
+        return _curve_lux(pts, raw)
+    dark = _curve_lux(pts, 0)
+    return dark + frac * (_curve_lux(pts, raw) - dark)
+
+
+def effective_curve(cfg):
+    """Dashboard brightness -> the lux it actually produces, 0..100.
+
+    The stored sweep is the fixture's RAW response and will always be the
+    shape the hardware makes. What the dashboard delivers is that response
+    seen through the calibration, and with one in use it is a straight line:
+    this is the curve that shows whether the calibration worked. Computed here
+    so the chart uses exactly the mapping the light uses, rather than a copy
+    of it in JavaScript that could drift.
+    """
+    pts = sorted((cfg.get("light_curve") or {}).get("points") or [])
+    if not pts or not linear_table(cfg):
+        return None
+    return [[p, round(dashboard_lux(p, cfg, pts), 1)] for p in range(0, 101)]
+
+
+# Which mapping a stored calibration table was built for. A table is just 101
+# raw percentages; nothing in the numbers says what they mean. When the
+# mapping changed from "spread over the usable range" to "fraction of full
+# output", an old table read under the new meaning put 30% at 45% of full,
+# silently. Every table is now stamped, and one built for a different
+# mapping is refused rather than misread.
+LINEAR_MAPPING = 2
+
+
+def linear_table(cfg):
+    """The calibration table if it is on, current and well formed, else None."""
+    if not cfg.get("light_linear_on"):
+        return None
+    lin = cfg.get("light_linear") or {}
+    table = lin.get("table")
+    if not table or len(table) != 101:
+        return None
+    if lin.get("mapping") != LINEAR_MAPPING:
+        return None
+    return table
+
+
+def build_linear_table(points):
+    """From a raw sweep, the raw percent needed for each 0-100% of output.
+
+    points: [[raw_pct, lux], ...]. Output is normalised to 0..1 between the
+    darkest and brightest readings, forced monotonic (sensor noise can make a
+    brighter step read a little lower, which would make the inverse jump
+    backwards), then inverted: for each target fraction, the smallest raw
+    level that reaches it, interpolated between measured steps.
+
+    Returns (table, info) where table[i] is the raw percent for i% of full
+    output, pinned to the lowest lit level below the driver's minimum.
+    """
+    pts = sorted((float(p), float(l)) for p, l in points)
+    if len(pts) < 5:
+        raise ValueError("need at least 5 sweep points")
+    lo = pts[0][1]
+    hi = max(l for _, l in pts)
+    if hi - lo < 50:
+        raise ValueError("the light barely changed across the sweep; is the "
+                         "sensor under the fixture and the right backend set?")
+    # normalise and force monotonic
+    norm, run = [], 0.0
+    for p, l in pts:
+        f = max(0.0, (l - lo) / (hi - lo))
+        run = max(run, f)
+        norm.append((p, run))
+
+    # Many LED drivers cannot dim to zero: they hold a minimum level and then
+    # cut out entirely below it. Measured here the light sits near 20% of full
+    # and drops straight to off. Interpolating across that cliff would place
+    # small targets INSIDE the dark zone, so 1-2% would be off and the light
+    # would then snap on. Anything below the lowest lit output is pinned to
+    # the first lit sweep point instead: on always means on.
+    first_lit = next((i for i, (_, f) in enumerate(norm) if f > 0.01), None)
+    min_f = norm[first_lit][1] if first_lit is not None else 0.0
+    min_raw = norm[first_lit][0] if first_lit is not None else 0.0
+
+    def raw_for(target):
+        if target <= 0:
+            return 0.0
+        if target <= min_f:
+            return min_raw          # the lowest level that is actually lit
+        for k in range(max(1, first_lit or 1), len(norm)):
+            p1, f1 = norm[k]
+            if f1 >= target:
+                p0, f0 = norm[k - 1]
+                if f1 == f0:
+                    return p1
+                return p0 + (p1 - p0) * (target - f0) / (f1 - f0)
+        return norm[-1][0]
+
+    # The dashboard spans the fixture's USABLE range: 1% is the dimmest level
+    # it can hold and 100% is full. Mapping to a fraction of maximum instead
+    # left 1-20% all producing the same minimum, because the driver cannot go
+    # lower than that without cutting out. Every step now changes the light.
+    # The DLI forecast converts through this same table, so it stays correct
+    # even though 50% on the dashboard is no longer half the photons.
+    # Dashboard percent is a fraction of full output, so the response follows
+    # the straight line from zero to peak. Below the driver's minimum the table
+    # holds the lowest lit level, and set_brightness reaches the line by
+    # cycling between off and that level so the average lands on it.
+    table = [0.0] + [round(raw_for(i / 100.0), 3) for i in range(1, 101)]
+    # where light first appears, and where it stops increasing
+    cutoff = next((p for p, f in norm if f > 0.01), pts[-1][0])
+    sat = next((p for p, f in norm if f >= 0.99), pts[-1][0])
+    info = {"mapping": LINEAR_MAPPING,
+            "cutoff_raw": round(cutoff, 1), "saturation_raw": round(sat, 1),
+            "peak_lux": round(hi, 0), "dark_lux": round(lo, 1),
+            # the dimmest the fixture goes before cutting out, as a share of
+            # full: below this the dashboard cannot ask for less light
+            "min_output_pct": round(min_f * 100, 1),
+            "points": len(pts)}
+    return table, info
+
+
+def set_plug(percent):
+    """Switch the smart plug on or off to match a brightness."""
+    want = percent > KASA_ON_AT
+    with _kasa_lock:
+        believed = kasa_state["on"]
+    if believed is want and kasa_state["ok"]:
+        return                          # already there; don't poll the plug
+    kasa_apply(want)
+
+
+def _stop_pwm(channel, mode):
+    """Release a PWM channel, unless releasing it would turn the light ON.
+
+    A MOSFET gate has a pulldown, so a released pin means off and stopping is
+    right. An optocoupler sinking a dim line is the opposite: released means
+    not conducting, which means full brightness.
+    """
+    try:
+        if mode == "dim":
+            channel.change_duty_cycle(100.0)    # keep it pulled down
+        else:
+            channel.stop()
+    except Exception as e:
+        print(f"could not release a PWM channel cleanly: {e}")
+
+
+def apply_floor(percent, cfg=None):
+    """Map the dashboard's 1-100% onto the range the fixture actually uses.
+
+    A fixture has a cutoff: below some level the driver produces no light at
+    all. Measured on the 0-10V fixture here, nothing happens until about 4%.
+    Left alone, the bottom of every ramp is dead time and the DLI code plans
+    light that never arrives.
+
+    With a floor set, 0% is still hard off (below the cutoff on purpose) and
+    1-100% is compressed into floor..100, so the first percent above zero is
+    the first percent that lights.
+    """
+    if cfg is None:
+        with settings_lock:
+            cfg = dict(settings)
+    try:
+        floor = float(cfg.get("light_floor_pct") or 0)
+    except (TypeError, ValueError):
+        floor = 0.0
+    floor = max(0.0, min(50.0, floor))
+    if floor <= 0 or percent <= 0:
+        return percent
+    return floor + percent * (100.0 - floor) / 100.0
+
+
+def pwm_duty_for(percent, cfg=None):
+    """Convert a brightness percent into the duty cycle the wiring needs.
+
+    A MOSFET driving a 5V panel takes duty straight through: more duty, more
+    light. An optocoupler on an AC driver's 0-10V dim input works the other
+    way round. The driver supplies its own ~10.8V and the optocoupler SINKS
+    it, so the light is at full when the optocoupler is off and dark when it
+    conducts hardest: 0% duty is full brightness, 100% duty is dark.
+
+    The "dim" backend means the dashboard's percentages match reality.
+    Without the flip, every percentage in the app -- schedules, ramps, the
+    response sweep, the DLI forecast -- would be backwards.
+    """
+    if cfg is None:
+        with settings_lock:
+            cfg = dict(settings)
+    if light_backend(cfg) != "dim":
+        return percent
+    return 100.0 - percent
 
 
 def _clock(day, tz, hhmm, fallback="06:00"):
@@ -555,22 +1099,52 @@ def sun_window(cfg, day, tz):
     return s["sunrise"], s["sunset"], on_time, off_time
 
 
+def ramp_floor(cfg=None):
+    """The dimmest setting that actually changes the light.
+
+    A driver that cannot hold less than a fifth of full output makes the
+    bottom of a ramp pointless: the fixture sits at that minimum while the
+    schedule counts down through settings it cannot produce, then cuts out.
+    Ramping between this floor and max instead spends the whole ramp where
+    the light really moves, and ends with one step to off.
+    """
+    if cfg is None:
+        with settings_lock:
+            cfg = dict(settings)
+    if linear_table(cfg) and cfg.get("dim_below_min", "hold") != "cycle":
+        try:
+            return max(0.0, float((cfg.get("light_linear") or {})
+                                  .get("min_output_pct") or 0))
+        except (TypeError, ValueError):
+            return 0.0
+    try:
+        return max(0.0, float(cfg.get("light_floor_pct") or 0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def brightness_for(cfg, now, on_time, off_time):
     if now <= on_time or now >= off_time:
         return 0.0
-    mx = cfg["max_bright"]
+    mx = float(cfg["max_bright"])
+    lo = min(ramp_floor(cfg), mx)          # never above the ceiling itself
     ramp = timedelta(minutes=cfg["ramp_min"])
     full_start, full_end = on_time + ramp, off_time - ramp
+
+    def at(frac):
+        """frac 0..1 through a ramp, as brightness from the floor to max."""
+        return lo + (mx - lo) * max(0.0, min(1.0, frac))
+
     if full_start >= full_end:  # very short window: triangular peak
         mid = on_time + (off_time - on_time) / 2
         if now <= mid:
-            return mx * (now - on_time) / (mid - on_time)
-        return mx * (off_time - now) / (off_time - mid)
+            return at((now - on_time) / (mid - on_time))
+        return at((off_time - now) / (off_time - mid))
     if now < full_start:
-        return mx * (now - on_time) / ramp
+        return at((now - on_time) / ramp)
     if now > full_end:
-        return mx * (off_time - now) / ramp
-    return float(mx)
+        return at((off_time - now) / ramp)
+    return mx
 
 
 def parse_roi(s):
@@ -706,10 +1280,12 @@ def run_pump(tray, seconds, reason="manual", force=False):
             st["last_run"] = time.time()
             st["today_seconds"] += elapsed
             st["last_detail"] = f"{reason} {elapsed:.1f}s"
+    save_persistent_state()
     try:
         db.log_event("pump", f"tray {tray}: {reason} {elapsed:.1f}s")
     except Exception:
         pass
+    publish("pump")
     return True, f"ran {elapsed:.1f}s"
 
 
@@ -777,9 +1353,11 @@ def run_pump_until_full(tray, reason="fill", force=False):
         db.log_event("pump", detail)
     except Exception:
         pass
+    publish("pump")
     if tripped:
         fill_failure["msg"] = ""             # a good fill resolves the alert
-        schedule_postfill(tray)              # judge the probe once water wicks
+        save_persistent_state()
+        schedule_postfill(tray, tripped=True)   # judge the probe once water wicks
         return True, f"filled in {elapsed:.1f}s"
     fill_failure["msg"] = (f"Tray {tray} fill ran to the {elapsed:.1f}s cap "
                            "without the float tripping. Likely causes: source "
@@ -793,6 +1371,7 @@ def run_pump_until_full(tray, reason="fill", force=False):
                 save_config()
             except Exception as e:
                 print(f"auto_water disable not persisted ({e})")
+    save_persistent_state()
     return False, f"ran to {elapsed:.1f}s cap without float trip (source empty?)"
 
 
@@ -917,6 +1496,7 @@ def probe_volts_filtered(tray, snap=None):
     except Exception as e:
         print(f"probe filter fell back to raw ({e})")
         return raw, ts
+    vals = [v for v in vals if isinstance(v, (int, float))]
     if len(vals) < 3:
         return raw, ts          # not enough history to filter meaningfully
     val, verdict = quality.spike_or_step(vals, jump=PROBE_JUMP_V,
@@ -1391,7 +1971,7 @@ def auto_water_blockers(cfg=None):
 POSTFILL_DELAY_S = 20 * 60     # let water wick to the probe before judging
 
 
-def schedule_postfill(tray):
+def schedule_postfill(tray, tripped=True):
     """After a successful fill, judge the probe against its wet anchor later.
 
     Water takes time to wick from the tray to the probe, so the check is
@@ -1400,10 +1980,11 @@ def schedule_postfill(tray):
     """
     with settings_lock:
         cal = ((settings.get("probe_cal") or {}).get(str(tray)) or {}).copy()
-    if cal.get("wet") is None:
-        return                      # nothing to compare against
+    # Scheduled even with no wet anchor yet: there is no verdict to give in
+    # that case, but it is exactly when an automatic first capture is most
+    # useful, and skipping it here would silently rule that out.
     _postfill_due[str(tray)] = {"due": time.time() + POSTFILL_DELAY_S,
-                                "cal": cal}
+                                "cal": cal, "tripped": bool(tripped)}
 
 
 def check_postfill(readings=None):
@@ -1416,14 +1997,71 @@ def check_postfill(readings=None):
         _postfill_due.pop(tray, None)
         volts, _ = probe_volts_filtered(tray)
         ok, msg = quality.postfill_verdict(volts, pending["cal"])
-        if ok is None:
-            continue
-        postfill_result[tray] = {"ok": bool(ok), "msg": msg, "ts": time.time()}
-        print(f"post-fill check tray {tray}: {msg}")
-        try:
-            db.log_event("probe", f"tray {tray} post-fill: {msg}")
-        except Exception:
-            pass
+        # ok is None when there is no anchor to judge against; that is not a
+        # reason to skip the recapture below, which is what would create one
+        postfill_result[tray] = {"ok": None if ok is None else bool(ok),
+                                 "msg": msg, "ts": time.time()}
+        if ok is not None:
+            print(f"post-fill check tray {tray}: {msg}")
+            try:
+                db.log_event("probe", f"tray {tray} post-fill: {msg}")
+            except Exception:
+                pass
+        note = auto_wet_calibrate(tray, pending)
+        if note:
+            postfill_result[tray]["cal"] = note
+
+
+def auto_wet_calibrate(tray, pending):
+    """Re-capture the wet anchor after a fill, when the fill deserves it.
+
+    Fill-to-float saturates the medium, so the settled reading afterwards is a
+    legitimate wet reference. The risk is not the soil, it is everything else:
+    a fill that tripped the float early, a probe that has shifted in its hole,
+    a partial fill. A stale anchor announces itself (pegged readings, the recal
+    badge, this very check); an anchor silently rewritten to a wrong value
+    looks perfectly healthy, which is why this refuses more than it accepts:
+
+      - only after a fill that actually tripped the float, never one that ran
+        to the time cap
+      - only if the reading passes every check a manual capture must pass
+      - only if it moves the anchor less than auto_wet_cal_max_move; a larger
+        jump is real news and wants a human to look at it
+
+    Returns a short note for the dashboard, or None when it did nothing.
+    """
+    with settings_lock:
+        cfg = dict(settings)
+    if not cfg.get("auto_wet_cal"):
+        return None
+    if not pending.get("tripped"):
+        return "not recalibrated: that fill did not trip the float"
+
+    live, spread, drift = sensors.probe_settle(tray, seconds=PROBE_SETTLE_S)
+    if live is None:
+        return None
+    problems, _notes = probe_cal_check(tray, "wet", live, drift, spread)
+    if problems:
+        return f"not recalibrated: {problems[0]}"
+
+    old = ((cfg.get("probe_cal") or {}).get(tray) or {}).get("wet")
+    limit = float(cfg.get("auto_wet_cal_max_move", 0.10))
+    if old is not None and abs(live - old) > limit:
+        return (f"not recalibrated: the wet anchor would move "
+                f"{abs(live - old):.3f}V, more than the {limit:.2f}V limit. "
+                "Capture it by hand if that is real")
+
+    with settings_lock:
+        settings.setdefault("probe_cal", {}).setdefault(tray, {})["wet"] = live
+        save_config()
+    moved = "" if old is None else f" (was {old:.3f}V)"
+    msg = f"wet anchor recalibrated to {live:.3f}V{moved}"
+    print(f"tray {tray}: {msg}")
+    try:
+        db.log_event("probe", f"tray {tray} auto {msg}")
+    except Exception:
+        pass
+    return msg
 
 
 def watering_loop():
@@ -1496,6 +2134,7 @@ def sample_loop():
                 db.log_many(list(readings.items()))
                 run_alerts(readings)
                 check_postfill(readings)
+                publish("sample")
         except Exception as e:
             print(f"sample_loop error: {e}")
         # housekeeping once a day: roll raw -> hourly, prune old raw
@@ -1532,6 +2171,7 @@ def set_fan(speed, reason):
         fan_state.update(on=speed > 0, reason=reason, speed=round(speed))
     if changed:
         print(f"fan {round(speed)}% ({reason})")
+        publish("fan")
 
 
 def fan_should_run(cfg, now, on_time, off_time):
@@ -1716,6 +2356,8 @@ def run_alerts(readings):
         snap["_reservoir"] = reservoir_state()
         # a plug that stops responding means the light is stuck wherever it
         # was; the sustain window absorbs a wifi blip, repeated failures do not
+        # the plug is worth alerting on whether it is the main light or the
+        # third fixture: either way a dead plug means a light stuck on or off
         snap["_plug_failed"] = (kasa_state["error"]
                                 if (light_backend(cfg) == "kasa"
                                     and kasa_state["fails"] >= 2) else "")
@@ -1752,6 +2394,102 @@ SCHED_KEYS = ("latitude", "longitude", "timezone", "schedule_mode",
               "sunrise_offset_min", "sunset_offset_min")
 
 
+# ---- lightning (an easter egg) -------------------------------------------
+# Only offered on the optocoupler wiring, where the light is an AC fixture on
+# a 0-10V dim line: that is the setup with enough range and speed to look like
+# weather. The 5V panel cannot do it convincingly and the smart plug has no
+# dimming at all.
+LIGHTNING_MAX_S = 90
+lightning_state = {"running": False, "until": 0.0, "style": ""}
+_lightning_lock = threading.Lock()
+# Set to ask the storm to end. An Event rather than a flag so the gap between
+# strikes can be interrupted: those gaps run to several seconds, and a stop
+# that waits them out does not feel like a stop.
+_lightning_stop = threading.Event()
+
+
+def lightning_available(cfg=None):
+    if cfg is None:
+        with settings_lock:
+            cfg = dict(settings)
+    return light_backend(cfg) == "dim"
+
+
+def _flash_prep():
+    _dither_stop()
+
+
+def _flash(level_pct):
+    """Set a raw brightness without touching state: the storm is transient and
+    must not be mistaken for a schedule change by anything watching.
+
+    Goes to whichever channel carries the dim fixture, which is its own pin
+    when one is configured and the main pin otherwise.
+    """
+    ch = pwm2 if pwm2 is not None else pwm
+    ch.change_duty_cycle(100.0 - max(0.0, min(100.0, level_pct)))
+
+
+def _storm(seconds, style):
+    """Run the effect, then put the light back exactly where it was.
+
+    The control loop is told to stand off while this runs; without that it
+    would overwrite each flash on its next pass and the effect would stutter
+    to a halt.
+    """
+    import random
+    end = time.time() + seconds
+    with state_lock:
+        restore = float(state.get("brightness") or 0)
+    _dither_stop()           # the storm owns the light for now
+    try:
+        while time.time() < end and not _lightning_stop.is_set():
+            kind = style
+            if style == "storm":
+                r = random.random()
+                kind = "sheet" if r < .5 else "strike" if r < .9 else "flicker"
+            if kind == "sheet":              # cloud to cloud: no sharp edges
+                top = random.uniform(45, 80)
+                for i in range(14):
+                    _flash(top * (i + 1) / 14); time.sleep(0.012)
+                time.sleep(random.uniform(.05, .12))
+                for i in range(28):
+                    _flash(top * (1 - (i + 1) / 28)); time.sleep(0.018)
+            elif kind == "flicker":          # storm overhead
+                for _ in range(random.randint(6, 16)):
+                    _flash(random.uniform(40, 100))
+                    time.sleep(random.uniform(.05, .11))
+                    _flash(0); time.sleep(random.uniform(.03, .12))
+            else:                            # a stroke: leader, return, restrikes
+                if random.random() < .6:
+                    _flash(random.uniform(10, 25)); time.sleep(.06)
+                    _flash(0); time.sleep(random.uniform(.02, .06))
+                _flash(100); time.sleep(random.uniform(.06, .13))
+                for _ in range(random.randint(1, 4)):
+                    _flash(0); time.sleep(random.uniform(.03, .09))
+                    _flash(random.uniform(55, 95))
+                    time.sleep(random.uniform(.05, .10))
+                _flash(15); time.sleep(random.uniform(.05, .15))
+            _flash(0)
+            # never sleep past the end: a long gap would otherwise hold the
+            # light for seconds after the storm was meant to stop
+            gap = random.expovariate(1 / 3.0)
+            if _lightning_stop.wait(max(0.0, min(gap, end - time.time()))):
+                break
+    except Exception as e:
+        print(f"lightning stopped: {e}")
+    finally:
+        with _lightning_lock:
+            lightning_state.update(running=False, until=0.0, style="")
+        try:
+            set_brightness(restore)  # back where the schedule had it, dithering
+                                     # included if that is what it needs
+        except Exception:
+            pass
+        wake.set()                  # and let the loop take over again
+        db.log_event("light", "lightning finished")
+
+
 def control_loop():
     seen = None
     sunrise = sunset = on_time = off_time = None
@@ -1766,14 +2504,25 @@ def control_loop():
             sunrise, sunset, on_time, off_time = sun_window(cfg, now.date(), tz)
             print(f"{now.date()}: on {on_time:%H:%M}, off {off_time:%H:%M} "
                   f"({cfg['latitude']}, {cfg['longitude']}, {cfg['timezone']})")
+        # the second light first, so the write below carries its new level
+        if light2_fixture(cfg):
+            lv, why = light2_level(cfg, now)
+            light2_state.update(level=round(lv, 2), why=why)
+        else:
+            light2_state.update(level=0.0,
+                                why="off" if not cfg.get("light2_on")
+                                else "needs both PWM channels")
         b = brightness_for(cfg, now, on_time, off_time)
         ov = cfg.get("light_override", "auto")
         if ov == "on":
             b = max(0, min(100, int(cfg.get("manual_bright", cfg["max_bright"]))))
         elif ov == "off":
             b = 0
-        if not capturing and not sweep_state["running"]:
-            set_brightness(b)      # a sweep owns the light while it runs
+        if (not capturing and not sweep_state["running"]
+                and not lightning_state["running"]):
+            # a capture, a sweep or a storm each own the light while running;
+            # writing the scheduled level here would fight them
+            set_brightness(b)
 
         mode = cfg.get("fan_mode", "auto")
         if mode == "on":
@@ -1784,8 +2533,19 @@ def control_loop():
             want, why = fan_should_run(cfg, now, on_time, off_time)
             set_fan(cfg.get("fan_auto_speed", 70) if want else 0, why)
         with state_lock:
+            l2_now = light2_state["level"]
+            changed = (round(state.get("light2_level", -1), 1) != round(l2_now, 1)
+                       or round(state.get("brightness") or -1, 1) != round(b, 1)
+                       or state.get("override") != ov
+                       or state.get("on") != on_time)
             state.update(brightness=b, on=on_time, off=off_time,
-                         sunrise=sunrise, sunset=sunset, override=ov)
+                         sunrise=sunrise, sunset=sunset, override=ov,
+                         light2_level=l2_now)
+        # only when something moved: this loop runs every 30 seconds and during
+        # a ramp every pass changes brightness, but a steady day should not
+        # push an identical status to every open browser twice a minute
+        if changed:
+            publish("light")
         wake.wait(timeout=LOOP_SECONDS)
         wake.clear()
 
@@ -2203,26 +2963,164 @@ def require_auth(fn):
     return wrapper
 
 
+PROBE_SETTLE_S   = 15.0   # how long to watch before accepting an anchor
+PROBE_NOISE_MAX  = 0.05   # volts of spread; above this the run is too noisy
+PROBE_DRIFT_MAX  = 0.015  # volts of movement across the window; still changing
+PROBE_SPAN_MIN   = 0.15   # volts between wet and dry for a usable scale
+
+
+def probe_cal_check(tray, point, volts, drift, spread):
+    """Decide whether a proposed anchor is believable -> (problems, notes).
+
+    Anchors used to be stored whatever they looked like, with noise only
+    mentioned afterwards. That is how two wet anchors captured on
+    not-quite-saturated soil pegged both trays at 100% for a week and silently
+    disabled the dry alert. A suspect capture is now refused, with the reason
+    and what to do instead.
+    """
+    problems, notes = [], []
+    with settings_lock:
+        cal = dict((settings.get("probe_cal") or {}).get(tray) or {})
+    other = cal.get("dry" if point == "wet" else "wet")
+
+    if spread is not None and spread > PROBE_NOISE_MAX:
+        problems.append(
+            f"the reading is jumping around by {spread:.3f}V while sampling, "
+            "which points at electrical noise on the probe lead rather than "
+            "anything about the soil")
+
+    if drift is not None and abs(drift) > PROBE_DRIFT_MAX:
+        if point == "wet" and drift < 0:
+            problems.append(
+                f"still falling ({drift:+.3f}V over the sample): the soil is "
+                "still absorbing. Wait until it stops moving, usually about "
+                "30 minutes after watering, then capture")
+        elif point == "dry" and drift > 0:
+            problems.append(
+                f"still rising ({drift:+.3f}V over the sample): the soil is "
+                "still drying. Capture once it levels off")
+        else:
+            notes.append(f"moved {drift:+.3f}V during the sample")
+
+    # a wet anchor has to be at least as wet as the tray actually gets, or every
+    # ordinary reading sits below it and clamps to 100%
+    try:
+        recent = db.recent_values(f"probe:{tray}", n=400, max_age=14 * 86400)
+    except Exception:
+        recent = []
+    if recent and point == "wet":
+        lowest = min(recent)
+        if volts > lowest + PROBE_CAL_SLOP:
+            problems.append(
+                f"{volts:.3f}V is drier than this tray's own recent low of "
+                f"{lowest:.3f}V, so normal readings would fall below the anchor "
+                "and peg at 100%. The soil is not saturated yet")
+        else:
+            notes.append(f"wetter than the 14-day low of {lowest:.3f}V")
+    if recent and point == "dry":
+        highest = max(recent)
+        if volts < highest - PROBE_CAL_SLOP:
+            problems.append(
+                f"{volts:.3f}V is wetter than this tray's recent high of "
+                f"{highest:.3f}V, so dry soil would read past the anchor. "
+                "Capture this one when the tray is genuinely dry")
+
+    if other is not None:
+        span = (other - volts) if point == "wet" else (volts - other)
+        if span < PROBE_SPAN_MIN:
+            problems.append(
+                f"only {span:.3f}V between wet and dry, too small a range to "
+                "read a percentage from. Check the probe is inserted to its "
+                "line and that the other anchor is right")
+        else:
+            notes.append(f"{span:.3f}V between wet and dry")
+    return problems, notes
+
+
+@app.route("/api/lightning", methods=["POST"])
+@require_auth
+def api_lightning():
+    """Run a short lightning effect on the grow light. Entirely for fun."""
+    data = request.get_json(silent=True) or {}
+    if data.get("stop"):
+        _lightning_stop.set()
+        return jsonify(ok=True, stopping=True)
+    with settings_lock:
+        cfg = dict(settings)
+    if not lightning_available(cfg):
+        return jsonify(ok=False, error="only available on a dimmable fixture "
+                                       "wired through the inverted PWM"), 200
+    try:
+        seconds = max(3, min(LIGHTNING_MAX_S, int(data.get("seconds", 20))))
+    except (TypeError, ValueError):
+        seconds = 20
+    style = data.get("style") if data.get("style") in (
+        "storm", "strike", "sheet", "flicker") else "storm"
+    with _lightning_lock:
+        if lightning_state["running"]:
+            return jsonify(ok=False, error="already running"), 200
+        _lightning_stop.clear()
+        lightning_state.update(running=True, until=time.time() + seconds,
+                               style=style)
+    db.log_event("light", f"lightning: {style} for {seconds}s")
+    threading.Thread(target=_storm, args=(seconds, style), daemon=True,
+                     name="lightning").start()
+    return jsonify(ok=True, seconds=seconds, style=style)
+
+
 @app.route("/api/probe_cal", methods=["POST"])
 @require_auth
 def probe_cal_set():
-    """Capture a tray probe's current raw reading as its 'wet' (100%) or 'dry'
-    (0%) anchor. Reads the probe live so the anchor reflects the soil right now."""
+    """Capture a tray probe's reading as its wet (100%) or dry (0%) anchor.
+
+    Watches the probe for a few seconds rather than taking one instant reading,
+    so soil that is still absorbing water is caught before it becomes a bad
+    anchor. A suspect capture is refused with the reason; pass force to store
+    it regardless.
+    """
     data = request.get_json(silent=True) or {}
     tray = str(data.get("tray", ""))
     point = data.get("point")
-    if tray not in ("1", "2") or point not in ("wet", "dry"):
-        return jsonify(ok=False, error="tray must be 1|2 and point wet|dry"), 200
-    live, spread = sensors.probe_spread(tray)
+    force = bool(data.get("force"))
+    if tray not in (str(t) for t in sensors.PROBE_CHANNELS) or point not in ("wet", "dry"):
+        return jsonify(ok=False, error="tray must be a wired probe and point wet|dry"), 200
+
+    # Overriding a refusal stores the value that was refused, not a fresh one:
+    # re-sampling would take another 15 seconds and could store something other
+    # than the number the user just agreed to.
+    given = data.get("volts")
+    if force and given is not None:
+        try:
+            live = float(given)
+            spread = drift = None
+        except (TypeError, ValueError):
+            live = None
+    else:
+        live, spread, drift = sensors.probe_settle(tray, seconds=PROBE_SETTLE_S)
+        if live is None:
+            live, spread = sensors.probe_spread(tray)
+            drift = None
     if live is None:
         return jsonify(ok=False, error="no reading from that probe"), 200
+
+    problems, notes = probe_cal_check(tray, point, live, drift, spread)
+    # force means store it: the checks become advice, not a veto. They still
+    # come back in the response so the reason is on record.
+    if problems and not force:
+        return jsonify(ok=False, tray=tray, point=point, volts=live,
+                       spread=spread, drift=drift, problems=problems,
+                       notes=notes, can_force=True,
+                       error="not stored: " + problems[0])
+
     with settings_lock:
         cal = settings.setdefault("probe_cal", {})
         cal.setdefault(tray, {})[point] = live
         save_config()
-    # a wide spread means noise on the analog run; the anchor is unreliable
-    return jsonify(ok=True, tray=tray, point=point, volts=live,
-                   spread=spread, noisy=bool(spread and spread > 0.05))
+    db.log_event("probe", f"tray {tray} {point} anchor set to {live:.4f}V"
+                          + (" (forced)" if problems else ""))
+    return jsonify(ok=True, tray=tray, point=point, volts=live, spread=spread,
+                   drift=drift, problems=problems, notes=notes,
+                   forced=bool(problems))
 
 
 @app.route("/api/report")
@@ -2990,25 +3888,173 @@ def video():
 
 # never sent to the browser: /api/status is readable without login, and the
 # frontend has no use for any of these
-SECRET_SETTINGS = ("password_hash", "discord_webhook", "ntfy_topic")
+SECRET_SETTINGS = ("password_hash", "discord_webhook", "ntfy_topic", "kasa_pass")
 
 
 def public_settings(cfg):
     return {k: v for k, v in cfg.items() if k not in SECRET_SETTINGS}
 
 
-@app.route("/api/status")
-def status():
+# ---- live sensor refresh ----------------------------------------------------
+# The sample interval is how often a reading is WRITTEN to the database, and
+# it is deliberately slow: every sample is a row, and this runs on an SD card.
+# How often the dashboard is refreshed need not be tied to that. This loop
+# reads the quick sensors every few seconds and pushes them to open pages
+# without storing anything, so the page is live while the record stays sparse.
+live_readings = {"ts": 0.0, "values": {}}
+LIVE_KEYS = ("lux", "temp:air", "humidity", "pressure")
+
+
+def live_loop():
+    last = {}
+    while True:
+        with settings_lock:
+            every = int(settings.get("live_interval_s") or 0)
+        if every <= 0:
+            time.sleep(5)
+            continue
+        try:
+            vals = {k: v for k, v in sensors.read_fast().items()
+                    if k in LIVE_KEYS}
+            if vals:
+                live_readings.update(ts=time.time(), values=vals)
+                # push only on a change worth seeing, so a still room does not
+                # wake every open page every few seconds
+                moved = any(k not in last or abs(v - last[k]) >
+                            max(0.05, abs(last[k]) * 0.002)
+                            for k, v in vals.items())
+                if moved:
+                    last = dict(vals)
+                    publish("live")
+        except Exception as e:
+            print(f"live sensor read failed: {e}")
+        time.sleep(max(2, every))
+
+
+# ---- live updates (server-sent events) ----------------------------------
+# Waitress can hold a connection open per worker thread, which the development
+# server could not; that is what makes this possible at all. Each subscriber
+# costs one of the server's threads for as long as it is connected, so the
+# count is capped well below the pool: a browser left open on a dozen tabs must
+# not be able to starve the controller of threads to answer with.
+STREAM_MAX = 6              # of waitress's 16 threads
+STREAM_QUEUE = 8            # events buffered per subscriber before it is culled
+STREAM_HEARTBEAT = 10.0     # seconds. Also how quickly a closed tab frees its
+                            # slot: the write that fails is what tells us the
+                            # peer is gone, so this doubles as the reclaim time
+
+_subs = set()
+_subs_lock = threading.Lock()
+
+
+def publish(reason="update"):
+    """Hand the current status to every listening browser.
+
+    Called from the loops after something actually changes, which is the whole
+    point: a poll asks every 15 seconds whether anything happened, this says so
+    the moment it does. Never raises and never blocks a control loop: a
+    subscriber whose queue has backed up is dropped rather than waited for.
+    """
+    with _subs_lock:
+        subs = list(_subs)
+    if not subs:
+        return
+    for q in subs:
+        try:
+            q.put_nowait(reason)
+        except queue.Full:
+            with _subs_lock:
+                _subs.discard(q)      # not keeping up; it will reconnect
+
+
+def _switch_changed(key):
+    """A float or reservoir switch flipped: push the status right away."""
+    print(f"{key} changed")
+    publish(key)
+
+
+sensors.on_change(_switch_changed)
+try:
+    sensors.arm_watchers()
+except Exception as e:           # a missing switch must never stop the app
+    print(f"switch watchers not armed: {e}")
+
+
+@app.route("/api/stream")
+def api_stream():
+    """Status pushed as it changes, as an EventSource stream.
+
+    The browser reconnects on its own if this drops, and the dashboard keeps a
+    slow poll running regardless, so a stream that dies quietly degrades to the
+    old behaviour instead of freezing the page.
+    """
+    authed = is_authed()          # read while the request context still exists
+    with _subs_lock:
+        if len(_subs) >= STREAM_MAX:
+            return jsonify(error="too many live connections"), 503
+        q = queue.Queue(maxsize=STREAM_QUEUE)
+        _subs.add(q)
+
+    def gen():
+        try:
+            yield "retry: 5000\n\n"          # how soon the browser retries
+            yield f"event: status\ndata: {json.dumps(status_payload(authed))}\n\n"
+            while True:
+                try:
+                    q.get(timeout=STREAM_HEARTBEAT)
+                    # coalesce a burst: one render per batch of changes
+                    while True:
+                        try:
+                            q.get_nowait()
+                        except queue.Empty:
+                            break
+                    yield f"event: status\ndata: {json.dumps(status_payload(authed))}\n\n"
+                except queue.Empty:
+                    # a comment keeps the connection warm and, more usefully,
+                    # fails here when the peer has gone so the thread is freed
+                    yield ": keepalive\n\n"
+        finally:
+            with _subs_lock:
+                _subs.discard(q)
+
+    # No "Connection" header: it is hop-by-hop, and PEP 3333 forbids a WSGI
+    # application from setting it. The dev server tolerated it; waitress
+    # refuses the response outright.
+    return Response(gen(), mimetype="text/event-stream", headers={
+        "Cache-Control": "no-cache, no-transform",
+        "X-Accel-Buffering": "no",    # nginx would otherwise buffer the stream
+    })
+
+
+def status_payload(authed=None):
+    """The dashboard's whole view of the world, as a dict.
+
+    Shared by the polled endpoint and the live stream so both render from
+    byte-identical data; building it twice in two places is how they drift.
+
+    `authed` is passed in by the stream: its generator runs after the request
+    context has been torn down, so the session is not readable from there. The
+    flag is captured once when the stream opens, and a login or logout
+    reconnects the stream anyway."""
     with state_lock:
         s = dict(state)
         cam = dict(camera)
     with settings_lock:
         cfg = dict(settings)
     if s["on"] is None:
-        return jsonify(error="warming up"), 503
+        return {"error": "warming up"}
     tz = ZoneInfo(cfg["timezone"])
     count, _, latest_time = photo_inventory()
     snap = db.latest()                        # one query serves the whole response
+    # Overlay the live read so the chips show the room as it is now, not as it
+    # was at the last logged sample. db.latest() holds (ts, value) tuples, so
+    # the overlay must use that shape. Charts and alerts still read the record.
+    lv = live_readings
+    if lv["values"] and time.time() - lv["ts"] < 120:
+        for k, v in lv["values"].items():
+            prev = snap.get(k)
+            if prev is None or lv["ts"] >= prev[0]:
+                snap[k] = (lv["ts"], v)
     stf = latest_soil_temp_f(snap)
     pcal = cfg.get("probe_cal") or {}
     cam_on = bool(cfg.get("camera_enabled"))
@@ -3024,9 +4070,15 @@ def status():
     day = day_light_summary()
     if day:
         # what the rest of today's schedule will deliver, from the measured curve
-        day["forecast_remaining"] = dli_forecast(cfg, datetime.now(tz),
-                                                 s["on"], s["off"])
-    return jsonify(
+        # What the rest of today should add, as the SENSOR recorded it over the
+        # same hours yesterday: every light and every ramp included, with no
+        # model of any fixture. Nothing is forecast without a clean record.
+        now_ = datetime.now(tz)
+        midnight = now_.replace(hour=0, minute=0, second=0, microsecond=0)
+        rest = dli_between(now_.timestamp() - 86400, midnight.timestamp())
+        day["forecast_remaining"] = (rest[0] if rest and rest[1] >= 0.9
+                                     else None)
+    return dict(
         now=datetime.now(tz).isoformat(),
         brightness=s["brightness"],
         light_override=s.get("override", cfg.get("light_override", "auto")),
@@ -3051,7 +4103,17 @@ def status():
         video_time=(datetime.fromtimestamp(VIDEO_PATH.stat().st_mtime)
                     .isoformat() if VIDEO_PATH.exists() else None),
         light_backend=light_backend(cfg),
-        kasa={"host": KASA_HOST,
+        dim_pin=GPIO_PIN2 if pwm2 is not None else None,
+        light2={"enabled": bool(cfg.get("light2_on")),
+                "fixture": light2_fixture(cfg),
+                "level": light2_state["level"],
+                "why": light2_state["why"],
+                "start": cfg.get("light2_start"), "end": cfg.get("light2_end"),
+                "override": cfg.get("light2_override", "auto")},
+        lightning={"available": lightning_available(cfg),
+                   "running": lightning_state["running"]},
+        kasa={"host": kasa_conf(cfg)[0],
+              "from_env": bool(KASA_HOST_ENV),
               "on": kasa_state["on"], "ok": kasa_state["ok"],
               "error": kasa_state["error"], "fails": kasa_state["fails"]}
              if light_backend(cfg) == "kasa" else None,
@@ -3092,6 +4154,13 @@ def status():
         sweep={"running": sweep_state["running"], "pct": sweep_state["pct"],
                "error": sweep_state["error"]},
         light_curve=cfg.get("light_curve"),
+        light_linear={k: v for k, v in (cfg.get("light_linear") or {}).items()
+                      if k != "table"} or None,
+        light_linear_on=bool(cfg.get("light_linear_on")),
+        light_linear_stale=bool(cfg.get("light_linear_on")
+                                and (cfg.get("light_linear") or {}).get("table")
+                                and linear_table(cfg) is None),
+        light_curve_effective=effective_curve(cfg),
         day_light=day,
         light_plan=light_plan(cfg, s["on"], s["off"]),
         light_metrics=(lambda lx: {
@@ -3101,7 +4170,7 @@ def status():
             "dli": dli_today(),
         } if lx is not None and lux_k() else None)(
             (snap.get("lux") or (None, None))[1]),
-        authed=is_authed(),
+        authed=is_authed() if authed is None else bool(authed),
         auth_enabled=auth_enabled(),
         water={
             "pump_hw": PUMP_HW,
@@ -3116,10 +4185,19 @@ def status():
                 "pump_hw": t in _pumps,
                 "running": pump_state[t]["running"],
                 "last": pump_state[t]["last_detail"],
+                "last_run": int(pump_state[t]["last_run"]) or None,
                 "today_seconds": round(pump_state[t]["today_seconds"], 1),
             } for t in PUMP_PINS},
         },
     )
+
+
+@app.route("/api/status")
+def status():
+    payload = status_payload()
+    if payload.get("error") == "warming up":
+        return jsonify(payload), 503
+    return jsonify(payload)
 
 
 @app.route("/api/pump", methods=["POST"])
@@ -3240,6 +4318,65 @@ def ppfd_from_lux(lux, at_canopy=True):
     return round(lux * (canopy_factor() if at_canopy else 1.0) / k, 1)
 
 
+def dli_between(start, end):
+    """Measured light between two unix times: (mol/m2, covered, lit_seconds).
+
+    The same integration as dli_today, over any window. `covered` is the
+    fraction of the window the sensor record actually spans; gaps over 30
+    minutes are left out rather than invented, so a restart or an outage
+    shows up as low coverage instead of as a dim day. lit_seconds is time the
+    sensor saw real light, whatever produced it.
+    """
+    k = lux_k()
+    if not k or end <= start:
+        return None
+    hours = (time.time() - start) / 3600 + 1
+    pts = [(ts, v) for ts, v in db.series("lux", hours=max(2, hours))
+           if start <= ts <= end]
+    if len(pts) < 2:
+        return None
+    peak = max(v for _, v in pts)
+    dark = max(50.0, peak * 0.02)
+    total = covered = lit = 0.0
+    for (t0, v0), (t1, v1) in zip(pts, pts[1:]):
+        dt = t1 - t0
+        if dt <= 0 or dt > 1800:
+            continue
+        total += ((v0 + v1) / 2 / k) * dt
+        covered += dt
+        if (v0 + v1) / 2 > dark:
+            lit += dt
+    return (round(total * canopy_factor() / 1_000_000, 2),
+            covered / (end - start), lit)
+
+
+def measured_day(cfg, now, off_time):
+    """The most recent complete day as the light sensor recorded it.
+
+    Today once every light is out (the photoperiod is over and the sensor has
+    read dark for a quarter hour), otherwise yesterday. The source is named so
+    the card can say which day it is judging.
+    """
+    tz = now.tzinfo
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    t_mid, t_now = midnight.timestamp(), now.timestamp()
+    if now >= off_time:
+        day_pts = [v for ts, v in db.series("lux", hours=25) if ts >= t_mid]
+        recent = [v for ts, v in db.series("lux", hours=1) if ts >= t_now - 900]
+        today = dli_between(t_mid, t_now)
+        # "every light is out" is judged by the sensor too: the last quarter
+        # hour reads under 2% of today's peak (room light is well below that)
+        dark = max(50.0, 0.02 * max(day_pts)) if day_pts else 50.0
+        if recent and today and max(recent) < dark:
+            mol, cov, lit = today
+            if cov >= 0.9:
+                return {"mol": mol, "lit_hours": lit / 3600, "day": "today"}
+    y = dli_between(t_mid - 86400, t_mid)
+    if y and y[1] >= 0.9:
+        return {"mol": y[0], "lit_hours": y[2] / 3600, "day": "yesterday"}
+    return None
+
+
 def dli_today():
     """Daily light integral so far today, in mol/m2/day: PPFD integrated over
     time since local midnight. This is the number that actually tracks growth,
@@ -3266,13 +4403,29 @@ def dli_today():
     return round(total * canopy_factor() / 1_000_000, 2)   # micromol -> mol
 
 
-def run_light_sweep(step=5, settle=2.0):
+def _curve_lux(pts, raw_pct):
+    """Interpolate a raw [[pct, lux]] curve at a raw percent."""
+    if not pts:
+        return 0.0
+    if raw_pct <= pts[0][0]:
+        return pts[0][1]
+    if raw_pct >= pts[-1][0]:
+        return pts[-1][1]
+    for i in range(1, len(pts)):
+        if pts[i][0] >= raw_pct:
+            x0, y0 = pts[i - 1]; x1, y1 = pts[i]
+            return y1 if x1 == x0 else y0 + (y1 - y0) * (raw_pct - x0) / (x1 - x0)
+    return pts[-1][1]
+
+
+def run_light_sweep(step=5, settle=2.0, linearize=False):
     """Step the light 0..100% and record lux at each stop, so we can chart the
     fixture's real response curve. Runs in a thread; the control loop leaves the
     light alone while sweep_state["running"] is set, and the previous brightness
     is restored at the end whatever happens."""
     points = []
     before = 0
+    _dither_stop()           # nothing else may move the light mid-measurement
     try:
         with state_lock:
             before = state.get("brightness") or 0
@@ -3282,7 +4435,7 @@ def run_light_sweep(step=5, settle=2.0):
         for i, pct in enumerate(levels):
             if sweep_state["cancel"]:
                 break
-            set_brightness(pct)
+            set_brightness_raw(pct)               # raw: measure the real fixture
             time.sleep(settle)                    # let the sensor integrate
             if sweep_state["cancel"]:             # cancelled while settling
                 break
@@ -3301,12 +4454,26 @@ def run_light_sweep(step=5, settle=2.0):
             pass
         complete = points and points[-1][0] == 100 and not sweep_state["error"]
         if complete:
+            lin = None
+            if linearize:
+                try:
+                    table, info = build_linear_table(points)
+                    lin = {"ts": int(time.time()), "table": table, **info}
+                except ValueError as e:
+                    sweep_state["error"] = f"calibration not built: {e}"
             with settings_lock:
                 settings["light_curve"] = {
                     "ts": int(time.time()), "step": step,
                     "settle": settle, "points": points,
                 }
+                if lin:
+                    settings["light_linear"] = lin
+                    settings["light_linear_on"] = True
                 save_config()
+            if lin:
+                db.log_event("light", f"linear calibration built: light from "
+                             f"{lin['cutoff_raw']}%, full by "
+                             f"{lin['saturation_raw']}% raw")
             print(f"light sweep: {len(points)} points, "
                   f"peak {max(p[1] for p in points):.0f} lx")
         elif points:
@@ -3458,12 +4625,18 @@ def api_light_sweep():
         settle = max(0.5, min(10.0, float(data.get("settle", 2.0))))
     except (TypeError, ValueError):
         step, settle = 5, 2.0
+    linearize = bool(data.get("linearize"))
+    if linearize:
+        # a knee at 35% and a cutoff at 4% both vanish between 5% steps; the
+        # calibration needs every percent to find them
+        step = 1
+        settle = max(settle, 1.5)
     with sweep_lock:
         if sweep_state["running"]:
             return jsonify(ok=False, error="a sweep is already running"), 200
         sweep_state.update(running=True, pct=0, error="", cancel=False,
                            started=time.time())
-    threading.Thread(target=run_light_sweep, args=(step, settle),
+    threading.Thread(target=run_light_sweep, args=(step, settle, linearize),
                      daemon=True).start()
     est = int((101 / step + 1) * (settle + 0.3))
     return jsonify(ok=True, started=True, estimate_seconds=est)
@@ -3515,7 +4688,12 @@ def dli_forecast(cfg, now, on_time, off_time):
     cf = canopy_factor()
 
     def lux_at(pct):
-        """Interpolate the measured curve at a brightness percentage."""
+        """Interpolate the measured curve at a dashboard brightness.
+
+        The stored curve is RAW hardware response, so the dashboard percent
+        goes through the same calibration the light itself uses first.
+        """
+        return dashboard_lux(pct, cfg, pts)
         if pct <= pts[0][0]:
             return pts[0][1]
         if pct >= pts[-1][0]:
@@ -3546,54 +4724,49 @@ DLI_TARGET_LOW, DLI_TARGET_HIGH = 6.0, 12.0
 
 
 def light_plan(cfg, on_time, off_time):
-    """What the current schedule delivers on a full day, and what to change if
-    that misses the seedling DLI window. Uses the measured light curve, so the
-    advice is grounded in this fixture rather than a rule of thumb."""
-    full = dli_forecast(cfg, on_time, on_time, off_time)
-    if full is None:
-        return None
-    k = lux_k()
-    pts = sorted((cfg.get("light_curve") or {}).get("points") or [])
-    peak_lux = pts[-1][1] if pts else 0
+    """Judge a whole day's light from what the sensor measured.
+
+    The last complete day as recorded, whatever lit it: one fixture, two, a
+    window, a storm. Earlier this modelled the fixtures instead, which called
+    a day "on track" at 10.8 mol while the sensor had measured 14.4.
+    """
+    with settings_lock:
+        tz = ZoneInfo(settings["timezone"])
+    now = datetime.now(tz)
+    m = measured_day(cfg, now, off_time)
+    if m is None:
+        so_far = dli_today()
+        return {"status": "pending", "full_day": so_far or 0.0, "day": None,
+                "advice": ["Waiting for a full day measured by the light "
+                           "sensor; the first one completes tonight."]}
+    full, lit_h = m["mol"], m["lit_hours"]
+    # average light per lit hour, measured: what an hour more or less is worth
+    per_hour = full / lit_h if lit_h > 0 else 0.0
     mx = float(cfg.get("max_bright", 100))
-    # what one more hour at the current peak brightness is worth
-    per_hour = (peak_lux * canopy_factor() / k) * 3600 / 1_000_000 if k else 0
-    hours = (off_time - on_time).total_seconds() / 3600
-
     plan = {"full_day": full, "per_hour": round(per_hour, 2),
-            "hours": round(hours, 1), "status": "ok", "advice": []}
-
+            "hours": round(lit_h, 1), "status": "ok", "day": m["day"],
+            "advice": [f"Measured by the light sensor {m['day']}: {full:.1f} mol "
+                       f"over {lit_h:.1f}h of light."]}
     if full < DLI_TARGET_LOW:
         plan["status"] = "low"
         deficit = DLI_TARGET_LOW - full
         if per_hour > 0:
             add_h = deficit / per_hour
-            if hours + add_h <= 18:
-                plan["advice"].append(
-                    f"Extend the photoperiod about {add_h:.1f}h "
-                    f"(to ~{hours + add_h:.0f}h) to reach {DLI_TARGET_LOW:.0f} mol.")
-            else:
-                plan["advice"].append(
-                    "Even an 18h day would not close the gap at this intensity.")
-        if mx < 100:
             plan["advice"].append(
-                f"Max brightness is {mx:.0f}%; raising it to 100% would add "
-                f"roughly {(100 / mx - 1) * full:.1f} mol.")
-        else:
-            plan["advice"].append(
-                "Brightness is already maxed, so the other lever is lowering the "
-                "fixture: halving the distance roughly quadruples intensity.")
+                f"About {add_h:.1f}h more light, or brighter, to reach "
+                f"{DLI_TARGET_LOW:.0f} mol." if lit_h + add_h <= 18 else
+                "Even an 18h day would not close the gap at this intensity.")
     elif full > DLI_TARGET_HIGH:
         plan["status"] = "high"
         excess = full - DLI_TARGET_HIGH
         if per_hour > 0:
             plan["advice"].append(
                 f"About {excess / per_hour:.1f}h more light than seedlings need; "
-                "shorten the photoperiod or dim slightly.")
+                f"shorten the photoperiod or dim to roughly "
+                f"{mx * DLI_TARGET_HIGH / full:.0f}% max.")
     else:
         plan["advice"].append(
-            f"This schedule delivers {full:.1f} mol/day, inside the "
-            f"{DLI_TARGET_LOW:.0f}-{DLI_TARGET_HIGH:.0f} seedling window.")
+            f"Inside the {DLI_TARGET_LOW:.0f}-{DLI_TARGET_HIGH:.0f} seedling window.")
     return plan
 
 
@@ -3618,6 +4791,97 @@ def frame_context():
         if v is not None:
             out[label] = round(v, 1)
     return jsonify(ts=ts, readings=out)
+
+
+@app.route("/api/plug_discover", methods=["POST"])
+@require_auth
+def api_plug_discover():
+    """Find TP-Link plugs on the local network.
+
+    Broadcast discovery, so it only sees devices on the same subnet as the Pi.
+    Credentials are optional: without them, newer KLAP devices still answer
+    discovery with their model and address, they just report that they could
+    not be authenticated, which is exactly what the user needs to know before
+    typing a password.
+    """
+    data = request.get_json(silent=True) or {}
+    user = str(data.get("user") or "").strip()
+    password = str(data.get("pass") or "")
+    try:
+        timeout = max(2, min(15, int(data.get("timeout", 6))))
+    except (TypeError, ValueError):
+        timeout = 6
+
+    async def scan():
+        from kasa import Discover, Credentials
+        kw = {"discovery_timeout": timeout}
+        if user or password:
+            kw["credentials"] = Credentials(user, password)
+        found = await Discover.discover(**kw)
+        out = []
+        for host, dev in (found or {}).items():
+            entry = {"host": host, "alias": "", "model": "", "on": None,
+                     "needs_auth": False, "error": ""}
+            try:
+                await dev.update()
+                entry["alias"] = getattr(dev, "alias", "") or ""
+                entry["model"] = getattr(dev, "model", "") or ""
+                entry["on"] = bool(getattr(dev, "is_on", False))
+            except Exception as e:
+                entry["needs_auth"] = "auth" in str(e).lower()
+                entry["error"] = str(e)[:120]
+                entry["model"] = getattr(dev, "model", "") or ""
+            out.append(entry)
+        return sorted(out, key=lambda d: d["host"])
+
+    try:
+        devices = _kasa_run(scan(), timeout=timeout + 10)
+    except ImportError:
+        return jsonify(ok=False, error="python-kasa is not installed"), 200
+    except Exception as e:
+        return jsonify(ok=False, error=str(e)[:200]), 200
+    return jsonify(ok=True, devices=devices)
+
+
+@app.route("/api/plug_test", methods=["POST"])
+@require_auth
+def api_plug_test():
+    """Connect to a plug and report what it is, without saving anything.
+
+    Takes the host and credentials from the body so a plug can be tried before
+    it is committed to settings; falls back to whatever is configured, which
+    makes this double as a health check for the current plug.
+    """
+    data = request.get_json(silent=True) or {}
+    host = str(data.get("host") or "").strip()
+    user = str(data.get("user") or "").strip()
+    password = str(data.get("pass") or "")
+    if not host:
+        host, user, password = kasa_conf()
+    if not host:
+        return jsonify(ok=False, error="no plug address to test"), 200
+
+    async def probe():
+        dev = await _kasa_connect(host, user, password)
+        await dev.update()
+        return {"alias": getattr(dev, "alias", "") or "",
+                "model": getattr(dev, "model", "") or "",
+                "on": bool(getattr(dev, "is_on", False))}
+
+    try:
+        info = _kasa_run(probe(), timeout=20)
+    except ImportError:
+        return jsonify(ok=False, error="python-kasa is not installed"), 200
+    except Exception as e:
+        msg = str(e)[:200]
+        hint = ""
+        if "credential" in msg.lower() or "auth" in msg.lower():
+            hint = ("This plug wants TP-Link account credentials. If they are "
+                    "correct and it still fails, remove the plug in the Kasa "
+                    "app and add it again: changing the account password "
+                    "leaves the device holding the old one.")
+        return jsonify(ok=False, error=msg, hint=hint), 200
+    return jsonify(ok=True, **info)
 
 
 @app.route("/api/auto_water", methods=["POST"])
@@ -3873,6 +5137,18 @@ def _v_roi(v):
     return v
 
 
+def _v_host(v):
+    """An IP address or hostname, or blank. Deliberately strict: this string is
+    handed to the plug library, and a stray scheme or port produces a confusing
+    connection error rather than an obvious validation one."""
+    v = str(v or "").strip()
+    if not v:
+        return ""
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,253}", v):
+        raise ValueError("must be an IP address or hostname, with no scheme or port")
+    return v
+
+
 def _v_usb_device(v):
     v = str(v or "").strip()
     if not re.fullmatch(r"/dev/video\d+", v):
@@ -3907,6 +5183,7 @@ SETTINGS_VALIDATORS = {
     "usb_white_balance_temperature": _v_int(1000, 10000),
     "usb_focus_absolute": _v_int(0, 1023),
     "cam_rotate": _v_choice(0, 90, 180, 270),
+    "live_interval_s": _v_int(0, 120),
     "capture_interval_min": _v_int(5, 720, clamp=False),
     "capture_brightness": _v_int(1, 100, clamp=False),
     "roi": _v_roi,
@@ -3929,12 +5206,26 @@ SETTINGS_VALIDATORS = {
     "pump_daily_max_seconds": _v_int(1, 3600),
     "fill_max_seconds": _v_int(1, 600),
     "units": _v_choice("imperial", "metric"),
-    "light_backend": _v_choice("pwm", "kasa"),
+    "light_backend": _v_choice("pwm", "dim", "kasa"),
+    "light_floor_pct": _v_float(0, 50),
+    "light_linear_on": _v_bool,
+    "dim_below_min": _v_choice("hold", "cycle"),
+    "light2_on": _v_bool,
+    "light2_start": _v_hhmm,
+    "light2_end": _v_hhmm,
+    "light2_bright": _v_int(0, 100),
+    "light2_ramp_min": _v_int(0, 120),
+    "light2_override": _v_choice("auto", "on", "off"),
+    "kasa_host": _v_host,
+    "kasa_user": lambda v: str(v or "").strip()[:200],
+    "kasa_pass": lambda v: str(v or "")[:200],
     "little_buddy": _v_bool,
     "theme": _v_choice("auto", "light", "dark"),
     "buddy_model": _v_choice("sprout", "pepper", "cat", "snail", "ladybug",
                              "drop", "bee", "gnome", "random"),
     "probe_median_depth": _v_int(1, 15),
+    "auto_wet_cal": _v_bool,
+    "auto_wet_cal_max_move": _v_float(0.01, 1.0),
     "schedule_mode": _v_choice("solar", "fixed", "duration"),
     "fixed_on": _v_hhmm,
     "fixed_off": _v_hhmm,
@@ -3966,6 +5257,9 @@ def update_settings():
         except ValueError as e:
             errors[k] = str(e) or "invalid"
     if new:
+        if any(k.startswith("kasa_") for k in new):
+            global _kasa_dev
+            _kasa_dev = None      # reconnect with the new address or credentials
         with settings_lock:
             was = light_backend(settings)
             settings.update(new)
@@ -3992,8 +5286,19 @@ def cleanup(*_):
             _fan.value = 0
         except Exception:
             pass
-    set_brightness(0)
-    pwm.stop()
+    _dither_stop()
+    light2_state["level"] = 0.0     # or the write below would keep it lit
+    set_brightness(0)          # darkens both channels
+    # Stopping the PWM releases the pin, and on the optocoupler wiring that
+    # means the dim line floats back to its own ~10.8V and the fixture goes to
+    # FULL. Exactly backwards for a shutdown. The hardware PWM lives in sysfs
+    # and keeps running after the process exits, so leaving that channel
+    # driving its dark duty is what actually keeps the light off.
+    # The main pin carries the dim fixture when no separate dim pin is set, and
+    # releasing that pin would let the fixture come on.
+    _stop_pwm(pwm, "dim" if (pwm2 is None and light_backend() == "dim") else "pwm")
+    if pwm2 is not None:
+        _stop_pwm(pwm2, "dim")     # dim line: keep it pulled down, or it lights
     sys.exit(0)
 
 
@@ -4001,9 +5306,11 @@ signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
 
 if __name__ == "__main__":
+    restore_persistent_state()      # before anything can water
     threading.Thread(target=control_loop, daemon=True).start()
     threading.Thread(target=capture_loop, daemon=True).start()
     threading.Thread(target=sample_loop, daemon=True).start()
+    threading.Thread(target=live_loop, daemon=True).start()
     threading.Thread(target=watering_loop, daemon=True).start()
     threading.Thread(target=report_loop, daemon=True).start()
     print(f"Dashboard at http://0.0.0.0:{HTTP_PORT}")

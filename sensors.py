@@ -100,6 +100,40 @@ RESERVOIR_INVERT = bool((os.environ.get("GROWLIGHT_RESERVOIR_INVERT") or "")
 _res_devs = {}
 _res_init = False
 
+# ---- change notification ----------------------------------------------------
+# The float and reservoir switches are binary and matter the moment they flip:
+# a tray reading full should reach the dashboard in well under a second, not
+# at the next five-minute sample. gpiozero calls these from its own thread on
+# each debounced edge, so no polling is involved.
+_listeners = []
+
+
+def on_change(callback):
+    """Call callback(key) whenever a float or reservoir switch changes."""
+    _listeners.append(callback)
+
+
+def _fire(key):
+    for cb in list(_listeners):
+        try:
+            cb(key)
+        except Exception as e:
+            print(f"change listener failed for {key}: {e}")
+
+
+def _edge(key):
+    # A zero-argument callable on purpose: gpiozero passes the device to any
+    # callback that accepts an argument, which would silently replace a
+    # default-argument key with the Button object.
+    return lambda: _fire(key)
+
+
+def arm_watchers():
+    """Open the switches now so their edge callbacks are live from startup,
+    instead of from whenever something first happens to read them."""
+    _floats()
+    _reservoirs()
+
 
 def _reservoirs():
     global _res_devs, _res_init
@@ -115,7 +149,9 @@ def _reservoirs():
         return _res_devs
     for which, pin in RESERVOIR_PINS.items():
         try:
-            _res_devs[which] = Button(pin, pull_up=True, bounce_time=0.1)
+            dev = Button(pin, pull_up=True, bounce_time=0.1)
+            dev.when_pressed = dev.when_released = _edge(f"reservoir:{which}")
+            _res_devs[which] = dev
         except Exception as e:
             print(f"reservoir {which} (GPIO{pin}) unavailable ({e}); "
                   "reporting unknown")
@@ -162,7 +198,9 @@ def _floats():
         return _float_devs
     for tray, pin in FLOAT_PINS.items():
         try:
-            _float_devs[tray] = Button(pin, pull_up=True, bounce_time=0.1)
+            dev = Button(pin, pull_up=True, bounce_time=0.1)
+            dev.when_pressed = dev.when_released = _edge(f"float:{tray}")
+            _float_devs[tray] = dev
         except Exception as e:
             print(f"float {tray} (GPIO{pin}) unavailable ({e}); reporting unknown")
     return _float_devs
@@ -252,6 +290,38 @@ def read_probes(samples=8):
         except Exception as e:
             print(f"probe {tray} read error: {e}")
     return out
+
+
+def probe_settle(tray, seconds=15.0, delay=0.5):
+    """Watch one probe for `seconds` and report whether it has settled.
+
+    A two-second burst tells you about electrical noise; it cannot tell you the
+    soil is still absorbing water, which is the thing that ruins a wet anchor.
+    Returns (median, spread, drift) where drift is the change from the first
+    third of the window to the last: still falling means water is still working
+    its way in and the reading has not finished moving.
+    """
+    chans = _probes()
+    if not chans or tray not in chans:
+        return None, None, None
+    ch = chans[tray]
+    vals = []
+    end = time.time() + max(2.0, seconds)
+    while time.time() < end:
+        try:
+            with _io_lock:
+                vals.append(ch.voltage)
+        except Exception:
+            pass
+        time.sleep(delay)
+    if len(vals) < 6:
+        return None, None, None
+    third = max(2, len(vals) // 3)
+    early = statistics.median(vals[:third])
+    late = statistics.median(vals[-third:])
+    return (round(statistics.median(vals), 4),
+            round(max(vals) - min(vals), 4),
+            round(late - early, 4))
 
 
 def probe_spread(tray, samples=10, delay=0.2):
@@ -421,18 +491,31 @@ def _read_soil_temps():
 
 # --------------------------------- public ---------------------------------
 
-def read_all():
-    """Return {sensor_key: value} for wired sensors only. Each type is read
-    independently and wrapped so one failed device never aborts the rest;
-    failures and not-yet-wired types are simply absent from the result."""
+# Everything except the 1-Wire soil probes, which need a 750ms conversion
+# each and change far too slowly to be worth that every few seconds.
+FAST_READS = (read_probes, read_floats, read_reservoirs, _read_air, _read_lux)
+ALL_READS = FAST_READS + (_read_soil_temps,)
+
+
+def _read_set(fns):
+    """Read a set of devices, one failure never aborting the rest."""
     out = {}
-    for fn in (read_probes, read_floats, read_reservoirs,
-               _read_air, _read_lux, _read_soil_temps):
+    for fn in fns:
         try:
             out.update(fn())
         except Exception as e:
             print(f"sensor read error in {fn.__name__}: {e}")
     return out
+
+
+def read_all():
+    """Every wired sensor. Failures and unwired types are simply absent."""
+    return _read_set(ALL_READS)
+
+
+def read_fast():
+    """The quick sensors only, for refreshing the dashboard between samples."""
+    return _read_set(FAST_READS)
 
 
 if __name__ == "__main__":
