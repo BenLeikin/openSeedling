@@ -1186,3 +1186,4 @@ details.fgroup[open]{padding-bottom:12px}
 body.camelsewhere #photocard, body.camelsewhere #videocard,
 body.camelsewhere #reportcard{display:none !important}
 body.fanelsewhere #fanrow, body.fanelsewhere #fanslider{display:none !important}
+body.reselsewhere #resrow{display:none !important}

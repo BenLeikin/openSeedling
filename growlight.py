@@ -193,7 +193,9 @@ DEFAULTS = {
                                 # fixture on a 0-10V line through an
                                 # optocoupler, "kasa" a smart
                                 # plug (on/off only, fixture knob sets intensity)
-    "auto_water": False,        # master switch; keep OFF until moisture calibrated
+    "auto_water": False,        # true while any tray is armed (see auto_water_trays)
+    "auto_water_trays": [],     # trays armed for auto-watering; keep them off
+                                # until each tray's probe is calibrated
     "moisture_threshold_pct": 30,  # CALIBRATION TODO: "dry" trigger, per-probe
     "pump_max_seconds": 20,     # hard cap on a single dose (anti-flood/dry-run)
     "pump_cooldown_min": 30,    # min wait between auto doses (soil wicks slowly)
@@ -421,6 +423,15 @@ def _migrate_trays():
         except Exception as e:
             log.warning(f"tray migration not persisted ({e})")
 _migrate_trays()
+
+# Auto-watering used to be one switch for every tray. A config from then with
+# it on arms every tray with a pump, once, so an upgrade changes nothing.
+if settings.get("auto_water") and "auto_water_trays" not in _file_keys:
+    settings["auto_water_trays"] = sorted(PUMP_PINS)
+    try:
+        save_config()
+    except Exception as e:
+        log.warning(f"auto-water tray list not persisted ({e})")
 
 # The probes were once labeled by tray ("Tray 1"), which read as the tray
 # itself and went stale when a tray was renamed. Drop those stored old
@@ -806,8 +817,15 @@ def set_brightness_raw(percent):
     # A sweep measures the main fixture alone, so the second one goes dark
     # while it runs rather than adding its light to the calibration.
     l2 = light2_fixture(cfg)
-    l2_level = (0.0 if (l2 is None or sweep_state["running"])
-                else float(light2_state["level"]))
+    if sweep_state["running"] and sweep_state.get("target") == "second":
+        l2_level = float(sweep_state.get("l2_raw") or 0.0)   # raw: under test
+    elif l2 is None or sweep_state["running"]:
+        l2_level = 0.0
+    else:
+        # the second light's own calibration, when it has one
+        l2_level = hw_percent(float(light2_state["level"]), light2_cfg(cfg))
+    if SHUTTING_DOWN.is_set():
+        l2_level = 0.0
 
     if mode == "dim" and pwm2 is None:
         # Only one channel configured: the dim fixture is on the main pin.
@@ -943,6 +961,24 @@ def effective_curve(cfg):
 # silently. Every table is now stamped, and one built for a different
 # mapping is refused rather than misread.
 LINEAR_MAPPING = 2
+
+
+def light2_cfg(cfg):
+    """cfg seen as the second light: its own curve and calibration table in
+    the places the main light's calibration code reads, so the same mapping
+    code serves both fixtures."""
+    return dict(cfg, light_curve=cfg.get("light2_curve"),
+                light_linear=cfg.get("light2_linear"),
+                light_linear_on=cfg.get("light2_linear_on", False),
+                light_floor_pct=0, dim_below_min="hold")
+
+
+def lux_key_for_light(light, cfg=None):
+    """The light sensor of the setup on that light ("main" or "second")."""
+    for st in setups(cfg):
+        if st.get("light") == light and st.get("lux"):
+            return st["lux"]
+    return "lux" if light == "main" else None
 
 
 def linear_table(cfg):
@@ -1488,10 +1524,13 @@ def run_pump_until_full(tray, reason="fill", force=False):
                     "without the float tripping. Likely causes: source "
                     "empty, tube off, or float stuck.")
     # a fill that can't complete means auto-watering must not keep trying
+    # this tray; the others keep their own arming
     with settings_lock:
-        if settings.get("auto_water"):
-            settings["auto_water"] = False
-            fill_failure["msg"] += " Auto-watering has been switched off."
+        if tray in armed_trays(settings):
+            left = [t for t in armed_trays(settings) if t != tray]
+            settings["auto_water_trays"] = left
+            settings["auto_water"] = bool(left)
+            fill_failure["msg"] += f" Auto-watering has been switched off for tray {tray}."
             try:
                 save_config()
             except Exception as e:
@@ -2101,6 +2140,13 @@ def report_loop():
         time.sleep(60)
 
 
+def armed_trays(cfg):
+    """Trays armed for auto-watering (see the startup migration for configs
+    from before arming was per tray)."""
+    got = [str(t) for t in (cfg.get("auto_water_trays") or [])]
+    return [t for t in got if t in PUMP_PINS]
+
+
 def auto_water_blockers(cfg=None):
     """Reasons auto-watering must not run, per tray -> [reasons].
 
@@ -2244,7 +2290,8 @@ def auto_water_pass():
     """
     with settings_lock:
         cfg = dict(settings)
-    if not cfg.get("auto_water"):
+    armed = set(armed_trays(cfg))
+    if not armed:
         return
     blockers = auto_water_blockers(cfg)
     threshold = float(cfg.get("moisture_threshold_pct", 30))
@@ -2253,7 +2300,7 @@ def auto_water_pass():
     snap = db.latest()
     stf = latest_soil_temp_f(snap)
     for tray in sorted(PUMP_PINS):
-        if tray in blockers:
+        if tray in blockers or tray not in armed:
             continue
         volts, ts = probe_volts_filtered(tray, snap)
         if volts is None:
@@ -4556,7 +4603,7 @@ def status_payload(authed=None):
         sensors=sensors_out,
         pressure_tendency=pressure_tendency(),
         sweep={"running": sweep_state["running"], "pct": sweep_state["pct"],
-               "error": sweep_state["error"]},
+               "error": sweep_state["error"], "target": sweep_state.get("target", "main")},
         light_curve=cfg.get("light_curve"),
         light_linear={k: v for k, v in (cfg.get("light_linear") or {}).items()
                       if k != "table"} or None,
@@ -4565,6 +4612,15 @@ def status_payload(authed=None):
                                 and (cfg.get("light_linear") or {}).get("table")
                                 and linear_table(cfg) is None),
         light_curve_effective=effective_curve(cfg),
+        light2_cal=(lambda c2: {
+            "light_curve": c2.get("light_curve"),
+            "light_linear": {k: v for k, v in (c2.get("light_linear") or {}).items()
+                             if k != "table"} or None,
+            "light_linear_on": bool(c2.get("light_linear_on")),
+            "light_linear_stale": bool(c2.get("light_linear_on")
+                                       and (c2.get("light_linear") or {}).get("table")
+                                       and linear_table(c2) is None),
+            "light_curve_effective": effective_curve(c2)})(light2_cfg(cfg)),
         day_light=day,
         light_plan=setups_out[0]["plan"],
         setups=setups_out,
@@ -4580,7 +4636,8 @@ def status_payload(authed=None):
         auth_enabled=auth_enabled(),
         water={
             "pump_hw": PUMP_HW,
-            "auto_water": cfg.get("auto_water", False),
+            "auto_water": bool(armed_trays(cfg)),
+            "armed": armed_trays(cfg),
             "reservoir": {"state": reservoir_state(),
                           "wired": bool(sensors.RESERVOIR_PINS)},
             "auto_blockers": auto_water_blockers(cfg),
@@ -4823,7 +4880,7 @@ def _curve_lux(pts, raw_pct):
     return pts[-1][1]
 
 
-def run_light_sweep(step=5, settle=2.0, linearize=False):
+def run_light_sweep(step=5, settle=2.0, linearize=False, target="main"):
     """Step the light 0..100% and record lux at each stop, so we can chart the
     fixture's real response curve. Runs in a thread; the control loop leaves the
     light alone while sweep_state["running"] is set, and the previous brightness
@@ -4837,14 +4894,20 @@ def run_light_sweep(step=5, settle=2.0, linearize=False):
         levels = list(range(0, 101, step))
         if levels[-1] != 100:
             levels.append(100)
+        key = lux_key_for_light(target) or "lux"
         for i, pct in enumerate(levels):
             if sweep_state["cancel"]:
                 break
-            set_brightness_raw(pct)               # raw: measure the real fixture
+            if target == "second":
+                # the second fixture alone: the main light is dark meanwhile
+                sweep_state["l2_raw"] = pct
+                set_brightness_raw(0)
+            else:
+                set_brightness_raw(pct)           # raw: measure the real fixture
             time.sleep(settle)                    # let the sensor integrate
             if sweep_state["cancel"]:             # cancelled while settling
                 break
-            lux = (sensors.read_all() or {}).get(main_lux_key())
+            lux = (sensors.read_all() or {}).get(key)
             if lux is None:
                 sweep_state["error"] = "no lux sensor reading; aborted"
                 break
@@ -4867,14 +4930,15 @@ def run_light_sweep(step=5, settle=2.0, linearize=False):
                     lin = {"ts": int(time.time()), "table": table, **info}
                 except ValueError as e:
                     sweep_state["error"] = f"calibration not built: {e}"
+            pre = "light2" if target == "second" else "light"
             with settings_lock:
-                settings["light_curve"] = {
+                settings[f"{pre}_curve"] = {
                     "ts": int(time.time()), "step": step,
-                    "settle": settle, "points": points,
+                    "settle": settle, "points": points, "sensor": key,
                 }
                 if lin:
-                    settings["light_linear"] = lin
-                    settings["light_linear_on"] = True
+                    settings[f"{pre}_linear"] = lin
+                    settings[f"{pre}_linear_on"] = True
                 save_config()
             if lin:
                 db.log_event("light", f"linear calibration built: light from "
@@ -4887,6 +4951,7 @@ def run_light_sweep(step=5, settle=2.0, linearize=False):
         with sweep_lock:
             sweep_state["running"] = False
             sweep_state["cancel"] = False
+            sweep_state["l2_raw"] = 0.0
         wake.set()                                # control loop resumes at once
 
 
@@ -5024,8 +5089,15 @@ def api_light_sweep():
         with sweep_lock:
             sweep_state["cancel"] = True     # the worker restores the light
         return jsonify(ok=True, cancelled=True)
-    if sensors.read_all().get(main_lux_key()) is None:
-        return jsonify(ok=False, error="no light sensor assigned to the main light"), 200
+    target = "second" if data.get("light") == "second" else "main"
+    if target == "second" and light2_fixture() is None:
+        return jsonify(ok=False, error="the second light is not available "
+                                       "(turned off, or no second PWM channel)"), 200
+    key = lux_key_for_light(target)
+    if not key or sensors.read_all().get(key) is None:
+        return jsonify(ok=False, error=f"no light sensor reading for the "
+                                       f"{light_label(target)}; assign one in "
+                                       "Settings, Setups"), 200
     try:
         step = max(1, min(25, int(data.get("step", 5))))
         settle = max(0.5, min(10.0, float(data.get("settle", 2.0))))
@@ -5041,8 +5113,8 @@ def api_light_sweep():
         if sweep_state["running"]:
             return jsonify(ok=False, error="a sweep is already running"), 200
         sweep_state.update(running=True, pct=0, error="", cancel=False,
-                           started=time.time())
-    threading.Thread(target=run_light_sweep, args=(step, settle, linearize),
+                           started=time.time(), target=target, l2_raw=0.0)
+    threading.Thread(target=run_light_sweep, args=(step, settle, linearize, target),
                      daemon=True).start()
     est = int((101 / step + 1) * (settle + 0.3))
     return jsonify(ok=True, started=True, estimate_seconds=est)
@@ -5289,6 +5361,7 @@ def setup_status(cfg, setup, on_time, off_time, tz):
             "sensors": list(setup.get("sensors") or []),
             "trays": [str(t) for t in (setup.get("trays") or [])],
             "fan": bool(setup.get("fan")), "camera": bool(setup.get("camera")),
+            "reservoir": bool(setup.get("reservoir")),
             "on": on_time.isoformat() if on_time else None,
             "off": off_time.isoformat() if off_time else None,
             "band": [lo, hi], "day": day,
@@ -5475,22 +5548,32 @@ def api_auto_water():
     """
     data = request.get_json(silent=True) or {}
     want = bool(data.get("enabled"))
+    # which trays: the ones asked for (a setup's trays), else every pump tray
+    asked = data.get("trays")
+    trays_ = sorted({str(t) for t in asked} & set(PUMP_PINS)) if isinstance(asked, list) \
+        else sorted(PUMP_PINS)
+    if not trays_:
+        return jsonify(ok=False, error="none of these trays has a pump"), 200
+    with settings_lock:
+        cur = set(armed_trays(settings))
     if not want:
+        left = sorted(cur - set(trays_))
         with settings_lock:
-            settings["auto_water"] = False
+            settings["auto_water_trays"], settings["auto_water"] = left, bool(left)
             save_config()
-        db.log_event("auto_water", "disarmed")
-        return jsonify(ok=True, enabled=False)
-    blockers = auto_water_blockers()
+        db.log_event("auto_water", f"disarmed tray {', '.join(trays_)}")
+        return jsonify(ok=True, enabled=False, armed=left)
+    blockers = {t: w for t, w in auto_water_blockers().items() if t in trays_}
     if blockers:
         return jsonify(ok=False, enabled=False, blockers=blockers,
                        error="Auto-watering needs a calibrated probe and a "
-                             "float switch on every tray with a pump."), 200
+                             "float switch on every tray it waters."), 200
+    armed = sorted(cur | set(trays_))
     with settings_lock:
-        settings["auto_water"] = True
+        settings["auto_water_trays"], settings["auto_water"] = armed, True
         save_config()
-    db.log_event("auto_water", "armed")
-    return jsonify(ok=True, enabled=True)
+    db.log_event("auto_water", f"armed tray {', '.join(trays_)}")
+    return jsonify(ok=True, enabled=True, armed=armed)
 
 
 @app.route("/api/fan", methods=["POST"])
@@ -5846,7 +5929,7 @@ def _v_setups(v):
             raise ValueError(f"{name}: the DLI band needs a low and a high")
         if not (0.5 <= lo < hi <= 65):
             raise ValueError(f"{name}: the DLI band low must be below the high (0.5 to 65)")
-        for flag in ("fan", "camera"):
+        for flag in ("fan", "camera", "reservoir"):
             if x.get(flag):
                 if any(o.get(flag) for o in out):
                     raise ValueError(f"{name}: the {flag} is already assigned to another setup")
@@ -5858,6 +5941,7 @@ def _v_setups(v):
         out.append({"id": sid, "name": name, "light": light, "lux": lux, "k": k,
                     "sensors": sorted(set(sens)), "trays": trays_,
                     "fan": bool(x.get("fan")), "camera": bool(x.get("camera")),
+                    "reservoir": bool(x.get("reservoir")),
                     "dli_low": lo, "dli_high": hi})
     return out
 

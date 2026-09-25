@@ -513,6 +513,8 @@ function applySetup(j){
   // the camera's cards and the fan controls live on their own setup's tab
   const multi=setupsList.length>1;
   const camSet=setupsList.find(s=>s.camera), fanSet=setupsList.find(s=>s.fan);
+  const resSet=setupsList.find(s=>s.reservoir);
+  document.body.classList.toggle('reselsewhere', !!(multi&&resSet&&cs&&resSet.id!==cs.id));
   const camElsewhere=!!(multi&&camSet&&cs&&camSet.id!==cs.id);
   document.body.classList.toggle('camelsewhere', camElsewhere);
   if(camElsewhere)document.body.classList.add('nocam');
@@ -544,6 +546,10 @@ function applyLightView(j, cs){
   S.schedule_mode='light2';
   S.light_linear_on=false;
   lightBackend='pwm';                 // the second light always dims by PWM
+  // the Light response card shows and calibrates this fixture
+  const c2=j.light2_cal||{};
+  for(const k of ['light_curve','light_linear','light_linear_on','light_linear_stale','light_curve_effective'])
+    j[k]=c2[k];
 }
 {
   const nav=document.getElementById('setuptabs');
@@ -587,6 +593,7 @@ function renderSetupConfig(j){
     ? j.settings.setups
     : (j.setups||[]).map(s=>({id:s.id,name:s.name,light:s.light,lux:s.lux,
         k:null,sensors:s.sensors,trays:s.trays||[],fan:!!s.fan,camera:!!s.camera,
+        reservoir:!!s.reservoir,
         dli_low:s.band[0],dli_high:s.band[1]}))));
   drawSetupConfig();
 }
@@ -614,6 +621,7 @@ function drawSetupConfig(){
       <div class="setupsens"><b>Here</b>
         <label><input type="checkbox" data-flag="fan"${s.fan?' checked':''}> Fan</label>
         <label><input type="checkbox" data-flag="camera"${s.camera?' checked':''}> Camera</label>
+        <label><input type="checkbox" data-flag="reservoir"${s.reservoir?' checked':''}> Reservoir</label>
         <span class="fhint">one setup each; the fan follows this setup's light</span></div>
       <div class="setupsens"><b>Trays</b>${trayOpts.map(([id,lbl])=>`<label><input type="checkbox" data-t="${esc(id)}"`
         +`${(s.trays||[]).includes(id)?' checked':''}> ${esc(lbl)}</label>`).join('')}
@@ -1704,7 +1712,12 @@ function renderWater(j){
   if(!w||!w.trays){box.style.display='none';return;}
   box.style.display='';
   {// auto-watering arm/disarm, above everything: it is the switch that matters
-   const blockers=w.auto_blockers||{};
+   // on a setup tab, the switch arms that setup's pump trays only
+   const mine=Object.keys(w.trays).filter(trayInSetup);
+   autoWaterTrays=mine;
+   const armed=new Set(w.armed||[]);
+   const allB=w.auto_blockers||{};
+   const blockers=Object.fromEntries(Object.entries(allB).filter(([t])=>mine.includes(t)));
    const names=Object.keys(blockers);
    let row=document.getElementById('autowrow');
    if(!row){
@@ -1718,8 +1731,9 @@ function renderWater(j){
    }
    const btn=document.getElementById('autowbtn');
    const info=document.getElementById('autowinfo');
-   const on=!!w.auto_water;
+   const on=mine.length>0&&mine.every(t=>armed.has(t));
    autoWaterOn=on;
+   row.style.display=mine.length?'':'none';
    btn.textContent=on?'Disarm':'Arm';
    btn.className=on?'on':'';
    btn.disabled=!on && names.length>0;
@@ -1805,7 +1819,8 @@ function renderWater(j){
   }
 }
 let lightBackend='pwm';  // 'kasa' means on/off only: no slider, no sweep
-let autoWaterOn=false;   // mirrors water.auto_water from the last status poll
+let autoWaterOn=false;   // whether this tab's pump trays are all armed
+let autoWaterTrays=[];   // the pump trays the Arm switch covers on this tab
 async function toggleAutoWater(){
   const info=document.getElementById('autowinfo');
   const want=!autoWaterOn;
@@ -1813,7 +1828,8 @@ async function toggleAutoWater(){
      +'own when the probe reads dry.'))return;
   try{
     const r=await fetch('/api/auto_water',{method:'POST',
-      headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:want})});
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({enabled:want,trays:autoWaterTrays})});
     const j=await r.json().catch(()=>({}));
     if(r.status===401){if(info)info.textContent='log in first';return;}
     if(!j.ok&&info){info.textContent=j.error||'failed';info.className='fhint autowbad';}
@@ -2511,7 +2527,7 @@ async function startCalibration(){
   try{
     const r=await fetch('/api/light_sweep',{method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({linearize:true})});
+      body:JSON.stringify({linearize:true,light:ctlTarget})});
     const j=await r.json().catch(()=>({}));
     if(r.status===401){if(info)info.textContent='log in first';return;}
     if(!j.ok){if(info)info.textContent=j.error||'could not start';return;}

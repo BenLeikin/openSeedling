@@ -151,7 +151,8 @@ Settings, Setups. Each setup has:
 - an optional **lux per umol** factor for that light's spectrum (blank uses
   `lux_to_ppfd_k`);
 - a **DLI target band**;
-- whether the **fan** and the **camera** are here (one setup each). The fan's
+- whether the **fan**, the **camera** and the **reservoir** sensors are here
+  (one setup each; the reservoir row shows on that tab only). The fan's
   auto mode then runs on this setup's light hours; the camera captures during
   them, its capture brightness is applied only when this setup is on the main
   light, and the snapshot, timelapse and AI report show on this tab only (the
@@ -174,6 +175,14 @@ on a tab whose light is the second fixture, Auto/On/Off and the slider set that
 light (`light2_override`, `light2_bright`) and dragging the chart's edges sets
 its hours (`light2_start`, `light2_end`); windows that cross midnight are not
 draggable. The one-line second-light status is hidden when there are tabs.
+
+On each tab, **Calibrate** sweeps that tab's light against that setup's light
+sensor (the other light goes dark for the few minutes it runs), and each
+fixture keeps its own curve and calibration (`light_curve` / `light_linear` for
+the main light, `light2_curve` / `light2_linear` for the second). **Arm** under
+Auto-water arms or disarms that setup's pump trays only
+(`auto_water_trays`); a tray with a blocker on another tab does not stop it,
+and a failed fill disarms just the tray that failed.
 
 Each setup's Plan verdict waits for its own light: the day is judged once that
 light's hours are over and its sensor has read dark for a quarter hour (a setup
@@ -460,7 +469,7 @@ editable from the dashboard Settings panel; the rest are edited in the file.
 | `roi` | "" | View crop as `x,y,w,h` fractions of the stored frame, blank = full frame. Set it with the Crop button on the snapshot. Stored photos stay full; the snapshot, scrubber, video and AI report are cut to it when photos are not flattened |
 | `cam_width` / `cam_height` | 2304 / 1296 | Capture resolution at full field of view. The Module 3 sensor is 4608x2592, but a full 12MP capture runs the Pi Zero 2 W out of memory, so the default is the 2304x1296 binned mode (same view, ~3MP). Keep the sensor's 16:9 aspect or the frame gets cropped. Raise to 4608x2592 only on a Pi with more RAM |
 | `sample_interval_min` | 5 | Sensor logging interval |
-| `auto_water` | false | Master switch for automatic watering (keep off until calibrated) |
+| `auto_water` / `auto_water_trays` | false / [] | Trays armed for automatic watering (`auto_water` is true while any is armed); keep off until each probe is calibrated. An older config with `auto_water` on arms every pump tray once |
 | `pump_max_seconds` | 20 | Cap on a single dose |
 | `pump_cooldown_min` | 30 | Minimum wait between auto doses |
 | `pump_daily_max_seconds` | 180 | Daily runaway backstop |

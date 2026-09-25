@@ -136,7 +136,7 @@ os.chdir(APP)
 sys.path.insert(0, str(APP))
 # a config written by an older version, to check the model migration
 (APP / "config.json").write_text('{"ai_model": "claude-opus-4-8", '
-                                 '"probe_names": {"1": "Tray 1", "2": "Left bench"}}')
+                                 '"probe_names": {"1": "Tray 1", "2": "Left bench"}, "auto_water": true}')
 
 # --------------------------------------------------------------------------
 # reporting
@@ -199,6 +199,10 @@ g.state.update(on=now.replace(hour=7), off=now.replace(hour=19),
                brightness=0, override="auto")
 c = g.app.test_client()
 check(c.get("/api/status").status_code == 200, "app imports and /api/status answers")
+check(g.settings.get("auto_water_trays") == ["1", "2"],
+      "an old config with auto-water on arms every pump tray once")
+with g.settings_lock:
+    g.settings.update(auto_water=False, auto_water_trays=[])
 check(g.settings.get("ai_model") == g.DEFAULTS["ai_model"] != "claude-opus-4-8",
       f"a stored former-default AI model is moved to the current one ({g.settings.get('ai_model')})")
 import ai_report          # noqa: E402
@@ -337,7 +341,7 @@ def _sec3():
         for st in g.pump_state.values():
             st.update(running=False, today_seconds=0, day=g._today_str())
         with g.settings_lock:
-            g.settings.update(fill_max_seconds=cap, auto_water=True)
+            g.settings.update(fill_max_seconds=cap, auto_water=True, auto_water_trays=["1", "2"])
         floats["1"].is_pressed = True                 # not full yet
         res = {"reservoir": "ok"}
         real_res = g.reservoir_state
@@ -351,7 +355,7 @@ def _sec3():
             ok, why = g.run_pump_until_full("1", "auto")
         finally:
             g.reservoir_state = real_res
-        return ok, why, g.pump_state["1"]["last_detail"], g.settings["auto_water"]
+        return ok, why, g.pump_state["1"]["last_detail"], "1" in g.armed_trays(g.settings)
 
 
     ok, why, detail, _ = fill(lambda res: setattr(floats["1"], "is_pressed", False))
@@ -360,7 +364,8 @@ def _sec3():
 
     ok, why, detail, armed = fill(lambda res: res.update(reservoir="empty"))
     check(not ok and "reservoir ran empty" in detail, f"fill stops when the reservoir runs dry ({detail})")
-    check(not armed, "auto-water disarms after a failed fill")
+    check(not armed and g.armed_trays(g.settings) == ["2"],
+      "a failed fill disarms that tray only; the other stays armed")
     check(not g._pumps["1"].value, "pump is off after a reservoir stop")
 
     ok, why, detail, _ = fill(lambda res: None, cap=1)
@@ -833,6 +838,53 @@ def _probe_names():
           "the old stored probe names (Tray 1, Tray 2) are cleared so the new ones show")
 
 
+def _per_sensor_controls():
+    with g.settings_lock:
+        g.settings.update(auto_water=False, auto_water_trays=[])
+    real_b = g.auto_water_blockers
+    g.auto_water_blockers = lambda cfg=None: {}
+    try:
+        a = c.post("/api/auto_water", json={"enabled": True, "trays": ["1"]}).get_json()
+        b = c.post("/api/auto_water", json={"enabled": True, "trays": ["2"]}).get_json()
+        d = c.post("/api/auto_water", json={"enabled": False, "trays": ["1"]}).get_json()
+    finally:
+        g.auto_water_blockers = real_b
+    check(a["armed"] == ["1"] and b["armed"] == ["1", "2"] and d["armed"] == ["2"]
+          and g.settings["auto_water"] is True,
+          "auto-watering arms and disarms per tray (a setup's trays)")
+    g.auto_water_blockers = lambda cfg=None: {"2": ["probe not calibrated"]}
+    try:
+        e = c.post("/api/auto_water", json={"enabled": True, "trays": ["1"]}).get_json()
+    finally:
+        g.auto_water_blockers = real_b
+    check(e["ok"], "a blocker on another setup's tray does not stop arming this one")
+    c.post("/api/auto_water", json={"enabled": False})
+    # calibrate the second light against its own sensor
+    c.post("/api/settings", json={"setups": [
+        {"name": "Seedlings", "light": "second", "lux": "lux:2", "sensors": [], "dli_low": 10, "dli_high": 15},
+        {"name": "Transplants", "light": "main", "lux": "lux", "sensors": [], "dli_low": 15, "dli_high": 20}]})
+    main_before = g.settings.get("light_curve")
+    real_read = sensors.read_all
+    sensors.read_all = lambda: {"lux": 999.0, "lux:2": 100.0 * float(g.sweep_state.get("l2_raw") or 0)}
+    g.sweep_state.update(running=True, cancel=False, error="", target="second", l2_raw=0.0)
+    try:
+        g.run_light_sweep(step=50, settle=0.0, linearize=False, target="second")
+    finally:
+        sensors.read_all = real_read
+    c2 = g.settings.get("light2_curve") or {}
+    check(c2.get("sensor") == "lux:2" and [p[1] for p in c2.get("points", [])] == [0.0, 5000.0, 10000.0]
+          and g.settings.get("light_curve") == main_before,
+          f"the second light calibrates against its own sensor and keeps its own curve ({c2.get('points')})")
+    st = c.get("/api/status").get_json()
+    check("light2_cal" in st and st["light2_cal"]["light_curve"]["sensor"] == "lux:2",
+          "the Light response card gets the second light's calibration")
+    js = (APP / "static" / "app.js").read_text()
+    check("linearize:true,light:ctlTarget" in js and "trays:autoWaterTrays" in js
+          and "reselsewhere" in js,
+          "Calibrate, Arm and the reservoir row follow the tab")
+    c.post("/api/settings", json={"setups": []})
+
+
 def _shutdown():
     """Last: sets the shutdown flag for good, the way SIGTERM does."""
     with g.settings_lock:
@@ -913,6 +965,7 @@ run('AI report reply', _ai_reply)
 run('Grow setups', _setups)
 run('Fan, camera and verdict timing', _fan_camera_timing)
 run('Probe names', _probe_names)
+run('Per-light calibration and per-tray arming', _per_sensor_controls)
 run('Shutdown', _shutdown)
 
 # --------------------------------------------------------------------------
