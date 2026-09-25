@@ -1181,3 +1181,8 @@ details.fgroup[open]{padding-bottom:12px}
 .dlichart .dcnow{fill:#e8b04b}
 .lctarget{font-weight:400;opacity:.8;font-size:.85em}
 .setupsens b{margin-right:4px}
+
+/* the camera and the fan belong to one setup: hide them on the other tabs */
+body.camelsewhere #photocard, body.camelsewhere #videocard,
+body.camelsewhere #reportcard{display:none !important}
+body.fanelsewhere #fanrow, body.fanelsewhere #fanslider{display:none !important}

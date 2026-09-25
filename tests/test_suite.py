@@ -767,6 +767,60 @@ def _setups():
     c.post("/api/settings", json={"setups": []})
 
 
+def _fan_camera_timing():
+    tz = ZoneInfo(g.settings["timezone"])
+    base = [{"name": "Seedlings", "light": "second", "lux": "", "sensors": [], "dli_low": 10, "dli_high": 15},
+            {"name": "Transplants", "light": "main", "lux": "lux", "sensors": [], "dli_low": 15, "dli_high": 20}]
+    two_fans = [dict(base[0], fan=True), dict(base[1], fan=True)]
+    e = c.post("/api/settings", json={"setups": two_fans}).get_json()
+    check(not e["ok"] and "fan" in e["errors"].get("setups", ""), "the fan can belong to only one setup")
+    with g.settings_lock:
+        g.settings.update(light2_start="20:00", light2_end="02:00", light2_on=True)
+    r = c.post("/api/settings", json={"setups": [dict(base[0], fan=True, camera=True), base[1]]}).get_json()
+    cfg = dict(g.settings)
+    now = datetime.now(tz)
+    mon, moff = now.replace(hour=7, minute=0), now.replace(hour=19, minute=0)
+    sd, tr = g.setups(cfg)
+    on2, off2 = g.setup_window(cfg, sd, mon, moff)
+    check(r["ok"] and (on2.hour, off2.hour) == (20, 2) and off2 > on2
+          and g.setup_window(cfg, tr, mon, moff) == (mon, moff),
+          "each setup uses its own light's hours; an overnight window ends the next day")
+    none_on, none_off = g.setup_window(cfg, dict(sd, light=""), mon, moff)
+    check(none_on == mon and none_off == off2, "a setup with no light spans both lights")
+    fon, foff = g.setup_window(cfg, g.setup_with(cfg, "fan"), mon, moff)
+    want, _ = g.fan_should_run(dict(cfg, fan_humidity_on=0), now.replace(hour=21, minute=0), fon, foff)
+    gl = (APP / "growlight.py").read_text()
+    check(want and 'setup_window(cfg, setup_with(cfg, "fan")' in gl,
+          "the fan runs on its setup's light hours (21:00 under a 20:00-02:00 panel)")
+    st = {x["id"]: x for x in c.get("/api/status").get_json()["setups"]}
+    check(st["seedlings"]["on"] and datetime.fromisoformat(st["seedlings"]["on"]).hour == 20
+          and st["seedlings"]["camera"] and st["seedlings"]["fan"],
+          "the status gives each setup its own light window and its fan and camera")
+    calls = {"n": 0}
+    real_sb, real_usb = g.set_brightness, g._usb_capture
+    g.set_brightness = lambda *a, **k: calls.__setitem__("n", calls["n"] + 1)
+    g._usb_capture = lambda cfg_, out, w, h, warmup=None: (False, "test")
+    try:
+        with g.settings_lock:
+            g.settings["camera_backend"] = "usb"
+        g.take_photo(dict(g.settings), now)
+        n_second = calls["n"]
+        c.post("/api/settings", json={"setups": [dict(base[0], fan=True), dict(base[1], camera=True)]})
+        g.take_photo(dict(g.settings), now)
+        n_main = calls["n"] - n_second
+    finally:
+        g.set_brightness, g._usb_capture = real_sb, real_usb
+    check(n_second == 0 and n_main == 1,
+          "the capture brightness bump only touches the main light when the camera watches it")
+    lm = g.gather_report_data()["light_metrics"]
+    check(lm["dli_target"] == [15.0, 20.0] and lm["photo_setup"] == "Transplants",
+          f"the AI report judges the camera's setup ({lm.get('photo_setup')}, {lm.get('dli_target')})")
+    js = (APP / "static" / "app.js").read_text()
+    check("camelsewhere" in js and "fanelsewhere" in js and 'data-flag="fan"' in js,
+          "the camera cards and fan controls show only on their setup's tab")
+    c.post("/api/settings", json={"setups": []})
+
+
 def _shutdown():
     """Last: sets the shutdown flag for good, the way SIGTERM does."""
     with g.settings_lock:
@@ -845,6 +899,7 @@ run('Camera modes and crop reset', _camera_modes_and_reset)
 run('Camera crop', _camera_crop)
 run('AI report reply', _ai_reply)
 run('Grow setups', _setups)
+run('Fan, camera and verdict timing', _fan_camera_timing)
 run('Shutdown', _shutdown)
 
 # --------------------------------------------------------------------------

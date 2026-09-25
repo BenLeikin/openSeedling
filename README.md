@@ -151,6 +151,11 @@ Settings, Setups. Each setup has:
 - an optional **lux per umol** factor for that light's spectrum (blank uses
   `lux_to_ppfd_k`);
 - a **DLI target band**;
+- whether the **fan** and the **camera** are here (one setup each). The fan's
+  auto mode then runs on this setup's light hours; the camera captures during
+  them, its capture brightness is applied only when this setup is on the main
+  light, and the snapshot, timelapse and AI report show on this tab only (the
+  report judges this setup's light). The fan controls show on this tab only;
 - the **trays** that belong to it. None ticked shows every tray. A tray's own
   probe, float and canopy readings come with it;
 - the **sensors** that belong to it. None ticked shows every sensor.
@@ -169,6 +174,10 @@ on a tab whose light is the second fixture, Auto/On/Off and the slider set that
 light (`light2_override`, `light2_bright`) and dragging the chart's edges sets
 its hours (`light2_start`, `light2_end`); windows that cross midnight are not
 draggable. The one-line second-light status is hidden when there are tabs.
+
+Each setup's Plan verdict waits for its own light: the day is judged once that
+light's hours are over and its sensor has read dark for a quarter hour (a setup
+with no light waits for both lights).
 
 The Day card also charts daily light through today (solid) and yesterday
 (dashed) against the target: the shaded band is where the day should end, and

@@ -1729,6 +1729,8 @@ def gather_report_data():
     """Assemble the controller snapshot the AI report is built from."""
     with settings_lock:
         cfg = dict(settings)
+    # the photo is of the camera's setup, so its light is the one that matters
+    _cam = setup_with(cfg, "camera") or setups(cfg)[0]
     with state_lock:
         st = dict(state)
     tz = ZoneInfo(cfg["timezone"])
@@ -1908,7 +1910,10 @@ def gather_report_data():
                 + f", mode {cfg.get('fan_mode', 'auto')}") if FAN_HW else None,
         "pressure_trend": pressure_tendency(),
         "light_metrics": {"ppfd": ppfd_from_lux((snap.get("lux") or (None, None))[1]),
-                          "dli": dli_today(), "dli_target": list(dli_target(cfg)),
+                          "dli": (dli_today(_cam["lux"], setup_k(_cam))
+                                  if _cam.get("lux") else None),
+                          "dli_target": list(setup_band(_cam)),
+                          "photo_setup": _cam.get("name") if len(setups(cfg)) > 1 else None,
                           "setups": [{"name": st.get("name"),
                                       "dli": (dli_today(st["lux"], setup_k(st))
                                               if st.get("lux") else None),
@@ -2736,7 +2741,9 @@ def control_loop():
             elif mode == "off":
                 set_fan(0, "manual")
             else:
-                want, why = fan_should_run(cfg, now, on_time, off_time)
+                fon, foff = setup_window(cfg, setup_with(cfg, "fan") or {"light": "main"},
+                                         on_time, off_time)
+                want, why = fan_should_run(cfg, now, fon, foff)
                 set_fan(cfg.get("fan_auto_speed", 70) if want else 0, why)
             with state_lock:
                 l2_now = light2_state["level"]
@@ -2898,7 +2905,12 @@ def take_photo(cfg, now, manual=False):
     capturing = True
     saved = None
     try:
-        set_brightness(cfg["capture_brightness"])
+        # The capture brightness is a main-light setting: only raise it when
+        # the camera watches the main light's setup, or it would flash the
+        # wrong area and leave the photographed one as it was.
+        cam = setup_with(cfg, "camera")
+        if cam is None or cam.get("light") == "main":
+            set_brightness(cfg["capture_brightness"])
         time.sleep(2)  # let light and auto-exposure settle
         suffix = "_m" if manual else ""
         fname = TIMELAPSE_DIR / f"{now:%Y%m%d_%H%M%S}{suffix}.jpg"
@@ -2992,6 +3004,9 @@ def capture_loop():
             now = datetime.now(tz)
             with state_lock:
                 on_time, off_time = state["on"], state["off"]
+            cam = setup_with(cfg, "camera")
+            if cam and on_time is not None:
+                on_time, off_time = setup_window(cfg, cam, on_time, off_time)
             in_day = on_time is not None and on_time <= now <= off_time
             due = (last_shot is None or
                    now - last_shot >= timedelta(minutes=cfg["capture_interval_min"]))
@@ -5164,6 +5179,30 @@ def light_label(value, cfg=None):
     return {"main": "main light", "second": "second light"}.get(value, "no light")
 
 
+def setup_window(cfg, setup, main_on, main_off):
+    """(on, off) for a setup's own light today. The main light's window for
+    the main light; the second light's clock window for the second (an end
+    at or before the start runs past midnight); for no light, the span of
+    both, so a verdict never judges a day before every light is out."""
+    light = (setup or {}).get("light", "main")
+    if light == "main" or main_on is None:
+        return main_on, main_off
+    tz = main_on.tzinfo
+    day = datetime.now(tz).date()
+    on2 = _clock(day, tz, cfg.get("light2_start"), "08:00")
+    off2 = _clock(day, tz, cfg.get("light2_end"), "20:00")
+    if off2 <= on2:
+        off2 += timedelta(days=1)
+    if light == "second":
+        return on2, off2
+    return min(main_on, on2), max(main_off, off2)
+
+
+def setup_with(cfg, flag):
+    """The setup that has the fan or the camera ("fan" / "camera"), or None."""
+    return next((st for st in setups(cfg) if st.get(flag)), None)
+
+
 def main_lux_key(cfg=None):
     """The light sensor under the main light: what a calibration sweep reads."""
     for st in setups(cfg):
@@ -5218,6 +5257,7 @@ def dli_curves(key, k, tz):
 def setup_status(cfg, setup, on_time, off_time, tz):
     """One setup as the dashboard shows it: its measured day and verdict."""
     key, k = setup.get("lux") or "", setup_k(setup)
+    on_time, off_time = setup_window(cfg, setup, on_time, off_time)
     day = day_light_summary(key, k) if key else None
     if day:
         # What the rest of today should add, as the SENSOR recorded it over the
@@ -5234,6 +5274,9 @@ def setup_status(cfg, setup, on_time, off_time, tz):
             "light_label": light_label(setup.get("light", ""), cfg) if setup.get("light") else "",
             "sensors": list(setup.get("sensors") or []),
             "trays": [str(t) for t in (setup.get("trays") or [])],
+            "fan": bool(setup.get("fan")), "camera": bool(setup.get("camera")),
+            "on": on_time.isoformat() if on_time else None,
+            "off": off_time.isoformat() if off_time else None,
             "band": [lo, hi], "day": day,
             "plan": light_plan(cfg, on_time, off_time, setup)}
 
@@ -5789,6 +5832,10 @@ def _v_setups(v):
             raise ValueError(f"{name}: the DLI band needs a low and a high")
         if not (0.5 <= lo < hi <= 65):
             raise ValueError(f"{name}: the DLI band low must be below the high (0.5 to 65)")
+        for flag in ("fan", "camera"):
+            if x.get(flag):
+                if any(o.get(flag) for o in out):
+                    raise ValueError(f"{name}: the {flag} is already assigned to another setup")
         ids.add(sid)
         if light:
             lights.add(light)
@@ -5796,6 +5843,7 @@ def _v_setups(v):
             luxes.add(lux)
         out.append({"id": sid, "name": name, "light": light, "lux": lux, "k": k,
                     "sensors": sorted(set(sens)), "trays": trays_,
+                    "fan": bool(x.get("fan")), "camera": bool(x.get("camera")),
                     "dli_low": lo, "dli_high": hi})
     return out
 

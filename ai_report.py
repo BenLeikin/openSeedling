@@ -164,6 +164,9 @@ def build_context(d):
             line += (f"; daily light integral so far {lm['dli']} mol/m2/day "
                      f"(the grower's seedling target is {lo:g}-{hi:g})")
         L.append(line)
+    if lm.get("photo_setup"):
+        L.append(f"The photo shows the {lm['photo_setup']} setup; judge its light "
+                 "against that setup's target above.")
     sets = lm.get("setups") or []
     if len(sets) > 1:
         L.append("The grow is split into separate setups, each under its own light; "

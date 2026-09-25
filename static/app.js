@@ -510,6 +510,13 @@ function applySetup(j){
   {const lbl=document.getElementById('dlisetup');
    if(lbl)lbl.textContent=(setupsList.length>1&&cs)?' \u00b7 '+cs.name:'';}
   applyLightView(j, cs);
+  // the camera's cards and the fan controls live on their own setup's tab
+  const multi=setupsList.length>1;
+  const camSet=setupsList.find(s=>s.camera), fanSet=setupsList.find(s=>s.fan);
+  const camElsewhere=!!(multi&&camSet&&cs&&camSet.id!==cs.id);
+  document.body.classList.toggle('camelsewhere', camElsewhere);
+  if(camElsewhere)document.body.classList.add('nocam');
+  document.body.classList.toggle('fanelsewhere', !!(multi&&fanSet&&cs&&fanSet.id!==cs.id));
   renderSetupConfig(j);
 }
 // Which light the Light card, the day phase and the schedule chart describe:
@@ -579,7 +586,8 @@ function renderSetupConfig(j){
   setupDraft=JSON.parse(JSON.stringify((j.settings&&j.settings.setups&&j.settings.setups.length)
     ? j.settings.setups
     : (j.setups||[]).map(s=>({id:s.id,name:s.name,light:s.light,lux:s.lux,
-        k:null,sensors:s.sensors,trays:s.trays||[],dli_low:s.band[0],dli_high:s.band[1]}))));
+        k:null,sensors:s.sensors,trays:s.trays||[],fan:!!s.fan,camera:!!s.camera,
+        dli_low:s.band[0],dli_high:s.band[1]}))));
   drawSetupConfig();
 }
 function drawSetupConfig(){
@@ -603,6 +611,10 @@ function drawSetupConfig(){
         <div><label>DLI target low <input data-f="dli_low" type="number" min="0.5" max="65" step="0.5" value="${s.dli_low}"></label></div>
         <div><label>DLI target high <input data-f="dli_high" type="number" min="1" max="65" step="0.5" value="${s.dli_high}"></label></div>
       </div>
+      <div class="setupsens"><b>Here</b>
+        <label><input type="checkbox" data-flag="fan"${s.fan?' checked':''}> Fan</label>
+        <label><input type="checkbox" data-flag="camera"${s.camera?' checked':''}> Camera</label>
+        <span class="fhint">one setup each; the fan follows this setup's light</span></div>
       <div class="setupsens"><b>Trays</b>${trayOpts.map(([id,lbl])=>`<label><input type="checkbox" data-t="${esc(id)}"`
         +`${(s.trays||[]).includes(id)?' checked':''}> ${esc(lbl)}</label>`).join('')}
         <span class="fhint">none ticked = all trays</span></div>
@@ -622,6 +634,14 @@ function drawSetupConfig(){
       if(f)s[f]=(f==='dli_low'||f==='dli_high')?parseFloat(ev.target.value)
         :(f==='k'?(ev.target.value===''?null:parseFloat(ev.target.value)):ev.target.value);
       if(k){const set=new Set(s.sensors||[]);ev.target.checked?set.add(k):set.delete(k);s.sensors=[...set];}
+      const fl=ev.target.dataset.flag;
+      if(fl){
+        // one fan, one camera: ticking it here takes it from any other setup
+        setupDraft.forEach((o,i)=>{if(i!==+fs.dataset.i)o[fl]=false;});
+        s[fl]=ev.target.checked;
+        box.querySelectorAll(`input[data-flag="${fl}"]`).forEach(cb=>{
+          if(cb!==ev.target)cb.checked=false;});
+      }
       const tr=ev.target.dataset.t;
       if(tr){const set=new Set(s.trays||[]);ev.target.checked?set.add(tr):set.delete(tr);s.trays=[...set];}
     });
