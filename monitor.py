@@ -106,6 +106,7 @@ def gather_report_data():
     pcal = cfg.get("probe_cal") or {}
     pnames = cfg.get("probe_names") or {}
     canopy, probes, soiltemp, env = {}, {}, {}, {}
+    probe_txt = {}          # tray id -> moisture text, for the per-setup view
     trays_cfg = cfg.get("trays") or {}
     snap = db.latest()
     stf = water.latest_soil_temp_f(snap)
@@ -124,18 +125,22 @@ def gather_report_data():
             if fv is None:
                 fv = v
             pm, approx = water.probe_moisture_any(fv, tcal, stf)
-            nm = pnames.get(t) or f"Soil moisture {t}"
+            base = pnames.get(t) or f"Soil moisture {t}"
             flag = water.probe_cal_flag(fv, tcal)
+            note = ""
             if flag:
-                nm += (" (reading beyond the wet anchor - recalibrate wet)"
-                       if flag == "below_wet"
-                       else " (reading beyond the dry anchor - recalibrate dry)")
+                note = (" (reading beyond the wet anchor - recalibrate wet)"
+                        if flag == "below_wet"
+                        else " (reading beyond the dry anchor - recalibrate dry)")
             elif approx:
-                nm += " (approx)"
+                note = " (approx)"
+            nm = base + note
             if pm is not None:
                 probes[nm] = pm
             else:
                 probes[nm] = round(v, 3)
+            probe_txt[t] = (f"{pm}%" if pm is not None
+                            else f"{round(v, 3)} V, not calibrated") + note
         elif k.startswith("temp:soil"):
             label = "Soil" if k == "temp:soil" else f"Soil {k.split('_')[-1]}"
             soiltemp[label] = status_mod.temp_out(v)
@@ -151,7 +156,7 @@ def gather_report_data():
         fstates[_t] = "no sensor" if _fv is None else ("not full" if _fv >= 1 else "full")
     flabel = ", ".join(f"tray {t}: {v}" for t, v in sorted(fstates.items()))
     grid = cfg.get("grid") or {}
-    planting = {}
+    planting, planting_by_tray = {}, {}
     for tid, t in sorted((cfg.get("trays") or {}).items()):
         rows = []
         for cid, v in sorted((t.get("cells") or {}).items()):
@@ -189,6 +194,7 @@ def gather_report_data():
                 rows.append(f"{cid}: {' '.join(bits)}")
         if rows:
             planting[t.get("label", f"Tray {tid}")] = rows
+            planting_by_tray[str(tid)] = rows
 
     # Per-variety germination, from live cells AND finished plantings. A cell
     # that was transplanted still germinated; one that died before sprouting is
@@ -260,6 +266,7 @@ def gather_report_data():
             line += f", {g['moved']} transplanted out"
         germ_out[seed] = line
     bright = round(st.get("brightness") or 0)
+    by_setup = report_by_setup(cfg, st, snap, now, probe_txt, fstates, planting_by_tray)
     return {
         "date": now.strftime("%Y-%m-%d %H:%M"),
         "days_running": None,
@@ -302,7 +309,113 @@ def gather_report_data():
                                   key=lambda s: s["last_run"], reverse=True)
                            if s["last_detail"]), "none"),
         "notes": cfg.get("ai_notes", ""),
+        # every reading under the setup it is in; worked out from the setups
+        # as they are now, so a new assignment is in the next report
+        "by_setup": by_setup,
     }
+
+
+def _setup_light(cfg, stp, state, now):
+    """What a setup's own light is doing: fixture, schedule, level now."""
+    which = stp.get("light") or ""
+    if not which:
+        return None
+    out = {"fixture": setups_mod.light_label(which, cfg)}
+    if which == "main":
+        out["schedule"] = (f"{state['on'].strftime('%H:%M')}-{state['off'].strftime('%H:%M')}"
+                           if state.get("on") and state.get("off") else "?")
+        out["now"] = round(state.get("brightness") or 0)
+        ov = cfg.get("light_override", "auto")
+        out["mode"] = "follows its schedule" if ov == "auto" else f"held {ov} by hand"
+        out["max"] = cfg.get("max_bright")
+    else:
+        if not cfg.get("light2_on"):
+            out.update(schedule="turned off in Settings", now=0, mode="off", max=None)
+            return out
+        out["schedule"] = f"{cfg.get('light2_start', '08:00')}-{cfg.get('light2_end', '20:00')}"
+        lvl, why = light_mod.light2_level(cfg, now)
+        out["now"] = round(lvl)
+        ov = cfg.get("light2_override", "auto")
+        out["mode"] = "follows its schedule" if ov == "auto" else f"held {ov} by hand"
+        out["max"] = cfg.get("light2_bright")
+    return out
+
+
+def report_by_setup(cfg, state, snap, now, probe_txt, floats, planting_by_tray):
+    """The report's data grouped by grow setup, from the setups as saved now.
+
+    Each tray and reading goes to the setup it belongs to
+    (setups.tray_setup / sensor_setup); what belongs to none is shared. The
+    camera, fan and reservoir go to the setup that has them ticked."""
+    sts = setups_mod.setups(cfg)
+    trays_cfg = cfg.get("trays") or {}
+    cam_trays = set(setups_mod.camera_trays(cfg))
+    cam = setups_mod.setup_with(cfg, "camera")
+
+    def reading(key, v):
+        if key.startswith("temp:soil"):
+            label = "soil temperature" if key == "temp:soil" else f"soil temperature {key.split('_')[-1]}"
+            return label, f"{status_mod.temp_out(v)}{status_mod.temp_unit()}"
+        if key == "temp:air":
+            return "air", f"{status_mod.temp_out(v)}{status_mod.temp_unit()}"
+        if key == "humidity":
+            return "RH", f"{round(v)}%"
+        if key == "pressure":
+            return "pressure", f"{status_mod.press_out(v)} {status_mod.press_unit()}"
+        if key.startswith("lux"):
+            return f"light sensor {key}", f"{round(v)} lx"
+        return None
+
+    groups = {st.get("id") or st.get("name"): {
+        "name": st.get("name"), "light": _setup_light(cfg, st, state, now),
+        "photo": bool(st.get("camera")) or len(sts) == 1,
+        "fan": bool(st.get("fan")) or len(sts) == 1,
+        "reservoir": bool(st.get("reservoir")) or len(sts) == 1,
+        "band": list(setups_mod.setup_band(st)),
+        "light_sensor": st.get("lux") or None, "ppfd": None, "lux": None, "dli": None,
+        "trays": [], "readings": {}} for st in sts}
+    shared = {"trays": [], "readings": {}}
+
+    def group_of(stp):
+        return groups[stp.get("id") or stp.get("name")] if stp else shared
+
+    for sid, stp in zip(groups, sts):
+        g = groups[sid]
+        key = stp.get("lux")
+        if key:
+            val = (snap.get(key) or (None, None))[1]
+            if val is not None:
+                g["lux"] = round(val)
+                g["ppfd"] = round(val * setups_mod.canopy_factor() / setups_mod.setup_k(stp), 1)
+            g["dli"] = setups_mod.dli_today(key, setups_mod.setup_k(stp))
+    for tid in sorted(str(t) for t in trays_cfg):
+        t = trays_cfg.get(tid) or {}
+        entry = {"label": t.get("label") or f"Tray {tid}", "id": tid,
+                 "moisture": probe_txt.get(tid),
+                 "canopy": (round(snap[f"canopy:{tid}"][1], 1)
+                            if f"canopy:{tid}" in snap and tid in cam_trays else None),
+                 "float": floats.get(tid),
+                 "planting": planting_by_tray.get(tid) or []}
+        group_of(setups_mod.tray_setup(cfg, tid))["trays"].append(entry)
+    for key, (ts, v) in sorted(snap.items()):
+        if key.startswith(("probe:", "canopy:", "float:")):
+            continue                      # reported with their tray
+        if any(key == stp.get("lux") for stp in sts):
+            continue                      # reported as the setup's light sensor
+        r = reading(key, v)
+        if r:
+            group_of(setups_mod.sensor_setup(cfg, key))["readings"][r[0]] = r[1]
+    return {"setups": list(groups.values()), "shared": shared,
+            "photo_setup_known": cam is not None or len(sts) == 1,
+            # take_photo raises the light only when the camera's setup is on
+            # the main light; otherwise the photo is at whatever it was
+            "capture_brightness": (cfg.get("capture_brightness")
+                                   if cam is None or cam.get("light") == "main" else None),
+            "fan": ((f"{'on' if hardware.fan_state['on'] else 'off'}"
+                     + (f" at {hardware.fan_state['speed']}% ({hardware.fan_state['reason']})"
+                        if hardware.fan_state["on"] else f" ({hardware.fan_state['reason']})")
+                     + f", mode {cfg.get('fan_mode', 'auto')}") if hardware.FAN_HW else None),
+            "reservoir": water.reservoir_state()}
 
 
 def run_report(reason="daily"):

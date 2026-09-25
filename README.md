@@ -205,6 +205,13 @@ the wedge is where the total should be at each hour of the photoperiod.
   says was sown there; it never guesses species), light/water assessments,
   concerns, and recommendations. Runs daily at a set time or on demand; waits
   for NTP sync at boot so the clockless Pi never fires a spurious report.
+- With two or more grow setups, the data is grouped by setup: each block has
+  that setup's light (fixture, schedule, level), its light sensor, PPFD and DLI
+  against its own target, its trays with probe moisture, canopy, float and
+  planting, its other sensors, and the fan or reservoir if ticked there. The
+  setup holding the camera is marked as the one in the photo. A reading no
+  setup claims is listed as shared. The grouping is worked out from Settings,
+  Setups each time a report runs, so a change applies to the next report.
 
 ### Device and platform
 

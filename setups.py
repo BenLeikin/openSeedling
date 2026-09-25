@@ -1,6 +1,7 @@
 """Grow setups, their light windows, DLI integration and curves, and the
 Plan card's verdicts."""
 
+import re
 import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -269,7 +270,13 @@ def light_label(value, cfg=None):
     for o in light_options(cfg):
         if o["value"] == value:
             return o["label"]
-    return {"main": "main light", "second": "second light"}.get(value, "no light")
+    if value == "second":               # no second channel wired: still name the fixture
+        if cfg is None:
+            with config.settings_lock:
+                cfg = dict(config.settings)
+        main = light_mod.light_backend(cfg)
+        return FIXTURE_LABELS["pwm" if main != "pwm" else "dim"] + " (not wired)"
+    return {"main": "main light"}.get(value, "no light")
 
 
 def setup_window(cfg, setup, main_on, main_off):
@@ -300,6 +307,40 @@ def camera_trays(cfg):
     got = [str(t) for t in ((cam or {}).get("trays") or [])]
     return got or sorted(str(t) for t in (cfg.get("trays") or {}))
 
+
+
+# Which setup a tray or a reading belongs to, for anything that has to say so
+# (the AI report). The same rule the dashboard tabs use: listed wins; a tray's
+# own probe, canopy and float readings go with the tray; otherwise the one
+# setup that leaves its list empty takes the rest. None means shared: not
+# assignable to one setup (two setups leave the list empty, or none does).
+_TRAY_KEY = re.compile(r"^(probe|canopy|float):(.+)$")
+
+
+def tray_setup(cfg, tid):
+    sts = setups(cfg)
+    if len(sts) == 1:
+        return sts[0]
+    tid = str(tid)
+    for st in sts:
+        if tid in [str(t) for t in (st.get("trays") or [])]:
+            return st
+    open_ = [st for st in sts if not st.get("trays")]
+    return open_[0] if len(open_) == 1 else None
+
+
+def sensor_setup(cfg, key):
+    sts = setups(cfg)
+    if len(sts) == 1:
+        return sts[0]
+    m = _TRAY_KEY.match(key)
+    if m:
+        return tray_setup(cfg, m.group(2))
+    for st in sts:
+        if key == st.get("lux") or key in (st.get("sensors") or []):
+            return st
+    open_ = [st for st in sts if not st.get("sensors")]
+    return open_[0] if len(open_) == 1 else None
 
 def setup_with(cfg, flag):
     """The setup that has the fan or the camera ("fan" / "camera"), or None."""

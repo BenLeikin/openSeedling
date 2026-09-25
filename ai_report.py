@@ -112,9 +112,95 @@ something you are reasonably sure about.
 - Keep each string concise."""
 
 
+def _setup_lines(bs, U):
+    """The per-setup block: every reading under the setup it is in."""
+    L = []
+    sts = bs.get("setups") or []
+    many = len(sts) > 1
+    if many:
+        L.append("The grow is split into separate setups, each an area under its own "
+                 "light. Every reading below is listed under the setup it is in; do not "
+                 "apply one setup's readings to another.")
+        if not bs.get("photo_setup_known"):
+            L.append("Which setup the photo shows is not set, so do not assume it is any "
+                     "particular one.")
+    temp_band = ("18-29C germination, 21-27C once sprouted" if U["temp"] == "C"
+                 else "65-85F germination, 70-80F once sprouted")
+    for g in sts:
+        head = f"Setup \"{g.get('name')}\"" if many else "Setup"
+        if many and g.get("photo"):
+            head += " (THE PHOTO SHOWS THIS SETUP)"
+        L.append(head + ":")
+        lt = g.get("light")
+        if lt:
+            line = f"  Light: {lt['fixture']}, schedule {lt['schedule']}, {lt['mode']}, now {lt['now']}%"
+            if lt.get("max") is not None:
+                line += f" (set to {lt['max']}% when on)"
+            L.append(line)
+        else:
+            L.append("  Light: none assigned")
+        lo, hi = g.get("band") or (15, 20)
+        if g.get("light_sensor"):
+            bits = []
+            if g.get("ppfd") is not None:
+                bits.append(f"{g['ppfd']} PPFD (umol/m2/s) at canopy height ({g['lux']} lx)")
+            else:
+                bits.append("no recent reading")
+            if g.get("dli") is not None:
+                bits.append(f"daily light so far {g['dli']} mol/m2/day")
+            L.append(f"  Light sensor ({g['light_sensor']}): " + "; ".join(bits)
+                     + f"; the grower's DLI target here is {lo:g}-{hi:g}")
+        else:
+            L.append(f"  Light sensor: none in this setup, so its light is not measured; "
+                     f"the grower's DLI target here is {lo:g}-{hi:g}")
+        for t in g.get("trays") or []:
+            L.extend(_tray_lines(t))
+        rd = g.get("readings") or {}
+        if rd:
+            L.append("  Sensors: " + ", ".join(f"{k} {v}" for k, v in rd.items()))
+            if any(k.startswith("soil temperature") for k in rd):
+                L.append(f"    (chile soil temperature: {temp_band}; sustained heat past "
+                         "that stretches seedlings)")
+        if g.get("fan") and bs.get("fan"):
+            L.append(f"  Fan: {bs['fan']}")
+        if g.get("reservoir") and bs.get("reservoir"):
+            L.append(f"  Source reservoir: {bs['reservoir']}"
+                     + (" (pump runs are refused)" if bs["reservoir"] == "empty" else ""))
+    sh = bs.get("shared") or {}
+    if many and (sh.get("trays") or sh.get("readings")):
+        L.append("Not assigned to one setup:")
+        for t in sh.get("trays") or []:
+            L.extend(_tray_lines(t))
+        if sh.get("readings"):
+            L.append("  Sensors: " + ", ".join(f"{k} {v}" for k, v in sh["readings"].items()))
+    if many and not any(g.get("fan") for g in sts) and bs.get("fan"):
+        L.append(f"Fan (not assigned to a setup): {bs['fan']}")
+    if many and not any(g.get("reservoir") for g in sts) and bs.get("reservoir"):
+        L.append(f"Source reservoir (not assigned to a setup): {bs['reservoir']}")
+    return L
+
+
+def _tray_lines(t):
+    bits = []
+    if t.get("moisture"):
+        bits.append(f"soil moisture {t['moisture']} (probe; 100=just watered, lower=drier)")
+    if t.get("canopy") is not None:
+        bits.append(f"canopy {t['canopy']}% (camera share of plant pixels; a trend, "
+                    "understated under a strongly tinted light)")
+    if t.get("float"):
+        bits.append(f"float {t['float']}")
+    L = [f"  Tray \"{t['label']}\"" + (": " + "; ".join(bits) if bits else "")]
+    if t.get("planting"):
+        L.append("    Planting: " + "; ".join(t["planting"]))
+    return L
+
+
 def build_context(d):
     """Turn the controller data dict into a compact text block for the prompt."""
     L = []
+    bs = d.get("by_setup")
+    if bs:
+        return _build_grouped(d, bs)
     L.append(f"Date: {d.get('date','?')}")
     if d.get("days_running") is not None:
         L.append(f"Days of logged data: {d['days_running']}")
@@ -202,6 +288,41 @@ def build_context(d):
     if d.get("reservoir"):
         L.append(f"Source reservoir level: {d['reservoir']}"
                  + (" (pump runs are refused)" if d["reservoir"] == "empty" else ""))
+    if d.get("pump_today_s") is not None:
+        L.append(f"Pump runtime today: {d['pump_today_s']}s; last: {d.get('pump_last','none')}")
+    if d.get("notes"):
+        L.append(f"Grower notes: {d['notes']}")
+    return "\n".join(L)
+
+
+def _build_grouped(d, bs):
+    """build_context when the data is grouped by setup (what the controller
+    sends): the global lines, then one block per setup."""
+    L = [f"Date: {d.get('date','?')}"]
+    if d.get("days_running") is not None:
+        L.append(f"Days of logged data: {d['days_running']}")
+    if d.get("location"):
+        L.append(f"Location: {d['location']}")
+    U = d.get("units") or {"temp": "F", "press": "hPa"}
+    g = d.get("grid") or {}
+    if g:
+        L.append(f"Photo grid: {g.get('rows','?')} rows x {g.get('cols','?')} cols")
+        names = g.get("names") or {}
+        if names:
+            L.append("Cell labels: " + ", ".join(f"{k}={v}" for k, v in names.items()))
+    if bs.get("capture_brightness") is not None:
+        L.append(f"The photo is taken with its setup's light at {bs['capture_brightness']}%.")
+    L.append("Planting and readings by setup (the planting map records what is sown "
+             "where; use it instead of guessing species):")
+    L.extend(_setup_lines(bs, U))
+    pt = d.get("pressure_trend")
+    if pt:
+        L.append(f"Barometric trend: {pt['words']} ({pt['change_3h']:+} hPa over 3h)"
+                 + (f", {pt['change_24h']:+} hPa over 24h" if pt.get("change_24h") is not None else "")
+                 + "  [trend deltas always in hPa]")
+    gm = d.get("germination") or {}
+    if gm:
+        L.append("Germination by variety: " + "; ".join(f"{k}: {v}" for k, v in gm.items()))
     if d.get("pump_today_s") is not None:
         L.append(f"Pump runtime today: {d['pump_today_s']}s; last: {d.get('pump_last','none')}")
     if d.get("notes"):
