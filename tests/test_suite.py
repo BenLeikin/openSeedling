@@ -1203,6 +1203,115 @@ def _report_by_setup():
         with config.settings_lock:
             config.settings["light2_on"] = saved["light2_on"]
 
+
+def _startup_log_noise():
+    """Three things from a real start's journal (25 Sep, 16:09)."""
+    import logging
+    # 1. "lux sensor not found; disabled" logged just before "found"
+    seen = []
+
+    class H(logging.Handler):
+        def emit(self, rec):
+            seen.append(rec.getMessage())
+    h = H()
+    sensors.log.addHandler(h)
+    opened = {"n": 0}
+
+    class FakeBH:
+        def __init__(self, i2c, address):
+            if address != 0x23:
+                raise OSError("no device")
+            opened["n"] += 1
+            self.first = True
+
+        @property
+        def lux(self):
+            if self.first:
+                self.first = False
+                time.sleep(0.3)           # a slow first read, as on the Pi
+            return 100.0
+    saved_mod, saved_i2c = sys.modules.get("adafruit_bh1750"), sensors._i2c
+    saved_state = {a: dict(st) for a, st in sensors._lux.items()}
+    saved_en = sensors.ENABLED["lux"]
+    sys.modules["adafruit_bh1750"] = types.SimpleNamespace(BH1750=FakeBH)
+    sensors._i2c = lambda: object()
+    sensors.ENABLED["lux"] = True
+    for st in sensors._lux.values():
+        st.update(dev=None, init=False, fail=0, seen=False)
+    if hasattr(sensors._read_lux, "_warned"):
+        del sensors._read_lux._warned
+    got = []
+    try:
+        th = [threading.Thread(target=lambda: got.append(sensors._read_lux())) for _ in range(2)]
+        for t in th:
+            t.start()
+        for t in th:
+            t.join(5)
+    finally:
+        sys.modules["adafruit_bh1750"], sensors._i2c = saved_mod, saved_i2c
+        sensors.ENABLED["lux"] = saved_en
+        for a, st in saved_state.items():
+            sensors._lux[a].update(st)
+        sensors.log.removeHandler(h)
+    check(not any("not found" in m for m in seen) and opened["n"] == 1
+          and all(g.get("lux") == 100.0 for g in got) and len(got) == 2,
+          "two loops reading the light sensor at start never log it missing while it is being opened")
+    # 2. the RuntimeWarning about I2C frequency
+    args = {}
+
+    class FakeExt:
+        def __init__(self, bus, frequency=400000):
+            args["frequency"] = frequency
+    saved_ext, saved_bus = sys.modules.get("adafruit_extended_bus"), sensors._i2c_bus
+    sys.modules["adafruit_extended_bus"] = types.SimpleNamespace(ExtendedI2C=FakeExt)
+    sensors._i2c_bus = None
+    try:
+        sensors._i2c()
+    finally:
+        sys.modules["adafruit_extended_bus"], sensors._i2c_bus = saved_ext, saved_bus
+    check("frequency" in args and args["frequency"] is None,
+          f"the I2C bus is opened without a frequency the library ignores and warns about ({args})")
+    # 3. two ffmpeg runs thumbnailing the same new photo at once
+    name = "20260925_160943_m.jpg"
+    photo = camera_mod.TIMELAPSE_DIR / name
+    photo.write_bytes(b"\xff\xd8\xff\xd9")
+    dst = camera_mod.THUMB_DIR / name
+    dst.unlink(missing_ok=True)
+    runs = []
+    real_run = camera_mod.subprocess.run
+
+    def fake_run(a, **kw):
+        runs.append(list(a))
+        time.sleep(0.3)
+        Path(a[-1]).write_bytes(b"\xff\xd8thumb\xff\xd9")
+        return types.SimpleNamespace(returncode=0, stderr=b"", stdout=b"")
+    with config.settings_lock:
+        cfgt = dict(config.settings, timelapse_flatten=False, roi="")
+    camera_mod.subprocess.run = fake_run
+    try:
+        th = [threading.Thread(target=camera_mod.make_thumb, args=(photo, cfgt)) for _ in range(2)]
+        for t in th:
+            t.start()
+        for t in th:
+            t.join(5)
+    finally:
+        camera_mod.subprocess.run = real_run
+    parts = list(camera_mod.THUMB_DIR.glob("*.part"))
+    check(len(runs) == 1 and dst.exists() and not parts and runs[0][-1].endswith(".part"),
+          f"a new photo is thumbnailed once, written aside and renamed ({len(runs)} runs, {len(parts)} leftovers)")
+    dst.unlink(missing_ok=True)
+    camera_mod.subprocess.run = lambda a, **kw: types.SimpleNamespace(returncode=1, stderr=b"bad", stdout=b"")
+    try:
+        camera_mod.make_thumb(photo, cfgt)
+    finally:
+        camera_mod.subprocess.run = real_run
+    check(not dst.exists() and not list(camera_mod.THUMB_DIR.glob("*.part")),
+          "a failed thumbnail leaves nothing behind, so it is tried again")
+    loop = re.search(r"def capture_loop\(\):[\s\S]*?make_thumb\(missing\)", app_source())
+    check(loop and "None if capturing else" in loop.group(0) and "st_mtime > 10" in loop.group(0),
+          "the backfill leaves a photo alone while it is being captured or is under 10 s old")
+    photo.unlink(missing_ok=True)
+
 def run(name, fn):
     """A section that crashes counts as one failure; the rest still run."""
     section(name)
@@ -1232,6 +1341,7 @@ run('Probe names', _probe_names)
 run('Per-light calibration and per-tray arming', _per_sensor_controls)
 run('Camera canopy trays', _camera_canopy)
 run('AI report by setup', _report_by_setup)
+run('Startup log noise and thumbnail race', _startup_log_noise)
 run('Shutdown', _shutdown)
 
 # --------------------------------------------------------------------------

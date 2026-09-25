@@ -104,16 +104,32 @@ def parse_roi(s):
     return x, y, w, h
 
 
+_thumb_lock = threading.Lock()
+
+
 def make_thumb(photo_path, cfg=None, dst_dir=None):
     """640px thumbnail for the browser player. Cheap, one-time per photo.
 
     Rectified to match the snapshot and the rendered video, so scrubbing the
     timelapse shows the same corrected view as everything else. Falls back to a
     plain scale if the grid corners are not set or OpenCV is unavailable.
+
+    One at a time, and written under a temporary name then renamed: a manual
+    capture and the capture loop's backfill used to thumbnail the same new
+    photo at once (two ffmpeg runs writing one file), and a thumbnail is
+    served as immutable for a year, so a bad one would stick.
     """
     dst = (dst_dir or THUMB_DIR) / photo_path.name
     if dst.exists():
         return
+    with _thumb_lock:
+        if dst.exists():                 # made while this call waited
+            return
+        _make_thumb(photo_path, cfg, dst)
+
+
+def _make_thumb(photo_path, cfg, dst):
+    part = dst.with_name(dst.name + ".part")     # not *.jpg: never listed
     if cfg is None:
         with config.settings_lock:
             cfg = dict(config.settings)
@@ -130,20 +146,29 @@ def make_thumb(photo_path, cfg=None, dst_dir=None):
                 h, w = warped.shape[:2]
                 if w > 640:
                     warped = cv2.resize(warped, (640, max(1, int(h * 640 / w))))
-                cv2.imwrite(str(dst), warped, [cv2.IMWRITE_JPEG_QUALITY, 82])
-                return
+                ok, buf = cv2.imencode(".jpg", warped, [cv2.IMWRITE_JPEG_QUALITY, 82])
+                if ok:
+                    part.write_bytes(buf.tobytes())
+                    os.replace(part, dst)
+                    return
         except Exception as e:
             log.error(f"thumb rectify failed for {photo_path.name} ({e}); plain scale")
     roi = crop_box(cfg)
     vf = (crop_filter(roi) + "," if roi else "") + "scale=640:-2"
     try:
-        subprocess.run(
+        r = subprocess.run(
             ["ffmpeg", "-loglevel", "error", "-y", "-i", str(photo_path),
-             "-vf", vf, "-q:v", "7", str(dst)],
+             "-vf", vf, "-q:v", "7", "-f", "mjpeg", str(part)],
             capture_output=True, timeout=120)
+        if r.returncode == 0 and part.exists() and part.stat().st_size:
+            os.replace(part, dst)
+        else:
+            log.error(f"thumbnail error for {photo_path.name}: "
+                      f"{(r.stderr or b'').decode(errors='replace')[-200:] or 'no output'}")
     except Exception as e:
         log.error(f"thumbnail error for {photo_path.name}: {e}")
-
+    finally:
+        part.unlink(missing_ok=True)
 
 _frame_lock = threading.Lock()   # one full-size warp at a time on a 512 MB board
 
@@ -429,8 +454,13 @@ def capture_loop():
     last_shot = None
     while True:
         # opportunistic thumbnail backfill, at most one per tick
-        missing = next((p for p in sorted(TIMELAPSE_DIR.glob("*.jpg"))
-                        if not (THUMB_DIR / p.name).exists()), None)
+        # Not while a capture is running, nor for a file under 10 s old: that
+        # photo may still be being written or rotated, and take_photo makes
+        # its own thumbnail once it is done.
+        missing = None if capturing else next(
+            (p for p in sorted(TIMELAPSE_DIR.glob("*.jpg"))
+             if not (THUMB_DIR / p.name).exists()
+             and time.time() - p.stat().st_mtime > 10), None)
         if missing:
             make_thumb(missing)
         with config.settings_lock:

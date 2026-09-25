@@ -360,7 +360,10 @@ def _i2c():
         return _i2c_bus
     try:
         from adafruit_extended_bus import ExtendedI2C
-        _i2c_bus = ExtendedI2C(PROBE_BUS)
+        # frequency=None: the bus speed is the kernel's (dtparam in
+        # config.txt). The library's default 400000 is ignored anyway and
+        # only produced a RuntimeWarning at every start.
+        _i2c_bus = ExtendedI2C(PROBE_BUS, frequency=None)
     except ImportError:
         import board
         import busio
@@ -437,6 +440,10 @@ LUX_ADDRS = {0x23: "lux", 0x5C: "lux:2"}
 # failure and then sparingly, not once per read.
 LUX_REINIT_AFTER = 3
 _lux = {a: {"dev": None, "init": False, "fail": 0, "seen": False} for a in LUX_ADDRS}
+# The sample and live loops both read the lux sensors. Without this, one could
+# find a sensor still being opened by the other, count none found and log
+# "not found; disabled" moments before the other logged it found.
+_lux_lock = threading.Lock()
 
 
 def _lux_open(addr, st):
@@ -464,6 +471,11 @@ def _read_lux():
     """Every BH1750 on the bus, keyed by address (see LUX_ADDRS)."""
     if not ENABLED["lux"]:
         return {}
+    with _lux_lock:
+        return _read_lux_locked()
+
+
+def _read_lux_locked():
     out = {}
     for addr, key in LUX_ADDRS.items():
         st = _lux[addr]
