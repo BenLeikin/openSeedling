@@ -523,7 +523,12 @@ full frame; drag a rectangle over the area to keep and press **Save crop**
 (**Full frame** clears it). The crop is applied when photos are shown, not when
 they are taken, so it can be changed or removed later without losing anything:
 the snapshot, scrubber thumbnails (rebuilt automatically), the next Render and
-the AI report all use it. The cell grid is drawn to match the cropped view. Manual captures are tagged `_m` in the filename; they are analyzed
+the AI report all use it. The cell grid is drawn to match the cropped view.
+
+**Align** shows a live preview in the same camera mode as the timelapse photos
+(`usb_width` x `usb_height`), so it frames exactly what will be captured. A UVC
+camera reads a different part of its sensor in each resolution, so a preview in
+another mode shows a different view. Manual captures are tagged `_m` in the filename; they are analyzed
 only inside the photoperiod, and the daily AI report always prefers the latest
 scheduled frame so an off-schedule dark shot never becomes its input.
 

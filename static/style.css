@@ -1156,3 +1156,7 @@ details.fgroup[open]{padding-bottom:12px}
 .dliscale .s16{transform:translateX(-100%)}
 .dliscale .sband{color:var(--good);opacity:.85}
 .dliscale i{position:absolute;top:-4px;width:1px;height:4px;background:var(--line)}
+
+/* snapshot controls: a button never breaks its own label across lines */
+.capctl button{white-space:nowrap}
+#cropctl{display:inline-flex;flex-wrap:wrap;gap:inherit}

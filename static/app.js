@@ -467,7 +467,8 @@ function startCrop(){
   svg.style.display='';svg.style.pointerEvents='auto';svg.style.cursor='crosshair';
   cropSel=parseRoi(document.querySelector('[name=roi]')&&document.querySelector('[name=roi]').value);
   document.getElementById('cropctl').style.display='';
-  document.getElementById('cropbtn').style.display='none';
+  // only the crop controls while choosing: fewer buttons, no wrapping
+  for(const id of ['cropbtn','capturebtn','alignbtn']){const b=document.getElementById(id);if(b)b.style.display='none';}
   drawCrop();
 }
 function stopCrop(){
@@ -475,7 +476,7 @@ function stopCrop(){
   const svg=document.getElementById('guidesvg');
   svg.style.display='none';svg.style.pointerEvents='';svg.style.cursor='';svg.innerHTML='';
   document.getElementById('cropctl').style.display='none';
-  document.getElementById('cropbtn').style.display='';
+  for(const id of ['cropbtn','capturebtn','alignbtn']){const b=document.getElementById(id);if(b)b.style.display='';}
   refresh();
 }
 async function saveCrop(roiStr){

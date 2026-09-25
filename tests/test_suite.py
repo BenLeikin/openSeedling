@@ -516,6 +516,26 @@ def _camera_flatten():
     check(v1 != v0, "the thumbnail version changes after a rebuild")
 
 
+def _camera_preview():
+    seen = {}
+
+    def fake_usb(cfg, out, w, h, warmup=None):
+        seen["size"] = (w, h)
+        Path(out).write_bytes(b"\xff\xd8\xff\xd9")
+        return True, ""
+    real = g._usb_capture
+    g._usb_capture = fake_usb
+    try:
+        with g.settings_lock:
+            g.settings.update(camera_enabled=True, camera_backend="usb",
+                              usb_width=2048, usb_height=1536)
+        c.post("/api/preview", json={})
+    finally:
+        g._usb_capture = real
+    check(seen.get("size") == (2048, 1536),
+          f"the align preview uses the photo's own camera mode ({seen.get('size')}), so it shows the same view")
+
+
 def _camera_crop():
     check(g.crop_box({"roi": "0.1,0.2,0.5,0.6"}) == (0.1, 0.2, 0.5, 0.6)
           and g.crop_box({"roi": ""}) is None and g.crop_box({"roi": "junk"}) is None,
@@ -638,6 +658,7 @@ run('Data', _sec4)
 run('Light schedule', _sec5)
 run('DLI target', _dli_band)
 run('Camera flattening', _camera_flatten)
+run('Camera preview', _camera_preview)
 run('Camera crop', _camera_crop)
 run('Shutdown', _shutdown)
 

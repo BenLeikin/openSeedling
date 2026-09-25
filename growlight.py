@@ -4121,8 +4121,14 @@ def api_preview():
             backend = settings.get("camera_backend", "rpicam")
             cfg_snapshot = dict(settings)
         if backend == "usb":
-            # smaller and fewer warmup frames: alignment wants speed, not quality
-            ok, err = _usb_capture(cfg_snapshot, tmp, 1280, 720, warmup=2)
+            # The same mode as a real photo, only fewer warmup frames. A UVC
+            # camera reads a different part of its sensor in each mode: the
+            # old 1280x720 preview showed a wider 16:9 view than the 4:3
+            # photos, so what you aligned was not what got captured.
+            ok, err = _usb_capture(cfg_snapshot, tmp,
+                                   int(cfg_snapshot.get("usb_width", 2048)),
+                                   int(cfg_snapshot.get("usb_height", 1536)),
+                                   warmup=2)
             if not ok:
                 _camera_fail(err)
                 return jsonify(ok=False, error=err), 200
