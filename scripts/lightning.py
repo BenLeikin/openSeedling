@@ -26,6 +26,7 @@ Duty is inverted on this wiring: 0% duty is full brightness, 100% is dark.
 import argparse
 import random
 import sys
+from pathlib import Path
 import time
 
 DEFAULT_PIN = 19
@@ -174,7 +175,7 @@ def main():
                     help="stop after this many events (0 = until Ctrl-C)")
     ap.add_argument("--calibrate", action="store_true",
                     help="measure the shortest usable flash, then exit")
-    ap.add_argument("--app", default="/home/ben/growlight")
+    ap.add_argument("--app", default=str(Path(__file__).resolve().parent.parent))
     args = ap.parse_args()
 
     try:

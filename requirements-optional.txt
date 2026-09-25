@@ -1,0 +1,4 @@
+# Grid auto-detect and canopy tracking. The app runs without these; a failed
+# install turns those features off rather than failing setup.
+opencv-python-headless==4.13.0.92
+numpy==2.4.6

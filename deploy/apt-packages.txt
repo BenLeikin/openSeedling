@@ -1,0 +1,21 @@
+# Debian packages the app needs, installed by scripts/setup.sh.
+# A trailing ? marks a package that may not exist on every release; setup
+# installs it when it can and carries on when it cannot.
+# gpiozero and lgpio come from apt, not pip: lgpio does not pip-install
+# reliably, and the venv is created with --system-site-packages to see them.
+python3-venv
+python3-pip
+python3-gpiozero
+python3-lgpio
+# i2cdetect, for confirming a sensor is on the bus
+i2c-tools
+# timelapse encode and thumbnails
+ffmpeg
+# v4l2-ctl, for the USB (UVC) camera backend
+v4l-utils
+# rpicam-still, for the CSI camera backend
+rpicam-apps-lite?
+# Kasa plugs report legacy POSIX zone names (PST8PDT). Split out of tzdata on
+# Trixie; older releases ship the names in tzdata itself.
+tzdata-legacy?
+git

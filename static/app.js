@@ -350,7 +350,7 @@ function renderPhoto(j){  const card=document.getElementById('photocard');
       const ago=camHealth.last_ok?agoStr(new Date(camHealth.last_ok)):'never';
       msg=`\u26a0 Camera not responding \u00b7 ${camHealth.fails} failed attempt${camHealth.fails>1?'s':''}`
         +` \u00b7 last good photo ${ago}`
-        +(camHealth.last_err?`<br><span class="camerr">${camHealth.last_err}</span>`:'');
+        +(camHealth.last_err?`<br><span class="camerr">${esc(camHealth.last_err)}</span>`:'');
       cls='camwarn err';
     } else if(capOn&&j.latest_photo_time){
       const ageMin=(Date.now()-new Date(j.latest_photo_time))/60000;
@@ -403,7 +403,7 @@ async function capturePhoto(){
   btn.disabled=true;
   if(info)info.textContent='Capturing\u2026 (~5s)';
   try{
-    const r=await fetch('/api/capture',{method:'POST'});
+    const r=await fetch('/api/capture',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
     const j=await r.json();
     if(j.ok){
       if(info)info.textContent='Saved.';
@@ -438,7 +438,7 @@ function drawGuides(){
 async function alignTick(){
   if(!aligning)return;
   try{
-    const r=await fetch('/api/preview',{method:'POST'});
+    const r=await fetch('/api/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
     const j=await r.json();
     if(j.ok){
       const img=document.getElementById('photo');
@@ -506,7 +506,7 @@ function fillForm(cfg){
                   'probe_median_depth','auto_wet_cal_max_move','light_floor_pct',
                   'live_interval_s',
                   'light2_start','light2_end','light2_bright','light2_ramp_min'])
-    if(f.elements[k] && !formHolds(k, cfg))
+    if(f.elements[k] && k in cfg && !formHolds(k, cfg))   // absent: leave it
       f.elements[k].value=cfg[k];
   {// schedule mode: populate its fields and show only that mode's block
    const sm=f.elements['schedule_mode'];
@@ -656,7 +656,7 @@ document.getElementById('renderbtn').addEventListener('click',async()=>{
   renderStart=Date.now();clearRenderTimer();renderTimer=setInterval(tickRender,1000);
   info.textContent='Starting render...';
   try{
-    const r=await fetch('/api/render',{method:'POST'});
+    const r=await fetch('/api/render',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
     const j=await r.json();
     if(!r.ok){info.textContent=j.error||'Render failed to start';btn.disabled=false;
       btn.textContent='\uD83C\uDFA5 Render video';}
@@ -732,12 +732,13 @@ async function doLogin(){
   try{
     const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({password:pw.value})});
-    if(r.ok){pw.value='';refresh();}
+    if(r.ok){pw.value='';restartStream();refresh();}
     else err.textContent='wrong password';
   }catch(e){err.textContent='login failed';}
 }
 async function doLogout(){
-  try{await fetch('/api/logout',{method:'POST'});}catch(e){}
+  try{await fetch('/api/logout',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});}catch(e){}
+  restartStream();
   refresh();
 }
 function initAuth(){
@@ -917,7 +918,7 @@ function renderSensors(j){
          +'last reading '+agoStr(new Date(ts*1000));}}
       {const fill=(m.unit==='%'&&!isNaN(parseFloat(m.value)))
           ?` style="--fill:${Math.max(0,Math.min(100,parseFloat(m.value)))}%" data-fill`:'' ;
-       h+=`<span class="schip${m.stale?' stale':''}"${fill}${m.title?` title="${m.title}"`:''}>${m.label} <b>${m.value}</b><span class="u">${m.unit}</span>${m.suffix||''}</span>`;}
+       h+=`<span class="schip${m.stale?' stale':''}"${fill}${m.title?` title="${esc(m.title)}"`:''}>${esc(m.label)} <b>${m.value}</b><span class="u">${m.unit}</span>${m.suffix||''}</span>`;}
     }
     h+='</div>';
   }
@@ -1044,12 +1045,12 @@ function renderChartGrid(){
     for(const k of mine){
       const m=sensorMeta(k,0);
       h+=`<div class="ccard" id="cc-${cssId(k)}">
-            <div class="chead"><span>${m.label}<span class="cunit">${chartHeadUnit(k)}</span></span>
+            <div class="chead"><span>${esc(m.label)}<span class="cunit">${chartHeadUnit(k)}</span></span>
               <span class="cstats" id="cs-${cssId(k)}">&mdash;</span>
               <button type="button" class="cexpand" data-key="${cssId(k)}"
-                      title="Expand this chart" aria-label="Expand ${m.label} chart">\u2922</button></div>
+                      title="Expand this chart" aria-label="Expand ${esc(m.label)} chart">\u2922</button></div>
             <svg class="cmini" id="cv-${cssId(k)}" viewBox="0 0 320 110"
-                 preserveAspectRatio="none" role="img" aria-label="${m.label} history"></svg>
+                 preserveAspectRatio="none" role="img" aria-label="${esc(m.label)} history"></svg>
           </div>`;
     }
     h+='</div></div>';
@@ -2299,7 +2300,7 @@ async function detectGrid(){
   if(!gridEditable())return;
   const info=document.getElementById('gridinfo');info.textContent='Detecting...';
   try{
-    const r=await fetch('/api/detect_grid',{method:'POST'});const j=await r.json();
+    const r=await fetch('/api/detect_grid',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});const j=await r.json();
     if(j.ok&&j.corners){grid.corners=j.corners;if(!grid.show){grid.show=true;
       document.getElementById('gridshow').checked=true;}
       drawGrid();saveGrid();info.textContent='Detected \u2014 drag corners to fine-tune.';}
@@ -2633,7 +2634,7 @@ async function genReport(){
   const info=document.getElementById('reportinfo');if(info)info.textContent='working\u2026';
   document.getElementById('reportbody').innerHTML='<p class="rmuted">Generating report\u2026 this takes ~20s.</p>';
   try{
-    const r=await fetch('/api/report',{method:'POST'});
+    const r=await fetch('/api/report',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
     const j=await r.json();
     if(info)info.textContent='';
     if(j.ok){renderReport({...j,have_key:true});lastReportSig=`${j.ts}|${j.generating}|${j.ok}|true`;}
@@ -2720,6 +2721,24 @@ function initStream(){
     if(streamOk){ streamOk=false; setPoll(POLL_FAST); }
   };
 }
+// The server fixes a stream's signed-in state when it opens, so a login or
+// logout has to reopen it, or the next push would show the old view.
+function restartStream(){
+  if(es){ es.close(); es=null; }
+  streamOk=false; setPoll(POLL_FAST);
+  initStream();
+}
+// A hidden tab keeps no stream: each one holds a server thread and one of six
+// slots. Closed a minute after hiding, reopened with a fresh status on return.
+let hideTimer=null;
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden){
+    hideTimer=setTimeout(()=>{ if(es){ es.close(); es=null; streamOk=false; } },60000);
+  }else{
+    clearTimeout(hideTimer); hideTimer=null;
+    if(!es){ restartStream(); refresh(); }
+  }
+});
 setPoll(POLL_FAST);
 initStream();
 setInterval(render,60000);

@@ -507,8 +507,9 @@ def _read_soil_temps():
     devs = sorted(glob.glob("/sys/bus/w1/devices/28-*"))
     for dev in devs:
         serial = os.path.basename(dev)
-        # single probe reads as "soil"; multiples get a serial suffix so the
-        # key never shifts when probes are added or reordered
+        # A single probe reads as "soil"; with two or more, each gets a serial
+        # suffix, so reordering never swaps them. Adding a second probe does
+        # rename the first one's series (temp:soil -> temp:soil_xxxx).
         key = "temp:soil" if len(devs) == 1 else f"temp:soil_{serial[-4:]}"
         try:
             with open(f"{dev}/w1_slave") as f:
@@ -534,6 +535,9 @@ def _read_soil_temps():
 # each and change far too slowly to be worth that every few seconds.
 FAST_READS = (read_probes, read_floats, read_reservoirs, _read_air, _read_lux)
 ALL_READS = FAST_READS + (_read_soil_temps,)
+# What the dashboard's live refresh actually shows. Kept separate so the
+# every-few-seconds loop does not also run 16 ADS1115 conversions it discards.
+LIVE_READS = (_read_air, _read_lux)
 
 
 def _read_set(fns):
@@ -553,8 +557,13 @@ def read_all():
 
 
 def read_fast():
-    """The quick sensors only, for refreshing the dashboard between samples."""
+    """The quick sensors only (everything but 1-Wire)."""
     return _read_set(FAST_READS)
+
+
+def read_live():
+    """Air and light only: the readings the live refresh pushes to the page."""
+    return _read_set(LIVE_READS)
 
 
 if __name__ == "__main__":

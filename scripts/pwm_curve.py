@@ -26,6 +26,7 @@ import argparse
 import csv
 import statistics
 import sys
+from pathlib import Path
 import time
 
 DEFAULT_PIN = 19
@@ -118,7 +119,7 @@ def main():
     ap.add_argument("--samples", type=int, default=3,
                     help="lux readings median-averaged per point")
     ap.add_argument("--csv", default=None, help="write the curve to this file")
-    ap.add_argument("--app", default="/home/ben/growlight",
+    ap.add_argument("--app", default=str(Path(__file__).resolve().parent.parent),
                     help="app directory, for the sensors module")
     ap.add_argument("--quiet", action="store_true",
                     help="only print points where the reading changed")

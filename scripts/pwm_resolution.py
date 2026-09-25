@@ -23,6 +23,7 @@ they are inverted: 0% duty is full brightness, 100% duty is dark.
 import argparse
 import statistics
 import sys
+from pathlib import Path
 import time
 
 DEFAULT_PIN = 19        # BCM; physical 35, hardware PWM channel 1
@@ -42,7 +43,7 @@ def channel_for(pin):
 def get_lux_reader():
     """A function returning lux, or None when no sensor is reachable."""
     try:
-        sys.path.insert(0, "/home/ben/growlight")
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
         import sensors
         probe = sensors._read_lux()
         if "lux" in probe:

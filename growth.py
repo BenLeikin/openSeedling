@@ -140,7 +140,9 @@ def analyze(path, grid, rectify_first=True, rotate=0):
             green = _green_mask(img)
             C = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
         except Exception as e:
-            print(f"rectify failed ({e}); sampling the original frame")
+            # stderr: stdout carries the JSON result the parent parses
+            print(f"rectify failed ({e}); sampling the original frame",
+                  file=sys.stderr)
 
     readings = {}
     for tid, u0, u1 in spans:

@@ -11,7 +11,6 @@ not to invent a better number. A rule that silently "corrects" a value is
 worse than one that flags it, because it hides the fault that needs fixing.
 """
 import statistics
-import time
 
 # ---------------------------------------------------------------- bounds ----
 # Physically possible ranges. A value outside these is a wiring or driver

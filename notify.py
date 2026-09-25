@@ -2,8 +2,8 @@
 """Push-notification transport for the grow dashboard.
 
 Pure transport: it takes a title and a message and gets it to your phone. It
-knows nothing about sensors, thresholds, or grows -- that decision logic will
-live in alerts.py later. Kept dumb on purpose so it's reusable and testable.
+knows nothing about sensors, thresholds, or grows; that decision logic lives
+in alerts.py. Kept dumb on purpose so it's reusable and testable.
 
 Uses ntfy (https://ntfy.sh): install the ntfy app, subscribe to a topic, and
 put that topic in config.json as "ntfy_topic". No account or API key needed.
@@ -20,6 +20,8 @@ Config (read lazily from config.json so changes don't need a restart):
 import json
 import urllib.request
 from pathlib import Path
+
+from applog import log     # levelled logging; see applog.py
 
 CONFIG_PATH = Path(__file__).with_name("config.json")
 
@@ -54,7 +56,7 @@ def send(title, message, priority="default", tags=""):
         with urllib.request.urlopen(req, timeout=10) as r:
             return 200 <= r.status < 300
     except Exception as e:
-        print(f"notify send failed: {e}")
+        log.warning(f"ntfy send failed: {e}")
         return False
 
 

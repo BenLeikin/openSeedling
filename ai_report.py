@@ -4,8 +4,8 @@
 Sends the latest tray photo plus the current sensor/grid/schedule data to the
 Claude API and gets back a structured horticultural report: germination, health
 flags, light and water assessment, concerns, and concrete recommendations. The
-report is stored as JSON for the dashboard and a one-line summary is pushed via
-ntfy. Designed to run once a day, so cost is a few cents at most.
+report is stored as JSON for the dashboard and a one-line summary is pushed to
+whichever alert channels are configured (Discord, ntfy). Designed to run once a day, so cost is a few cents at most.
 
 API key (in priority order):
   1. ANTHROPIC_API_KEY environment variable

@@ -25,7 +25,6 @@ import sys
 import queue
 import signal
 import sqlite3
-import statistics
 import threading
 import time
 
@@ -38,8 +37,10 @@ from zoneinfo import ZoneInfo, available_timezones
 from rpi_hardware_pwm import HardwarePWM
 from astral import LocationInfo
 from astral.sun import sun
-from flask import (Flask, Response, jsonify, render_template, request, session,
-                   send_file, send_from_directory)
+from flask import (Flask, Response, has_request_context, jsonify,
+                   render_template, request, session, send_file,
+                   send_from_directory)
+from flask.sessions import SecureCookieSessionInterface
 from werkzeug.security import check_password_hash
 
 import db
@@ -139,7 +140,7 @@ DEFAULTS = {
     "ntfy_topic": "",           # set to enable push notifications (see notify.py)
     "discord_webhook": "",      # set to enable Discord alerts (see discord_alert.py)
     "password_hash": "",        # set to enable login (see README); blank = open
-    "cookie_secure": True,      # True for HTTPS; set False only for local http testing
+    "cookie_secure": "auto",    # auto: Secure only when the request came over HTTPS; or true/false
     "auto_wet_cal": False,      # re-capture the wet anchor after a fill that
                                 # actually tripped the float, if the reading
                                 # passes every check a manual capture must
@@ -190,7 +191,7 @@ DEFAULTS = {
     "ai_model": "claude-opus-4-8",
     "ai_report_hour": 8,        # local hour (0-23) to run the daily report
     "ai_report_minute": 0,      # minute (0-59) within that hour
-    "ai_notify": True,          # push the report summary via ntfy
+    "ai_notify": True,          # push the report summary to Discord and ntfy
     "ai_notes": "Peat/vermiculite/perlite seed starter in a cell tray, bottom-watered. "
                 "Mixed germination: some cells sprouted, some still germinating.",
     "grid": {                   # cell-mapping overlay
@@ -1079,7 +1080,15 @@ def sun_window(cfg, day, tz):
     crossing midnight.
     """
     loc = LocationInfo(latitude=cfg["latitude"], longitude=cfg["longitude"])
-    s = sun(loc.observer, date=day, tzinfo=tz)
+    try:
+        s = sun(loc.observer, date=day, tzinfo=tz)
+    except ValueError:
+        # Polar day or night: the sun never crosses the horizon, so there is
+        # no sunrise to report. Fixed and duration schedules do not need one;
+        # stand in noon +/- 6 h so they still run and the chart still draws.
+        noon = datetime(day.year, day.month, day.day, 12, tzinfo=tz)
+        s = {"sunrise": noon - timedelta(hours=6),
+             "sunset": noon + timedelta(hours=6)}
     mode = cfg.get("schedule_mode", "solar")
 
     if mode == "fixed":
@@ -1325,6 +1334,7 @@ def run_pump_until_full(tray, reason="fill", force=False):
         st["running"] = True
     elapsed = 0.0
     tripped = False
+    stop_why = "cap"                         # cap | float_lost | reservoir
     confirm = 0                              # consecutive "full" reads needed
     CONFIRM_NEEDED = 4                        # ~0.4s steady, rejects slosh/bobble
     try:
@@ -1334,11 +1344,16 @@ def run_pump_until_full(tray, reason="fill", force=False):
             elapsed = time.time() - t0
             if elapsed >= run_cap:
                 break                        # cap hit, float never stayed full
+            if not force and reservoir_state() == "empty":
+                stop_why = "reservoir"       # ran the source dry mid-fill
+                break
             fv = sensors.read_float(tray)
             if fv is None or fv < 1:         # full (open) or sensor lost
                 confirm += 1
                 if confirm >= CONFIRM_NEEDED:
                     tripped = (fv is not None and fv < 1)
+                    if not tripped:
+                        stop_why = "float_lost"
                     break                    # full held steady -> stop
             else:
                 confirm = 0                  # a not-full read resets the count
@@ -1349,8 +1364,17 @@ def run_pump_until_full(tray, reason="fill", force=False):
             st["running"] = False
             st["last_run"] = time.time()
             st["today_seconds"] += elapsed
-            detail = (f"tray {tray} {reason}: full at {elapsed:.1f}s" if tripped
-                      else f"tray {tray} {reason}: STOPPED at {elapsed:.1f}s cap, no float trip")
+            if tripped:
+                detail = f"tray {tray} {reason}: full at {elapsed:.1f}s"
+            elif stop_why == "reservoir":
+                detail = (f"tray {tray} {reason}: STOPPED at {elapsed:.1f}s, "
+                          "reservoir ran empty")
+            elif stop_why == "float_lost":
+                detail = (f"tray {tray} {reason}: STOPPED at {elapsed:.1f}s, "
+                          "float sensor stopped answering")
+            else:
+                detail = (f"tray {tray} {reason}: STOPPED at {elapsed:.1f}s cap, "
+                          "no float trip")
             st["last_detail"] = detail
     try:
         db.log_event("pump", detail)
@@ -1362,9 +1386,14 @@ def run_pump_until_full(tray, reason="fill", force=False):
         save_persistent_state()
         schedule_postfill(tray, tripped=True)   # judge the probe once water wicks
         return True, f"filled in {elapsed:.1f}s"
-    fill_failure["msg"] = (f"Tray {tray} fill ran to the {elapsed:.1f}s cap "
-                           "without the float tripping. Likely causes: source "
-                           "empty, tube off, or float stuck.")
+    fill_failure["msg"] = {
+        "reservoir": f"Tray {tray} fill stopped at {elapsed:.1f}s: the "
+                     "reservoir ran empty. Refill it before watering again.",
+        "float_lost": f"Tray {tray} fill stopped at {elapsed:.1f}s: the float "
+                      "switch stopped answering. Check its wiring.",
+    }.get(stop_why, f"Tray {tray} fill ran to the {elapsed:.1f}s cap "
+                    "without the float tripping. Likely causes: source "
+                    "empty, tube off, or float stuck.")
     # a fill that can't complete means auto-watering must not keep trying
     with settings_lock:
         if settings.get("auto_water"):
@@ -1375,7 +1404,10 @@ def run_pump_until_full(tray, reason="fill", force=False):
             except Exception as e:
                 log.warning(f"auto_water disable not persisted ({e})")
     save_persistent_state()
-    return False, f"ran to {elapsed:.1f}s cap without float trip (source empty?)"
+    return False, {"reservoir": f"stopped at {elapsed:.1f}s, reservoir empty",
+                   "float_lost": f"stopped at {elapsed:.1f}s, float sensor lost",
+                   }.get(stop_why,
+                         f"ran to {elapsed:.1f}s cap without float trip (source empty?)")
 
 
 PROBE_DEFAULT_CAL = {"wet": 1.25, "dry": 2.95}   # typical HW-390 on 3.3V; used
@@ -1891,15 +1923,40 @@ def run_report(reason="daily"):
             report_state["generating"] = False
 
 
+def _kernel_clock_synced():
+    """Ask the kernel whether an NTP daemon has synchronized the clock.
+
+    chrony and systemd-timesyncd both clear STA_UNSYNC once synced; adjtimex()
+    then returns something other than TIME_ERROR. This is the same flag behind
+    timedatectl's "System clock synchronized". Returns None when the call is
+    unavailable (off-Linux, restricted container)."""
+    try:
+        import ctypes
+        libc = ctypes.CDLL(None, use_errno=True)
+        buf = ctypes.create_string_buffer(512)   # struct timex; modes=0 only reads
+        state = libc.adjtimex(buf)
+    except Exception:
+        return None
+    if state < 0:
+        return None
+    return state != 5                            # 5 = TIME_ERROR: not synchronized
+
+
 def clock_synced():
     """True once the system clock is trustworthy. The Pi Zero 2 W has no RTC, so
     at boot the time is wrong until NTP corrects it. Priming the report schedule
     on that wrong time, then having the clock jump forward past the target, is
-    what fires a report on every reboot. systemd-timesyncd (the Pi OS default)
-    creates this file once the clock is synced."""
+    what fires a report on every reboot.
+
+    systemd-timesyncd creates the flag file below; chrony does not, so the
+    kernel's sync status is the general check. The year test is only a last
+    resort: at boot the clock already reads a recent year, so it proves little."""
     if os.path.exists("/run/systemd/timesync/synchronized"):
         return True
-    return datetime.now().year >= 2025  # fallback for non-timesyncd setups
+    synced = _kernel_clock_synced()
+    if synced is not None:
+        return synced
+    return datetime.now().year >= 2025
 
 
 def report_loop():
@@ -1934,7 +1991,7 @@ def report_loop():
                     run_report("daily")
                     last_day = now.date()
         except Exception as e:
-            log.error(f"report_loop error: {e}")
+            log.exception(f"report_loop error: {e}")
         time.sleep(60)
 
 
@@ -2162,7 +2219,7 @@ def watering_loop():
         try:
             auto_water_pass()
         except Exception as e:
-            log.error(f"watering_loop error: {e}")
+            log.exception(f"watering_loop error: {e}")
 
 
 def sample_loop():
@@ -2182,7 +2239,7 @@ def sample_loop():
                 check_postfill(readings)
                 publish("sample")
         except Exception as e:
-            log.error(f"sample_loop error: {e}")
+            log.exception(f"sample_loop error: {e}")
         # housekeeping once a day: roll raw -> hourly, prune old raw
         now = time.time()
         if now - last_prune > 86400:
@@ -2538,60 +2595,72 @@ def _storm(seconds, style):
 
 def control_loop():
     seen = None
+    last_err = None
     sunrise = sunset = on_time = off_time = None
     while True:
-        with settings_lock:
-            cfg = dict(settings)
-        tz = ZoneInfo(cfg["timezone"])
-        now = datetime.now(tz)
-        key = (now.date(), tuple(cfg.get(k) for k in SCHED_KEYS))
-        if key != seen:
-            seen = key
-            sunrise, sunset, on_time, off_time = sun_window(cfg, now.date(), tz)
-            log.info(f"{now.date()}: on {on_time:%H:%M}, off {off_time:%H:%M} "
-                  f"({cfg['latitude']}, {cfg['longitude']}, {cfg['timezone']})")
-        # the second light first, so the write below carries its new level
-        if light2_fixture(cfg):
-            lv, why = light2_level(cfg, now)
-            light2_state.update(level=round(lv, 2), why=why)
-        else:
-            light2_state.update(level=0.0,
-                                why="off" if not cfg.get("light2_on")
-                                else "needs both PWM channels")
-        b = brightness_for(cfg, now, on_time, off_time)
-        ov = cfg.get("light_override", "auto")
-        if ov == "on":
-            b = max(0, min(100, int(cfg.get("manual_bright", cfg["max_bright"]))))
-        elif ov == "off":
-            b = 0
-        if (not capturing and not sweep_state["running"]
-                and not lightning_state["running"]):
-            # a capture, a sweep or a storm each own the light while running;
-            # writing the scheduled level here would fight them
-            set_brightness(b)
+        try:
+            with settings_lock:
+                cfg = dict(settings)
+            tz = ZoneInfo(cfg["timezone"])
+            now = datetime.now(tz)
+            key = (now.date(), tuple(cfg.get(k) for k in SCHED_KEYS))
+            if key != seen:
+                sunrise, sunset, on_time, off_time = sun_window(cfg, now.date(), tz)
+                seen = key          # only once it worked, so a failure retries
+                log.info(f"{now.date()}: on {on_time:%H:%M}, off {off_time:%H:%M} "
+                      f"({cfg['latitude']}, {cfg['longitude']}, {cfg['timezone']})")
+            # the second light first, so the write below carries its new level
+            if light2_fixture(cfg):
+                lv, why = light2_level(cfg, now)
+                light2_state.update(level=round(lv, 2), why=why)
+            else:
+                light2_state.update(level=0.0,
+                                    why="off" if not cfg.get("light2_on")
+                                    else "needs both PWM channels")
+            b = brightness_for(cfg, now, on_time, off_time)
+            ov = cfg.get("light_override", "auto")
+            if ov == "on":
+                b = max(0, min(100, int(cfg.get("manual_bright", cfg["max_bright"]))))
+            elif ov == "off":
+                b = 0
+            if (not capturing and not sweep_state["running"]
+                    and not lightning_state["running"]):
+                # a capture, a sweep or a storm each own the light while running;
+                # writing the scheduled level here would fight them
+                set_brightness(b)
 
-        mode = cfg.get("fan_mode", "auto")
-        if mode == "on":
-            set_fan(cfg.get("fan_speed", 100), "manual")
-        elif mode == "off":
-            set_fan(0, "manual")
+            mode = cfg.get("fan_mode", "auto")
+            if mode == "on":
+                set_fan(cfg.get("fan_speed", 100), "manual")
+            elif mode == "off":
+                set_fan(0, "manual")
+            else:
+                want, why = fan_should_run(cfg, now, on_time, off_time)
+                set_fan(cfg.get("fan_auto_speed", 70) if want else 0, why)
+            with state_lock:
+                l2_now = light2_state["level"]
+                changed = (round(state.get("light2_level", -1), 1) != round(l2_now, 1)
+                           or round(state.get("brightness") or -1, 1) != round(b, 1)
+                           or state.get("override") != ov
+                           or state.get("on") != on_time)
+                state.update(brightness=b, on=on_time, off=off_time,
+                             sunrise=sunrise, sunset=sunset, override=ov,
+                             light2_level=l2_now)
+            # only when something moved: this loop runs every 30 seconds and during
+            # a ramp every pass changes brightness, but a steady day should not
+            # push an identical status to every open browser twice a minute
+            if changed:
+                publish("light")
+        except Exception as e:
+            # One bad pass must not end light control for good: the thread
+            # dying leaves the dashboard up while the fixture stays wherever
+            # it was last set. Log it (once per distinct error, with the
+            # traceback) and try again next pass.
+            if str(e) != last_err:
+                log.exception(f"control_loop error: {e}")
+                last_err = str(e)
         else:
-            want, why = fan_should_run(cfg, now, on_time, off_time)
-            set_fan(cfg.get("fan_auto_speed", 70) if want else 0, why)
-        with state_lock:
-            l2_now = light2_state["level"]
-            changed = (round(state.get("light2_level", -1), 1) != round(l2_now, 1)
-                       or round(state.get("brightness") or -1, 1) != round(b, 1)
-                       or state.get("override") != ov
-                       or state.get("on") != on_time)
-            state.update(brightness=b, on=on_time, off=off_time,
-                         sunrise=sunrise, sunset=sunset, override=ov,
-                         light2_level=l2_now)
-        # only when something moved: this loop runs every 30 seconds and during
-        # a ramp every pass changes brightness, but a steady day should not
-        # push an identical status to every open browser twice a minute
-        if changed:
-            publish("light")
+            last_err = None
         wake.wait(timeout=LOOP_SECONDS)
         wake.clear()
 
@@ -2986,9 +3055,29 @@ app.secret_key = _load_secret()
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
-    SESSION_COOKIE_SECURE=bool(settings.get("cookie_secure", True)),
     PERMANENT_SESSION_LIFETIME=timedelta(days=30),
 )
+
+
+class _SessionInterface(SecureCookieSessionInterface):
+    """Decide the cookie's Secure flag per request.
+
+    A Secure cookie sent over plain http is dropped by the browser, so a fixed
+    True made login silently fail on a LAN install at http://<pi>:5000, and a
+    fixed False sent the session in clear behind HTTPS. "auto" marks it Secure
+    when the request arrived over HTTPS, directly or via a proxy that sets
+    X-Forwarded-Proto. An explicit true/false in config.json still wins."""
+    def get_cookie_secure(self, app):
+        mode = settings.get("cookie_secure", "auto")
+        if mode != "auto":
+            return bool(mode)
+        if not has_request_context():
+            return False
+        return (request.is_secure or
+                request.headers.get("X-Forwarded-Proto", "").lower() == "https")
+
+
+app.session_interface = _SessionInterface()
 
 
 def auth_enabled():
@@ -3002,8 +3091,17 @@ def is_authed():
 
 
 def require_auth(fn):
+    """Gate a route on the login, and gate every non-GET route on a JSON body.
+
+    The JSON rule is the CSRF defense. Another site can make a browser send a
+    form or text/plain POST here without asking, but not an application/json
+    one: that needs a CORS preflight this app never answers. SameSite=Lax alone
+    does not cover it, because it lets a sibling subdomain through, and with no
+    password set there is no cookie to protect at all."""
     @wraps(fn)
     def wrapper(*a, **k):
+        if request.method != "GET" and not request.is_json:
+            return jsonify(error="Content-Type must be application/json"), 415
         if not is_authed():
             return jsonify(error="login required"), 401
         return fn(*a, **k)
@@ -3222,18 +3320,34 @@ def api_float():
     return jsonify(floats={t: sensors.read_float(t) for t in sensors.FLOAT_PINS})
 
 
+# One password check at a time. Werkzeug's scrypt hash needs about 32 MB per
+# check; with waitress's 16 threads, a burst of parallel logins against the
+# public URL could ask for 512 MB on a 512 MB board. Serializing also makes
+# the delay a real limit on guessing rather than a per-thread pause.
+_login_lock = threading.Lock()
+_login_fails = {"n": 0}
+LOGIN_DELAY_S = 0.5
+LOGIN_DELAY_MAX_S = 8.0
+
+
 @app.route("/api/login", methods=["POST"])
 def login():
     with settings_lock:
         h = settings.get("password_hash", "")
     if not h:
         return jsonify(ok=True, authed=True)  # no password set -> open
-    pw = (request.get_json(silent=True) or {}).get("password", "")
-    time.sleep(0.5)  # crude throttle against rapid guessing
-    if check_password_hash(h, pw):
+    pw = str((request.get_json(silent=True) or {}).get("password", ""))[:256]
+    with _login_lock:
+        # doubles per consecutive failure, whoever is guessing
+        time.sleep(min(LOGIN_DELAY_MAX_S, LOGIN_DELAY_S * 2 ** min(_login_fails["n"], 4)))
+        ok = check_password_hash(h, pw)
+        _login_fails["n"] = 0 if ok else _login_fails["n"] + 1
+    if ok:
         session["authed"] = True
         session.permanent = True
         return jsonify(ok=True, authed=True)
+    if _login_fails["n"] in (5, 20, 100):
+        log.warning(f"{_login_fails['n']} failed logins in a row")
     return jsonify(ok=False, error="wrong password"), 401
 
 
@@ -3935,11 +4049,16 @@ def video():
 
 # never sent to the browser: /api/status is readable without login, and the
 # frontend has no use for any of these
-SECRET_SETTINGS = ("password_hash", "discord_webhook", "ntfy_topic", "kasa_pass")
+SECRET_SETTINGS = ("password_hash", "discord_webhook", "ntfy_topic",
+                   "kasa_user", "kasa_pass")
+# Only for a signed-in viewer: where the grow is. The public dashboard does not
+# need coordinates to render, and a precise latitude/longitude is a home address.
+PRIVATE_SETTINGS = ("latitude", "longitude")
 
 
-def public_settings(cfg):
-    return {k: v for k, v in cfg.items() if k not in SECRET_SETTINGS}
+def public_settings(cfg, authed=True):
+    hide = SECRET_SETTINGS if authed else SECRET_SETTINGS + PRIVATE_SETTINGS
+    return {k: v for k, v in cfg.items() if k not in hide}
 
 
 # ---- live sensor refresh ----------------------------------------------------
@@ -3961,7 +4080,7 @@ def live_loop():
             time.sleep(5)
             continue
         try:
-            vals = {k: v for k, v in sensors.read_fast().items()
+            vals = {k: v for k, v in sensors.read_live().items()
                     if k in LIVE_KEYS}
             if vals:
                 live_readings.update(ts=time.time(), values=vals)
@@ -3974,7 +4093,7 @@ def live_loop():
                     last = dict(vals)
                     publish("live")
         except Exception as e:
-            log.error(f"live sensor read failed: {e}")
+            log.exception(f"live sensor read failed: {e}")
         time.sleep(max(2, every))
 
 
@@ -4047,6 +4166,10 @@ def api_stream():
             yield "retry: 5000\n\n"          # how soon the browser retries
             yield f"event: status\ndata: {json.dumps(status_payload(authed))}\n\n"
             while True:
+                with _subs_lock:
+                    culled = q not in _subs
+                if culled:
+                    return      # publish() dropped us; the browser reconnects
                 try:
                     q.get(timeout=STREAM_HEARTBEAT)
                     # coalesce a burst: one render per batch of changes
@@ -4164,7 +4287,7 @@ def status_payload(authed=None):
               "on": kasa_state["on"], "ok": kasa_state["ok"],
               "error": kasa_state["error"], "fails": kasa_state["fails"]}
              if light_backend(cfg) == "kasa" else None,
-        settings=public_settings(cfg),
+        settings=public_settings(cfg, authed=is_authed() if authed is None else bool(authed)),
         probe_default_cal=PROBE_DEFAULT_CAL,
         probe_cal_flags={t: f for t in
                          [k[6:] for k in snap if k.startswith("probe:")]
@@ -4404,7 +4527,6 @@ def measured_day(cfg, now, off_time):
     read dark for a quarter hour), otherwise yesterday. The source is named so
     the card can say which day it is judging.
     """
-    tz = now.tzinfo
     midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
     t_mid, t_now = midnight.timestamp(), now.timestamp()
     if now >= off_time:
@@ -4694,7 +4816,6 @@ def day_light_summary():
     """Today's light in one shot: DLI so far, the peak intensity reached, and
     how long the light has actually been delivering. Reads the same lux history
     the DLI integration uses, so the numbers always agree."""
-    k = lux_k()
     with settings_lock:
         tz = ZoneInfo(settings["timezone"])
     now = datetime.now(tz)
@@ -5076,6 +5197,27 @@ def api_host():
     return jsonify(hoststats.all_stats())
 
 
+def _soil_f_lookup(snap, hours):
+    """ts -> soil temperature in F nearest that time (within an hour), from
+    the logged history. A probe point from last Tuesday is corrected for
+    last Tuesday's soil, not today's."""
+    import bisect
+    key = next((k for k in snap if k.startswith("temp:soil")), None)
+    hist = db.series(key, hours + 1) if key else []
+    times = [t for t, _ in hist]
+
+    def at(ts, default):
+        if not times:
+            return default
+        i = bisect.bisect_left(times, ts)
+        best = min((j for j in (i - 1, i) if 0 <= j < len(times)),
+                   key=lambda j: abs(times[j] - ts))
+        if abs(times[best] - ts) > 3600:
+            return default
+        return hist[best][1] * 9 / 5 + 32
+    return at
+
+
 @app.route("/api/series_all")
 def series_all():
     """Every logged sensor's history in one request, so the chart grid doesn't
@@ -5103,7 +5245,10 @@ def series_all():
         pts = db.series(k, hours)
         if k.startswith("probe:"):
             cal = pcal.get(k[6:]) or {}
-            pts = [[ts, compensated_volts(v, cal, stf)] for ts, v in pts]
+            if (cal.get("temp_comp") or {}).get("coeff"):
+                soil_at = _soil_f_lookup(snap, hours)
+                pts = [[ts, compensated_volts(v, cal, soil_at(ts, stf))]
+                       for ts, v in pts]
         out[k] = pts
     k = lux_k()
     if k and "lux" in out:

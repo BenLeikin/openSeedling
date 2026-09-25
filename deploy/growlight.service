@@ -1,0 +1,15 @@
+[Unit]
+Description=Grow light controller and dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=@APP_DIR@/venv/bin/python @APP_DIR@/growlight.py
+WorkingDirectory=@APP_DIR@
+EnvironmentFile=-@APP_DIR@/.env
+Restart=always
+RestartSec=5
+User=@RUN_USER@
+
+[Install]
+WantedBy=multi-user.target

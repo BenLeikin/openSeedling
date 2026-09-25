@@ -24,6 +24,8 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
+from applog import log     # levelled logging; see applog.py
+
 CONFIG_PATH = Path(__file__).with_name("config.json")
 WEBHOOK_FILE = Path(__file__).with_name(".discord_webhook")
 
@@ -88,13 +90,13 @@ def send(title, message, level="info", username="Grow controller", fields=None):
         headers={"Content-Type": "application/json",
                  # Discord's Cloudflare 403s the default "Python-urllib" agent;
                  # any real User-Agent gets through.
-                 "User-Agent": "GrowController/1.0 (+https://grow.pilg0re.net)"},
+                 "User-Agent": "GrowController/1.0 (+https://github.com/BenLeikin/openSeedling)"},
         method="POST")
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
             return 200 <= r.status < 300  # Discord returns 204 on success
     except Exception as e:
-        print(f"discord send failed: {e}")
+        log.warning(f"discord send failed: {e}")
         return False
 
 

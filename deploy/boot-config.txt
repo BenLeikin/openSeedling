@@ -1,0 +1,17 @@
+# Boot settings for /boot/firmware/config.txt, applied by scripts/setup.sh.
+#
+# setup.sh writes these lines inside a "# BEGIN growlight" / "# END growlight"
+# block at the end of config.txt, under its own [all] header, and comments out
+# any conflicting line elsewhere in the file with a "#growlight# " prefix.
+# Comment and blank lines in this file are not copied. A change here needs a
+# reboot on the Pi.
+
+[all]
+# serial console on the header UART
+enable_uart=1
+# 50 kHz: 400 kHz caused Errno 5 on the BH1750 at the end of its cable run
+dtparam=i2c_arm=on,i2c_arm_baudrate=50000
+# DS18B20 soil temperature on GPIO4
+dtoverlay=w1-gpio
+# GPIO18 = channel 0 (5V panel), GPIO19 = channel 1 (AC fixture dim line)
+dtoverlay=pwm-2chan,pin=18,func=2,pin2=19,func2=2

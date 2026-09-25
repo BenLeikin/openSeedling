@@ -8,20 +8,27 @@ Schema (long / time-series format so new sensors never require migrations):
   readings_hourly(ts, sensor, value)   hourly averages, kept long-term
   events(ts, type, detail)             discrete happenings
 
-Sensor keys are namespaced strings, e.g. "moisture:B2", "temp:soil_east",
-"humidity", "lux". All timestamps are Unix epoch seconds, UTC.
+Sensor keys are namespaced strings, e.g. "probe:1", "temp:soil", "humidity",
+"lux". All timestamps are Unix epoch seconds, UTC.
+
+One connection is shared by every thread, so every use of it holds _lock.
+SQLite serializes individual calls, but a transaction belongs to the
+connection, not the thread: without the lock, one thread's commit or rollback
+can take another thread's half-written batch with it.
 
 Usage:
   import db
   db.init()                                  # once at startup
-  db.log_many([("moisture:B2", 43.1), ...])  # one transaction per cycle
+  db.log_many([("probe:1", 1.43), ...])      # one transaction per cycle
   db.log_event("pump", "ran 8s")
-  rows = db.series("moisture:B2", hours=168)  # last 7 days
+  rows = db.series("probe:1", hours=168)      # last 7 days
   db.downsample_and_prune()                   # daily housekeeping
 """
 
+import functools
 import json
 import sqlite3
+import threading
 import time
 from pathlib import Path
 
@@ -32,6 +39,15 @@ DB_PATH = Path(__file__).with_name("growlight.db")
 RAW_RETENTION_DAYS = 30   # raw samples older than this are rolled up + deleted
 
 _conn = None
+_lock = threading.RLock()
+
+
+def _locked(fn):
+    @functools.wraps(fn)
+    def wrapper(*a, **k):
+        with _lock:
+            return fn(*a, **k)
+    return wrapper
 
 
 def _c():
@@ -46,6 +62,7 @@ def _c():
     return _conn
 
 
+@_locked
 def init():
     c = _c()
     c.executescript("""
@@ -102,6 +119,7 @@ def init():
 
 # ----------------------------- writing -----------------------------
 
+@_locked
 def log_many(pairs, ts=None):
     """Insert several (sensor, value) readings in one transaction.
     Skips Nones so a single failed sensor doesn't abort the batch."""
@@ -118,6 +136,7 @@ def log_reading(sensor, value, ts=None):
     log_many([(sensor, value)], ts=ts)
 
 
+@_locked
 def kv_set(key, obj):
     """Store a small piece of runtime state that must survive a restart.
 
@@ -134,6 +153,7 @@ def kv_set(key, obj):
                   (str(key), json.dumps(obj), int(time.time())))
 
 
+@_locked
 def kv_get(key, default=None):
     """Read state stored with kv_set; default if absent or unreadable."""
     try:
@@ -149,6 +169,7 @@ def kv_get(key, default=None):
         return default
 
 
+@_locked
 def log_event(etype, detail="", ts=None):
     ts = int(ts if ts is not None else time.time())
     c = _c()
@@ -159,6 +180,7 @@ def log_event(etype, detail="", ts=None):
 
 # ----------------------------- reading -----------------------------
 
+@_locked
 def series(sensor, hours=168):
     """Return [(ts, value), ...] for a sensor over the last `hours`.
     Pulls hourly rollups for the old part and raw for the recent part,
@@ -176,6 +198,7 @@ def series(sensor, hours=168):
     return sorted(merged.items())
 
 
+@_locked
 def latest(sensors=None, max_age_days=7):
     """Most recent value per sensor -> {sensor: (ts, value)}.
 
@@ -197,6 +220,7 @@ def latest(sensors=None, max_age_days=7):
     return out
 
 
+@_locked
 def add_planting(rec):
     """Record a finished planting. Returns its row id."""
     c = _c()
@@ -214,6 +238,7 @@ def add_planting(rec):
     return cur.lastrowid
 
 
+@_locked
 def plantings(limit=500):
     """Finished plantings, newest first."""
     cols = ("id", "ts", "tray", "cell", "seed", "equipment", "planted",
@@ -224,6 +249,7 @@ def plantings(limit=500):
     return [dict(zip(cols, r)) for r in rows]
 
 
+@_locked
 def delete_planting(pid):
     """Remove one history row (used when a cell is restored)."""
     c = _c()
@@ -232,6 +258,7 @@ def delete_planting(pid):
     return n
 
 
+@_locked
 def recent_events(limit=50):
     c = _c()
     rows = c.execute(
@@ -240,6 +267,7 @@ def recent_events(limit=50):
     return [dict(r) for r in rows]
 
 
+@_locked
 def recent_values(sensor, n=9, max_age=7200):
     """The last `n` raw values for `sensor`, newest first, ignoring anything
     older than `max_age` seconds. For filtering a live reading: a median over
@@ -250,19 +278,22 @@ def recent_values(sensor, n=9, max_age=7200):
         "ORDER BY ts DESC LIMIT ?", (sensor, since, max(1, int(n))))]
 
 
+@_locked
 def reading_near(sensor, ts, window=3600):
     """Value for a sensor closest to time `ts` (for timelapse-frame labels).
     Returns None if nothing within `window` seconds."""
     c = _c()
+    # BETWEEN, not ABS(ts-?)<=?, so the (sensor, ts) index bounds the scan
     row = c.execute("""
         SELECT value, ABS(ts-?) d FROM readings
-        WHERE sensor=? AND ABS(ts-?)<=? ORDER BY d LIMIT 1
-    """, (ts, sensor, ts, window)).fetchone()
+        WHERE sensor=? AND ts BETWEEN ? AND ? ORDER BY d LIMIT 1
+    """, (ts, sensor, ts - window, ts + window)).fetchone()
     return row["value"] if row else None
 
 
 # --------------------------- housekeeping ---------------------------
 
+@_locked
 def delete_series_prefix(prefix):
     """Remove every reading (raw and hourly) whose sensor starts with `prefix`.
     Returns the number of raw rows deleted."""
@@ -279,10 +310,12 @@ def delete_series_prefix(prefix):
     return n
 
 
+@_locked
 def downsample_and_prune():
     """Roll raw readings older than RAW_RETENTION_DAYS into hourly averages,
     then delete those raw rows. Idempotent; safe to run daily."""
-    cutoff = int(time.time()) - RAW_RETENTION_DAYS * 86400
+    # on an hour boundary, so no hour is averaged from only part of its rows
+    cutoff = (int(time.time()) - RAW_RETENTION_DAYS * 86400) // 3600 * 3600
     c = _c()
     with c:
         c.execute("""

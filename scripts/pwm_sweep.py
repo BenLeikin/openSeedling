@@ -20,7 +20,6 @@ for the 0-5V setting. If it barely moves, the supply is not 12V or the PWM pin
 is wrong.
 """
 import argparse
-import sys
 import time
 
 # Same defaults the app uses, so a sweep here matches what the service will do.

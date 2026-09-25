@@ -189,7 +189,8 @@ supply) must be tied together.
 
 | Signal | GPIO | Physical pin | Notes |
 | --- | --- | --- | --- |
-| Light PWM | 18 | 12 | Hardware PWM, 1 kHz, to the light MOSFET gate |
+| Light PWM | 18 | 12 | Hardware PWM channel 0, 1 kHz, to the 5V panel MOSFET gate |
+| Dim line | 19 | 35 | Hardware PWM channel 1, through the PC817 to the AC fixture's dim input (inverted) |
 | Pump tray 1 | 24 | 18 | To that pump's MOSFET gate (separate 5 V brick + common ground) |
 | Pump tray 2 | 26 | 37 | Second pump MOSFET gate, same supply rules |
 | Fan | 20 | 38 | Fan MOSFET gate; 5 V fan on the pump supply, flyback across the fan |
@@ -209,7 +210,8 @@ read by the systemd unit:
 
 | Variable | Example | Notes |
 | --- | --- | --- |
-| `GROWLIGHT_LIGHT_PIN` | `18` | Hardware PWM: **only 18 or 19** |
+| `GROWLIGHT_LIGHT_PIN` | `18` | 5V panel. Hardware PWM: **only 18 or 19** |
+| `GROWLIGHT_DIM_PIN` | `19` | AC fixture dim line; the other hardware PWM pin, or blank for none |
 | `GROWLIGHT_PUMP_PINS` | `1:24,2:26` | One entry per tray with a pump |
 | `GROWLIGHT_FLOAT_PINS` | `1:23,2:22` | One entry per tray with a float |
 | `GROWLIGHT_FAN_PIN` | `20` | Any free GPIO (software PWM) |
@@ -217,6 +219,11 @@ read by the systemd unit:
 | `GROWLIGHT_RESERVOIR_INVERT` | `1` | Set only if the bench test reads backwards (some units invert) |
 | `ANTHROPIC_API_KEY` | | Enables the daily AI report |
 | `DISCORD_WEBHOOK` | | Enables threshold alerts |
+| `GROWLIGHT_LOG_LEVEL` | `info` | `debug`, `info`, `warning`, `error` |
+| `GROWLIGHT_LOG_FILE` | | Adds a rotating log file |
+
+`deploy/env.example` documents every key. Re-running setup keeps any key it does
+not ask about.
 
 Answer `none` to any hardware prompt you do not have; that device is then never
 claimed, its dashboard controls stay hidden, and re-running setup offers `none`
@@ -232,11 +239,20 @@ powered from the same 3.3 V rail so their output can't exceed the ADC supply.
 Enable I2C with `raspi-config` (or `dtparam=i2c_arm=on`) and confirm the board
 shows up: `i2cdetect -y 1` should list `48`.
 
-Enable hardware PWM on GPIO18 by adding to `/boot/firmware/config.txt`:
+Boot settings (both PWM channels, I2C at 50 kHz, 1-Wire, UART) live in
+`deploy/boot-config.txt`; `scripts/setup.sh` writes them into
+`/boot/firmware/config.txt`:
 
 ```
-dtoverlay=pwm,pin=18,func=2
+enable_uart=1
+dtparam=i2c_arm=on,i2c_arm_baudrate=50000
+dtoverlay=w1-gpio
+dtoverlay=pwm-2chan,pin=18,func=2,pin2=19,func2=2
 ```
+
+Keep the I2C bus at 50 kHz: at 400 kHz the BH1750 at the end of its cable run
+failed intermittently with `[Errno 5] Input/output error`. Confirm the running speed
+with `od -An -tu4 --endian=big /sys/class/i2c-adapter/i2c-1/of_node/clock-frequency`.
 
 **Float fail-safe.** Mount the float so that rising water *opens* the switch. Open
 (reads "full") means stop, which is also the broken-wire state, so a disconnected
@@ -246,45 +262,89 @@ float fails safe by refusing to pump.
 the discharge above the water line or drill a ~1.5 mm vent hole at the top of the
 tubing run.
 
-Wiring diagrams are in `growlight_wiring.svg`, `pump_float_wiring.svg`, and
-`sensor_wiring.svg`.
+There are no wiring diagrams in the repo yet; the pinout table above and the
+notes in this section are the reference.
 
 ---
 
 ## Install
 
-On the Pi:
+**Tested on** a Raspberry Pi Zero 2 W running Raspberry Pi OS Lite 64-bit
+(Trixie). The code uses the BCM hardware PWM on GPIO18/19, so a Pi 3, 4 or Zero 2
+W should behave the same; a Pi 5 and 32-bit images are untested.
+
+Flash Raspberry Pi OS Lite 64-bit with Raspberry Pi Imager, setting the hostname,
+user, Wi-Fi, time zone and SSH there. Log in as that user (not root) and run:
 
 ```bash
-git clone <your-repo-url> ~/growlight
-cd ~/growlight
-bash scripts/setup.sh
+curl -fsSL https://raw.githubusercontent.com/BenLeikin/openSeedling/main/scripts/setup.sh | bash
 ```
 
-It asks which GPIO each device is on (suggesting the defaults below) and
-optionally takes your Anthropic API key and Discord webhook. Answers go to
-`.env`, which the systemd unit reads, so nothing in the Python needs editing.
-Re-running offers your previous answers as the defaults; `bash scripts/setup.sh
---defaults` skips every prompt.
+That installs git, clones the app to `~/growlight` and runs the setup from the
+checkout. It checks the board and OS first and stops on anything untested unless
+you confirm or pass `--force`. Then it asks:
 
-The script is idempotent and preserves `config.json` and `growlight.db`, so it is
-safe to re-run after an update. It handles:
+- which GPIO each device is on (Enter for the suggested pin, `none` for anything
+  not wired);
+- optional Anthropic API key and Discord webhook;
+- on a first install, your latitude, longitude and time zone;
+- whether to set a dashboard password, and whether to reboot.
 
-1. System packages (`rpicam-apps`, `ffmpeg`, `i2c-tools`)
-2. Boot config: the PWM overlay for light dimming, plus I2C and 1-Wire for the
-   sensors. **Adding any of these requires a reboot**, and the script says so.
-3. Swap, so a timelapse render does not OOM a 512 MB board
-4. A venv with the core and sensor libraries
-5. The systemd unit, enabled at boot
-6. Shell convenience (venv auto-activate)
-7. A hardware check: which I2C addresses and DS18B20 sensors are actually visible
+Answers go to `.env` (pins and secrets, read by the systemd unit) and
+`config.json` (location, password). Re-running offers your previous answers as
+the defaults; `--defaults` skips every prompt. `--dir PATH` installs somewhere
+other than `~/growlight`; `--repo URL` and `--branch NAME` install from a fork.
+
+Already have a checkout? Run `bash scripts/setup.sh` from it.
+
+Everything the script changes on the box comes from files in the repo:
+
+| File | Applied to |
+| --- | --- |
+| `deploy/apt-packages.txt` | Debian packages |
+| `deploy/boot-config.txt` | A managed block in `/boot/firmware/config.txt` |
+| `deploy/growlight.service` | `/etc/systemd/system/growlight.service` |
+| `deploy/env.example` | Reference for `.env` (not copied) |
+| `requirements.txt` | Pinned venv packages |
+| `requirements-optional.txt` | OpenCV and NumPy, allowed to fail |
+
+The script is idempotent and never touches `config.json`, `growlight.db` or
+`.secret`, so it is safe to re-run after an update. It handles:
+
+1. Packages from `deploy/apt-packages.txt`
+2. `.env`, keeping any key it does not ask about
+3. Boot config: writes `deploy/boot-config.txt` as a `# BEGIN growlight` block at
+   the end of `config.txt` and comments out conflicting lines elsewhere with a
+   `#growlight# ` prefix, saving the old file alongside. **Any change here
+   requires a reboot**, and the script says so.
+4. `i2c-dev` in `/etc/modules`
+5. Membership in the `gpio`, `i2c` and `video` groups
+6. Swap: leaves an active swap (zram on Trixie) alone; creates a 1 GB swapfile
+   only when there is none
+7. A venv created with `--system-site-packages` (gpiozero and lgpio come from
+   apt) and the pinned requirements
+8. The systemd unit, enabled at boot; stray files in `growlight.service.d/` are
+   reported, editor leftovers removed
+9. A hardware check: which I2C addresses and DS18B20 sensors are actually visible
 
 That last step is the useful one when something is not reading. It distinguishes
 "the sensor is not wired" from "the software is not seeing it": if `i2cdetect`
 does not list the address, no amount of restarting the service will help.
 
-After the first run, reboot if asked, then set the location and schedule in
-Settings on the dashboard.
+**Drift check.** `bash scripts/setup.sh --check` compares the box against
+`deploy/` and the requirements and changes nothing; it exits 1 and shows a diff
+when something has drifted. Any box-level change goes into `deploy/` or
+`setup.sh` in the same commit as the code that needs it.
+
+After the reboot:
+
+1. Open `http://<pi>:5000`. If you skipped the location prompt, set Location in
+   Settings first: the defaults are the author's (Thousand Oaks, CA), and sun
+   times, the schedule and the DLI day all follow them.
+2. Pick the light backend in Settings, Light, and run Calibrate on the light
+   response card if the fixture dims.
+3. Capture wet and dry anchors for each soil probe before turning on
+   auto-watering.
 
 ### Run as a service
 
@@ -299,16 +359,29 @@ journalctl -u growlight -f
 
 ### Deploy updates
 
+Updates arrive as a zip of the changed files (top folder `openSeedling/`, plus a
+`REMOVED` list for deleted files). Copy it to the Pi and run:
+
 ```bash
-cd ~/growlight && git pull && sudo systemctl restart growlight
+bash ~/growlight/scripts/update.sh ~/openSeedling-update.zip
 ```
 
-Static assets are versioned by file mtime, so the browser picks up new JS and CSS
-on its own; no hard refresh needed.
+With no argument it uses the newest `openSeedling*.zip` in the current directory
+or your home directory. It lists what changes and asks first. Then it backs up
+`config.json`, `.env`, `.secret`, a consistent copy of `growlight.db` and every
+file it replaces or deletes to `~/growlight-backups/` (newest five kept), copies
+the new files in, compiles every Python file, runs `scripts/setup.sh --defaults`
+if `deploy/` or the requirements changed, restarts the service and waits for
+`/api/status` to answer with no tracebacks from the new process. If the code
+does not compile or the service does not come back clean, it puts every file
+back and restarts the old version. Box changes from `setup.sh` are not undone.
+If `~/growlight` is a git checkout, the result is committed there.
 
-If a pull leaves one file behind, the service can end up running a mix of old and
-new code. `git status` should be clean before a pull, and the journal is the
-place to confirm the restart came up without a traceback.
+`--check` lists what would change without touching anything; `--yes` skips the
+question.
+
+Static assets are versioned by file mtime, so the browser picks up new JS and
+CSS on its own; no hard refresh needed.
 
 ---
 
@@ -387,8 +460,10 @@ settings require a session):
 ./venv/bin/python scripts/set_password.py
 ```
 
-Behind HTTPS keep `cookie_secure: true`; for plain-http local testing set it
-false.
+`cookie_secure` defaults to `"auto"`: the session cookie is marked Secure when the
+request arrived over HTTPS, directly or through a proxy that sets
+`X-Forwarded-Proto: https`. Set `true` to force it (only if every request is
+HTTPS, or login silently fails over http) or `false` to never set it.
 
 ### USB (UVC) camera
 
@@ -494,7 +569,15 @@ location / {
 
 ## API
 
-Read endpoints are open; mutating ones require a session when a password is set.
+Read endpoints are open, except `/api/backup`. Every mutating endpoint requires
+a session when a password is set, and always requires a JSON body
+(`Content-Type: application/json`, `{}` when there is nothing to send); other
+content types get 415. That is the defense against another site posting a form
+at the dashboard. From a shell:
+`curl -X POST -H 'Content-Type: application/json' -d '{}' http://<pi>:5000/api/capture`.
+
+Signed-out viewers see neither the location nor any credential in
+`/api/status`.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -506,6 +589,11 @@ Read endpoints are open; mutating ones require a session when a password is set.
 | GET | `/api/report` | Latest AI report + generating flag |
 | GET | `/api/series_all` | Every sensor's history in one call (feeds the chart grid) |
 | GET | `/api/frame_context?ts=` | Sensor readings nearest a timelapse frame (feeds the scrubber overlay) |
+| GET | `/api/stream` | Server-sent events: the status pushed as it changes (6 connections max) |
+| GET | `/api/host` | Pi health: CPU temperature, load, memory, throttling, Wi-Fi |
+| GET | `/api/plantings` | Finished plantings (germination history) |
+| GET | `/preview.jpg`, `/rectified.jpg` | Latest alignment preview; latest frame flattened to the tray grid |
+| GET | `/api/backup` | Database snapshot, `config.json` and restore steps; `?secrets=1` adds `.env`. Requires login |
 | POST | `/api/settings` | Update settings. Accepts partial bodies; valid fields are saved and invalid ones come back by name in `errors`, so one bad field never silently discards the rest |
 | POST | `/api/grid`, `/api/detect_grid` | Cell grid |
 | POST | `/api/focus_sweep` | Run (or cancel) the USB camera focus sweep |
@@ -523,10 +611,16 @@ Read endpoints are open; mutating ones require a session when a password is set.
 | POST | `/api/capture` | Take a photo now (tagged manual) |
 | POST | `/api/pump` | Timed dose or fill-to-float, per tray (`tray: "1"` or `"2"`) |
 | POST | `/api/ai_settings`, `/api/report` | AI report config / generate now |
-| POST | `/api/login`, `/api/logout` | Auth |
+| POST | `/api/preview` | Take an alignment preview frame |
+| POST | `/api/light_sweep` | Run (or cancel) the light response sweep / Calibrate |
+| POST | `/api/lightning` | Thunderstorm effect (dim backend only) |
+| POST | `/api/auto_water` | Arm or disarm auto-watering |
+| POST | `/api/planting_end`, `/api/planting_restore` | Move a cell to the planting history, or bring it back |
+| POST | `/api/plug_discover`, `/api/plug_test` | Find and test a Kasa smart plug |
+| POST | `/api/login`, `/api/logout` | Auth. Logins are checked one at a time, with a delay that doubles per consecutive failure (0.5 s to 8 s) |
 
-Secrets (`password_hash`, webhook URLs, ntfy topic) are redacted from
-`/api/status`; the read-only dashboard never exposes them.
+Secrets (`password_hash`, webhook URLs, ntfy topic, Kasa credentials) are
+redacted from `/api/status`; the read-only dashboard never exposes them.
 
 ### Schedule modes
 
@@ -575,7 +669,8 @@ notify.py           ntfy push transport
 discord_alert.py    Discord webhook transport
 ai_report.py        Claude API daily report
 templates/index.html, static/{app.js,style.css}
-scripts/{setup.sh,set_password.sh,test_ramp.py}
+scripts/{setup.sh,update.sh,set_password.py,test_ramp.py}
+deploy/             box config applied by setup.sh (boot, unit, packages, env reference)
 ```
 
 Runtime files (`config.json`, `growlight.db`, `timelapse/`, `.secret`,
@@ -593,15 +688,15 @@ Runtime files (`config.json`, `growlight.db`, `timelapse/`, `.secret`,
 - **Discord returns HTTP 403.** Discord's Cloudflare blocks the default
   `Python-urllib` user agent; `discord_alert.py` sends a real `User-Agent`, which
   fixes it.
-- **`lgpio` won't pip-install.** Use the apt package `python3-lgpio` and enable
-  system site packages in the venv (see Install).
+- **`lgpio` won't pip-install.** It comes from apt (`python3-lgpio`); the venv
+  must be created with `--system-site-packages`. `setup.sh --check` flags a venv
+  that was not.
 - **A new AI report fires on every reboot.** The Pi Zero 2 W has no RTC, so at
   boot the clock is wrong until NTP corrects it. The report scheduler waits for
-  the clock to sync (via `/run/systemd/timesync/synchronized`) before deciding
-  anything, so it won't mistake the post-NTP time jump for the scheduled time. If
-  you don't use systemd-timesyncd, add `After=time-sync.target` to the service
-  unit and enable `systemd-time-wait-sync` so the service starts only once the
-  clock is set.
+  the clock to sync before deciding anything, so it won't mistake the post-NTP
+  time jump for the scheduled time. It reads the kernel's sync flag (the one
+  behind `timedatectl`'s "System clock synchronized"), so it works with chrony as
+  well as systemd-timesyncd.
 - **Pump does nothing.** Check the separate 5 V supply and common ground, and that
   `gpiozero` loaded (the log prints if the GPIO backend is unavailable).
 - **Photo looks zoomed in / cropped after a camera swap.** The capture resolution
