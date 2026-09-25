@@ -5105,8 +5105,8 @@ def setups(cfg=None):
 
     Each: id, name, light ("main", "second" or "" for none), lux (the light
     sensor key or ""), k (lux-to-PPFD factor for that light's spectrum, None
-    for the global one), sensors (keys shown for it; empty = all), and a DLI
-    band dli_low / dli_high."""
+    for the global one), sensors (keys shown for it; empty = all), trays (tray
+    ids that belong to it; empty = all), and a DLI band dli_low / dli_high."""
     if cfg is None:
         with settings_lock:
             cfg = dict(settings)
@@ -5114,7 +5114,7 @@ def setups(cfg=None):
     if got:
         return got
     return [{"id": "main", "name": "Main", "light": "main", "lux": "lux",
-             "k": None, "sensors": [],
+             "k": None, "sensors": [], "trays": [],
              "dli_low": float(cfg.get("dli_target_low") or DEFAULTS["dli_target_low"]),
              "dli_high": float(cfg.get("dli_target_high") or DEFAULTS["dli_target_high"])}]
 
@@ -5233,6 +5233,7 @@ def setup_status(cfg, setup, on_time, off_time, tz):
             "light": setup.get("light", ""), "lux": key, "k": k,
             "light_label": light_label(setup.get("light", ""), cfg) if setup.get("light") else "",
             "sensors": list(setup.get("sensors") or []),
+            "trays": [str(t) for t in (setup.get("trays") or [])],
             "band": [lo, hi], "day": day,
             "plan": light_plan(cfg, on_time, off_time, setup)}
 
@@ -5775,6 +5776,13 @@ def _v_setups(v):
         if not isinstance(sens, list) or len(sens) > 64 or not all(
                 isinstance(q, str) and re.fullmatch(r"[a-z_]+(:[A-Za-z0-9_]+)?", q) for q in sens):
             raise ValueError(f"{name}: sensors must be a list of sensor keys")
+        trays_ = x.get("trays") or []
+        if not isinstance(trays_, list) or len(trays_) > 32 or not all(
+                isinstance(q, (str, int)) and re.fullmatch(r"[A-Za-z0-9_-]{1,24}", str(q)) for q in trays_):
+            raise ValueError(f"{name}: trays must be a list of tray ids")
+        with settings_lock:
+            known = set((settings.get("trays") or {}).keys())
+        trays_ = sorted({str(q) for q in trays_} & known)   # a deleted tray drops out
         try:
             lo, hi = float(x.get("dli_low")), float(x.get("dli_high"))
         except (TypeError, ValueError):
@@ -5787,7 +5795,8 @@ def _v_setups(v):
         if lux:
             luxes.add(lux)
         out.append({"id": sid, "name": name, "light": light, "lux": lux, "k": k,
-                    "sensors": sorted(set(sens)), "dli_low": lo, "dli_high": hi})
+                    "sensors": sorted(set(sens)), "trays": trays_,
+                    "dli_low": lo, "dli_high": hi})
     return out
 
 

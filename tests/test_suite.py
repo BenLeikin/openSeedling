@@ -754,6 +754,16 @@ def _setups():
         for st_ in sensors._lux.values():
             st_.update(dev=None, init=False, fail=0)
     check(got == {"lux": 111.0, "lux:2": 222.0}, f"two light sensors read as lux and lux:2 ({got})")
+    with g.settings_lock:
+        g.settings["trays"] = dict(g.settings.get("trays") or {}, T3={"label": "Transplants", "rows": 4, "cols": 5, "cells": {}})
+    r = c.post("/api/settings", json={"setups": [dict(good[0], trays=["1", "2", "gone"]),
+                                                  dict(good[1], trays=["T3"])]}).get_json()
+    got_t = {x["id"]: x["trays"] for x in c.get("/api/status").get_json()["setups"]}
+    check(r["ok"] and got_t == {"seedlings": ["1", "2"], "transplants": ["T3"]},
+          f"trays are assigned per setup, and a tray that no longer exists drops out ({got_t})")
+    js3 = (APP / "static" / "app.js").read_text()
+    check("filter(trayInSetup)" in js3 and "trayInSetup(t)?'':'none'" in js3 and 'data-t="' in js3,
+          "the planting map, watering rows and the Setups editor follow each setup's trays")
     c.post("/api/settings", json={"setups": []})
 
 

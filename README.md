@@ -151,19 +151,24 @@ Settings, Setups. Each setup has:
 - an optional **lux per umol** factor for that light's spectrum (blank uses
   `lux_to_ppfd_k`);
 - a **DLI target band**;
+- the **trays** that belong to it. None ticked shows every tray. A tray's own
+  probe, float and canopy readings come with it;
 - the **sensors** that belong to it. None ticked shows every sensor.
+
+The editor's choices update as things change: a tray added under Trays or a
+sensor that starts reporting appears in the list without losing unsaved edits.
 
 With two or more setups, tabs appear at the top of the dashboard. The chosen
 tab decides whose light the Day card's DLI bar, pace and forecast, and the Plan
-card describe, and which sensor chips and charts are shown. The short-day and
+card describe, which sensor chips and charts are shown, and which trays the
+planting map and watering controls show. The short-day and
 too-much-light alerts are judged per setup and name it, and the AI report is
 told each setup's light. The Light card, the day phase and brightness, the
 photoperiod bar and the schedule chart follow the selected setup's light too:
 on a tab whose light is the second fixture, Auto/On/Off and the slider set that
 light (`light2_override`, `light2_bright`) and dragging the chart's edges sets
 its hours (`light2_start`, `light2_end`); windows that cross midnight are not
-draggable. The one-line second-light status is hidden when there are tabs. The
-watering controls show every tray.
+draggable. The one-line second-light status is hidden when there are tabs.
 
 The Day card also charts daily light through today (solid) and yesterday
 (dashed) against the target: the shaded band is where the day should end, and

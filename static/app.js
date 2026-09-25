@@ -473,9 +473,18 @@ try{ selSetup=localStorage.getItem('setup'); }catch(e){}
 function curSetup(){
   return setupsList.find(s=>s.id===selSetup)||setupsList[0]||null;
 }
+function trayInSetup(id){
+  const cs=curSetup();
+  if(!cs||setupsList.length<2||!cs.trays||!cs.trays.length)return true;
+  return cs.trays.includes(String(id));
+}
 function inSetup(k){
   const cs=curSetup();
-  if(!cs||!cs.sensors||!cs.sensors.length||setupsList.length<2)return true;
+  if(!cs||setupsList.length<2)return true;
+  // a tray's own sensors (probe, canopy, float) come with the tray
+  const m=/^(probe|canopy|float):(.+)$/.exec(k);
+  if(m&&cs.trays&&cs.trays.length&&cs.trays.includes(m[2]))return true;
+  if(!cs.sensors||!cs.sensors.length)return !(m&&cs.trays&&cs.trays.length);
   if(k===cs.lux||(k==='ppfd'&&cs.lux==='lux'))return true;
   return cs.sensors.includes(k);
 }
@@ -552,14 +561,25 @@ function lightChoices(cur){
   out.push(['','None']);
   return out;
 }
+var trayOpts=[], setupOptSig='';
 function renderSetupConfig(j){
   lightOpts=j.light_options||[];
+  trayOpts=Object.entries((j.settings&&j.settings.trays)||{}).sort((a,b)=>a[0].localeCompare(b[0]))
+    .map(([id,t])=>[id,(t&&t.label)||('Tray '+id)]);
   const box=document.getElementById('setupcfg');
-  if(!box||setupDirty)return;
+  // what the editor offers: a new tray, a sensor that appeared, a light change
+  const optSig=JSON.stringify([lightOpts,trayOpts,Object.keys(sensorData||{}).sort()]);
+  const optsChanged=optSig!==setupOptSig; setupOptSig=optSig;
+  if(box&&setupDirty){
+    // keep the unsaved edits, but show the new choices (unless mid-typing)
+    if(optsChanged&&!(document.activeElement&&document.activeElement.closest('#setupcfg')))drawSetupConfig();
+    return;
+  }
+  if(!box)return;
   setupDraft=JSON.parse(JSON.stringify((j.settings&&j.settings.setups&&j.settings.setups.length)
     ? j.settings.setups
     : (j.setups||[]).map(s=>({id:s.id,name:s.name,light:s.light,lux:s.lux,
-        k:null,sensors:s.sensors,dli_low:s.band[0],dli_high:s.band[1]}))));
+        k:null,sensors:s.sensors,trays:s.trays||[],dli_low:s.band[0],dli_high:s.band[1]}))));
   drawSetupConfig();
 }
 function drawSetupConfig(){
@@ -583,8 +603,12 @@ function drawSetupConfig(){
         <div><label>DLI target low <input data-f="dli_low" type="number" min="0.5" max="65" step="0.5" value="${s.dli_low}"></label></div>
         <div><label>DLI target high <input data-f="dli_high" type="number" min="1" max="65" step="0.5" value="${s.dli_high}"></label></div>
       </div>
-      <div class="setupsens">${keys.map(k=>`<label><input type="checkbox" data-k="${esc(k)}"`
-        +`${(s.sensors||[]).includes(k)?' checked':''}> ${esc(sensorMeta(k,0).label)}</label>`).join('')}</div>
+      <div class="setupsens"><b>Trays</b>${trayOpts.map(([id,lbl])=>`<label><input type="checkbox" data-t="${esc(id)}"`
+        +`${(s.trays||[]).includes(id)?' checked':''}> ${esc(lbl)}</label>`).join('')}
+        <span class="fhint">none ticked = all trays</span></div>
+      <div class="setupsens"><b>Sensors</b>${keys.map(k=>`<label><input type="checkbox" data-k="${esc(k)}"`
+        +`${(s.sensors||[]).includes(k)?' checked':''}> ${esc(sensorMeta(k,0).label)}</label>`).join('')}
+        <span class="fhint">a tray's probe, float and canopy come with the tray</span></div>
       ${setupDraft.length>1?'<button type="button" class="setuprm">Remove</button>':''}
     </fieldset>`).join('');
 }
@@ -598,6 +622,8 @@ function drawSetupConfig(){
       if(f)s[f]=(f==='dli_low'||f==='dli_high')?parseFloat(ev.target.value)
         :(f==='k'?(ev.target.value===''?null:parseFloat(ev.target.value)):ev.target.value);
       if(k){const set=new Set(s.sensors||[]);ev.target.checked?set.add(k):set.delete(k);s.sensors=[...set];}
+      const tr=ev.target.dataset.t;
+      if(tr){const set=new Set(s.trays||[]);ev.target.checked?set.add(tr):set.delete(tr);s.trays=[...set];}
     });
     box.addEventListener('click',ev=>{
       if(!ev.target.classList.contains('setuprm'))return;
@@ -608,7 +634,7 @@ function drawSetupConfig(){
   const add=document.getElementById('setupadd');
   if(add)add.addEventListener('click',()=>{
     if(!setupDraft)setupDraft=[];
-    setupDraft.push({name:'Setup '+(setupDraft.length+1),light:'',lux:'',k:null,sensors:[],dli_low:10,dli_high:15});
+    setupDraft.push({name:'Setup '+(setupDraft.length+1),light:'',lux:'',k:null,sensors:[],trays:[],dli_low:10,dli_high:15});
     setupDirty=true;drawSetupConfig();
   });
   const save=document.getElementById('setupsave');
@@ -1713,6 +1739,7 @@ function renderWater(j){
   pumpActive=anyRunning;
   for(const t of Object.keys(w.trays).sort()){
     const tw=w.trays[t];
+    {const r0=document.getElementById('wrow'+t);if(r0)r0.style.display=trayInSetup(t)?'':'none';}
     let row=document.getElementById('wrow'+t);
     if(!row){
       row=document.createElement('div');
@@ -1845,7 +1872,8 @@ function daysSince(iso){
 }
 function renderTrays(j){
   const t=(j.settings&&j.settings.trays)||{};
-  const sig=JSON.stringify(t);
+  const cs0=curSetup();
+  const sig=JSON.stringify(t)+'|'+(setupsList.length>1&&cs0?JSON.stringify(cs0.trays||[]):'');
   const wrap=document.getElementById('trayswrap');
   if(!wrap)return;
   // don't clobber what's being typed, or a click whose save is still in flight
@@ -1854,9 +1882,9 @@ function renderTrays(j){
   if(wrap.dataset.sig===sig && wrap.children.length)return;
   if(document.activeElement && document.activeElement.closest('#trayswrap'))return;
   wrap.dataset.sig=sig;
-  trays=JSON.parse(sig);
+  trays=JSON.parse(JSON.stringify(t));
   let h='';
-  for(const id of Object.keys(trays).sort()){
+  for(const id of Object.keys(trays).sort().filter(trayInSetup)){
     const tr=trays[id]||{}, cells=tr.cells||{};
     const rows=tr.rows||3, cols=tr.cols||4;
     const filled=Object.keys(cells).length;
