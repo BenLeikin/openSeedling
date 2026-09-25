@@ -765,7 +765,16 @@ everything.
 ## Project layout
 
 ```
-growlight.py        main app: light/capture/sample/watering/report loops + Flask
+growlight.py        entry point: imports the modules below, starts the loops and waitress
+config.py           settings: DEFAULTS, config.json load/save, migrations, validators, shared state
+hardware.py         pins and actuators: PWM channels, pumps, fan, shutdown gate, cleanup()
+light.py            both lights: backends, schedules, ramps, calibration, dithering, storm, control loop
+setups.py           grow setups, light windows, DLI integration and curves, Plan verdicts
+water.py            fills, reservoir, probe filtering and moisture, auto-water, post-fill checks
+monitor.py          sampling and live readings, validation, sensor health, alerts, AI report loop
+camera.py           capture, crop and flatten, thumbnails, focus sweep, render, canopy
+status.py           status payload, display units, redaction, live event stream
+routes.py           the Flask app, sign-in, every route
 db.py               SQLite logging (WAL) with downsampling
 sensors.py          sensor I/O: probes, floats, reservoir, air, lux, soil temp
 alerts.py           threshold alert state machine (sustain, hysteresis, reminders)
@@ -779,6 +788,11 @@ templates/index.html, static/{app.js,style.css}
 scripts/{setup.sh,update.sh,set_password.py,test_ramp.py}
 deploy/             box config applied by setup.sh (boot, unit, packages, env reference)
 ```
+
+The app modules refer to each other only as `module.name` (never
+`from module import name`), because several globals are rebound at runtime.
+Import-time code may use only `config` and `hardware`; everything else is
+looked up when a function runs.
 
 Runtime files (`config.json`, `growlight.db`, `timelapse/`, `.secret`,
 `.anthropic_key`, `.discord_webhook`, `ai_report.json`) are gitignored.

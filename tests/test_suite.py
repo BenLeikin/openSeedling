@@ -44,6 +44,15 @@ def find_repo():
 REPO = find_repo()
 WORK = Path(tempfile.mkdtemp(prefix="openseedling-test-"))
 APP = WORK / "app"
+# growlight.py is the entry point; the app's code lives in these modules
+APP_MODULES = ("growlight.py", "config.py", "hardware.py", "light.py", "setups.py",
+               "water.py", "monitor.py", "camera.py", "status.py", "routes.py")
+
+
+def app_source():
+    """Every app module's source, for checks that look at the code itself."""
+    return "\n".join((APP / f).read_text() for f in APP_MODULES)
+
 _skip = shutil.ignore_patterns(
     ".git", "venv", "__pycache__", "tests", "timelapse", "timelapse_archive",
     "growlight.db*", "config.json", ".env", ".secret", "ai_report.json",
@@ -173,7 +182,7 @@ js = (APP / "static" / "app.js").read_text()
 posts = re.findall(r"fetch\((['\"`][^'\"`]+['\"`])\s*,\s*\{method:'POST'(.{0,160})", js, re.S)
 no_json = [u for u, rest in posts if "application/json" not in rest]
 check(posts and not no_json, f"every dashboard POST sends JSON ({len(posts)} calls)" + (f" {no_json}" if no_json else ""))
-gl = (APP / "growlight.py").read_text()
+gl = app_source()
 check("str(VIDEO_PATH)]" not in gl and "os.replace(part, VIDEO_PATH)" in gl,
       "timelapse is written beside the old video and swapped in, never rewritten in place")
 check(re.search(r"async function doLogin[\s\S]{0,600}restartStream\(\)", js) is not None
@@ -186,25 +195,57 @@ section("Import")
 from werkzeug.security import generate_password_hash   # noqa: E402
 from zoneinfo import ZoneInfo                          # noqa: E402
 
-import growlight as g     # noqa: E402
+import growlight          # noqa: E402  (imports every module, in order)
+import config             # noqa: E402
+import hardware           # noqa: E402
+import light as light_mod     # noqa: E402
+import setups as setups_mod   # noqa: E402
+import water              # noqa: E402
+import monitor            # noqa: E402
+import camera as camera_mod   # noqa: E402
+import status as status_mod   # noqa: E402
+import routes             # noqa: E402
 import db                 # noqa: E402
 import sensors            # noqa: E402
 
 db.init()
 check(Path(db.DB_PATH).parent == APP, "database lives in the temp copy, not the repo")
-tz = ZoneInfo(g.settings["timezone"])
+tz = ZoneInfo(config.settings["timezone"])
 now = datetime.now(tz)
-g.state.update(on=now.replace(hour=7), off=now.replace(hour=19),
+config.state.update(on=now.replace(hour=7), off=now.replace(hour=19),
                sunrise=now.replace(hour=6), sunset=now.replace(hour=19),
                brightness=0, override="auto")
-c = g.app.test_client()
+c = routes.app.test_client()
 check(c.get("/api/status").status_code == 200, "app imports and /api/status answers")
-check(g.settings.get("auto_water_trays") == ["1", "2"],
+
+# Checks below swap functions and constants for fakes on the module that owns
+# them. That only works if nothing else holds its own copy of the name (say a
+# "from light import set_brightness"), or the fake is never called and the
+# check passes without testing anything.
+_mods = {"config": config, "hardware": hardware, "light_mod": light_mod,
+         "setups_mod": setups_mod, "water": water, "monitor": monitor,
+         "camera_mod": camera_mod, "status_mod": status_mod, "routes": routes}
+_patched = set()
+for _n in ast.walk(ast.parse(Path(__file__).read_text())):
+    if isinstance(_n, ast.Assign):
+        for _t in _n.targets:
+            for _e in (_t.elts if isinstance(_t, ast.Tuple) else [_t]):
+                if (isinstance(_e, ast.Attribute) and isinstance(_e.value, ast.Name)
+                        and _e.value.id in _mods):
+                    _patched.add((_e.value.id, _e.attr))
+_copies = [f"{a}.{n} also in {o}" for a, n in sorted(_patched)
+           for o, m in list(_mods.items()) + [("growlight", growlight)]
+           if o != a and n in vars(m)]
+_unowned = [f"{a}.{n}" for a, n in sorted(_patched) if n not in vars(_mods[a])]
+check(len(_patched) >= 10 and not _copies and not _unowned,
+      f"every name the suite patches ({len(_patched)}) lives in one module only"
+      + (f" {_copies + _unowned}" if _copies or _unowned else ""))
+check(config.settings.get("auto_water_trays") == ["1", "2"],
       "an old config with auto-water on arms every pump tray once")
-with g.settings_lock:
-    g.settings.update(auto_water=False, auto_water_trays=[])
-check(g.settings.get("ai_model") == g.DEFAULTS["ai_model"] != "claude-opus-4-8",
-      f"a stored former-default AI model is moved to the current one ({g.settings.get('ai_model')})")
+with config.settings_lock:
+    config.settings.update(auto_water=False, auto_water_trays=[])
+check(config.settings.get("ai_model") == config.DEFAULTS["ai_model"] != "claude-opus-4-8",
+      f"a stored former-default AI model is moved to the current one ({config.settings.get('ai_model')})")
 import ai_report          # noqa: E402
 check("magenta/pink LED" not in ai_report.PROMPT and "tint" in ai_report.PROMPT,
       "AI prompt does not assume the light's color")
@@ -214,13 +255,13 @@ FAST_HASH = generate_password_hash("pw", method="pbkdf2:sha256:1000")
 
 
 def set_password(on):
-    with g.settings_lock:
-        g.settings["password_hash"] = FAST_HASH if on else ""
+    with config.settings_lock:
+        config.settings["password_hash"] = FAST_HASH if on else ""
 
 def _sec0():
     global active, floats, calls
     errors = []
-    for rule in g.app.url_map.iter_rules():
+    for rule in routes.app.url_map.iter_rules():
         if rule.endpoint == "static" or "GET" not in rule.methods or rule.rule == "/api/stream":
             continue
         path = re.sub(r"<[^>]+>", "x.jpg", rule.rule)
@@ -230,7 +271,7 @@ def _sec0():
             errors.append(f"GET {path} {code}")
     check(not errors, "every GET route answers without a 5xx" + (f" {errors}" if errors else ""))
 
-    mutating = [r.rule for r in g.app.url_map.iter_rules()
+    mutating = [r.rule for r in routes.app.url_map.iter_rules()
                 if "POST" in r.methods and r.rule not in ("/api/login", "/api/logout")]
     leaks = [p for p in mutating
              if c.post(p, data="x", content_type="text/plain").status_code != 415]
@@ -239,8 +280,8 @@ def _sec0():
 
 def _sec1():
     global active, floats, calls
-    with g.settings_lock:
-        g.settings.update(kasa_user="me@example.com", latitude=34.2, longitude=-118.8)
+    with config.settings_lock:
+        config.settings.update(kasa_user="me@example.com", latitude=34.2, longitude=-118.8)
     s = c.get("/api/status").get_json()["settings"]
     check("kasa_user" not in s and "password_hash" not in s, "credentials never in /api/status")
     check("latitude" in s, "no password set: location shown")
@@ -250,8 +291,8 @@ def _sec1():
     check("latitude" not in s and "longitude" not in s, "signed out: location hidden")
     check(c.post("/api/pump", json={}).status_code == 401, "signed out: JSON POST gets 401")
 
-    g.LOGIN_DELAY_S, g.LOGIN_DELAY_MAX_S = 0.01, 0.2
-    real_check = g.check_password_hash
+    routes.LOGIN_DELAY_S, routes.LOGIN_DELAY_MAX_S = 0.01, 0.2
+    real_check = routes.check_password_hash
     active = {"n": 0, "max": 0}
     lk = threading.Lock()
 
@@ -268,22 +309,22 @@ def _sec1():
                 active["n"] -= 1
 
 
-    g.check_password_hash = tracked
-    g._login_fails["n"] = 0
-    threads = [threading.Thread(target=lambda: g.app.test_client().post(
+    routes.check_password_hash = tracked
+    routes._login_fails["n"] = 0
+    threads = [threading.Thread(target=lambda: routes.app.test_client().post(
         "/api/login", json={"password": "wrong"})) for _ in range(6)]
     for t in threads:
         t.start()
     for t in threads:
         t.join()
     check(active["max"] == 1, f"parallel logins are checked one at a time (max {active['max']})")
-    check(g._login_fails["n"] == 6, "failed logins are counted")
+    check(routes._login_fails["n"] == 6, "failed logins are counted")
     t0 = time.time()
     c.post("/api/login", json={"password": "wrong"})
     check(time.time() - t0 >= 0.15, "delay grows after repeated failures")
     r = c.post("/api/login", json={"password": "pw"})
-    check(r.status_code == 200 and g._login_fails["n"] == 0, "right password signs in and resets the count")
-    g.check_password_hash = real_check
+    check(r.status_code == 200 and routes._login_fails["n"] == 0, "right password signs in and resets the count")
+    routes.check_password_hash = real_check
     s = c.get("/api/status").get_json()
     check(s["authed"] and "latitude" in s["settings"], "signed in: location shown")
     c.post("/api/logout", json={})
@@ -292,13 +333,13 @@ def _sec1():
 
 def _sec2():
     global active, floats, calls
-    with g.app.test_request_context("/api/stream"):
-        resp = g.api_stream()
+    with routes.app.test_request_context("/api/stream"):
+        resp = routes.api_stream()
     gen = iter(resp.response)
     first, second = next(gen), next(gen)
     check(first.startswith("retry") and "event: status" in second, "stream opens with a status")
-    with g._subs_lock:
-        g._subs.clear()            # what publish() does to a subscriber that fell behind
+    with status_mod._subs_lock:
+        status_mod._subs.clear()            # what publish() does to a subscriber that fell behind
     try:
         next(gen)
         ended = False
@@ -309,22 +350,22 @@ def _sec2():
     # three open tabs, one change: the status is built once and shared
     gens = []
     for _ in range(3):
-        with g.app.test_request_context("/api/stream"):
-            gi = iter(g.api_stream().response)
+        with routes.app.test_request_context("/api/stream"):
+            gi = iter(routes.api_stream().response)
         next(gi); next(gi)                    # retry line + the fresh status
         gens.append(gi)
     builds = {"n": 0}
-    real_sp = g.status_payload
+    real_sp = status_mod.status_payload
 
     def counting(*a, **k):
         builds["n"] += 1
         return real_sp(*a, **k)
-    g.status_payload = counting
+    status_mod.status_payload = counting
     try:
-        g.publish("test")
+        status_mod.publish("test")
         texts = [next(gi) for gi in gens]
     finally:
-        g.status_payload = real_sp
+        status_mod.status_payload = real_sp
     check(builds["n"] == 1 and len(set(texts)) == 1,
           f"one change is rendered once for all open tabs ({builds['n']} builds for 3 tabs)")
     for gi in gens:
@@ -338,42 +379,42 @@ def _sec3():
 
     def fill(event, cap=3):
         """Run a fill on tray 1; `event(res)` fires 0.4 s in to change the world."""
-        for st in g.pump_state.values():
-            st.update(running=False, today_seconds=0, day=g._today_str())
-        with g.settings_lock:
-            g.settings.update(fill_max_seconds=cap, auto_water=True, auto_water_trays=["1", "2"])
+        for st in hardware.pump_state.values():
+            st.update(running=False, today_seconds=0, day=config._today_str())
+        with config.settings_lock:
+            config.settings.update(fill_max_seconds=cap, auto_water=True, auto_water_trays=["1", "2"])
         floats["1"].is_pressed = True                 # not full yet
         res = {"reservoir": "ok"}
-        real_res = g.reservoir_state
-        g.reservoir_state = lambda: res["reservoir"]
+        real_res = water.reservoir_state
+        water.reservoir_state = lambda: res["reservoir"]
 
         def later():
             time.sleep(0.4)
             event(res)
         threading.Thread(target=later, daemon=True).start()
         try:
-            ok, why = g.run_pump_until_full("1", "auto")
+            ok, why = water.run_pump_until_full("1", "auto")
         finally:
-            g.reservoir_state = real_res
-        return ok, why, g.pump_state["1"]["last_detail"], "1" in g.armed_trays(g.settings)
+            water.reservoir_state = real_res
+        return ok, why, hardware.pump_state["1"]["last_detail"], "1" in water.armed_trays(config.settings)
 
 
     ok, why, detail, _ = fill(lambda res: setattr(floats["1"], "is_pressed", False))
     check(ok and "full at" in detail, f"fill stops when the float trips ({detail})")
-    check(not g._pumps["1"].value, "pump is off after the fill")
+    check(not hardware._pumps["1"].value, "pump is off after the fill")
 
     ok, why, detail, armed = fill(lambda res: res.update(reservoir="empty"))
     check(not ok and "reservoir ran empty" in detail, f"fill stops when the reservoir runs dry ({detail})")
-    check(not armed and g.armed_trays(g.settings) == ["2"],
+    check(not armed and water.armed_trays(config.settings) == ["2"],
       "a failed fill disarms that tray only; the other stays armed")
-    check(not g._pumps["1"].value, "pump is off after a reservoir stop")
+    check(not hardware._pumps["1"].value, "pump is off after a reservoir stop")
 
     ok, why, detail, _ = fill(lambda res: None, cap=1)
     check(not ok and "cap" in detail, f"fill stops at the time cap ({detail})")
 
     ok, why, detail, _ = fill(lambda res: floats.pop("1", None))
     check(not ok and "float sensor stopped answering" in detail, f"lost float reported as such ({detail})")
-    check(not g._pumps["1"].value, "pump is off after a lost float")
+    check(not hardware._pumps["1"].value, "pump is off after a lost float")
 
 
 def _sec4():
@@ -406,8 +447,8 @@ def _sec4():
 
     db.log_many([("probe:1", 1.5), ("temp:soil", 30.0)], ts=nowi - 7200)   # 86 F then
     db.log_many([("probe:1", 1.5), ("temp:soil", 20.0)], ts=nowi - 60)     # 68 F now
-    with g.settings_lock:
-        g.settings["probe_cal"] = {"1": {"wet": 1.0, "dry": 2.2,
+    with config.settings_lock:
+        config.settings["probe_cal"] = {"1": {"wet": 1.0, "dry": 2.2,
                                          "temp_comp": {"coeff": 0.01, "ref_f": 70}}}
     pts = dict(map(tuple, c.get("/api/series_all?hours=3").get_json()["series"]["probe:1"]))
     old, new = pts.get(nowi - 7200), pts.get(nowi - 60)
@@ -420,10 +461,10 @@ def _sec4():
 
 def _sec5():
     global active, floats, calls
-    cfg = dict(g.settings, latitude=78.2, longitude=15.6, schedule_mode="fixed",
+    cfg = dict(config.settings, latitude=78.2, longitude=15.6, schedule_mode="fixed",
                fixed_on="07:00", fixed_off="19:00")
     try:
-        _, _, on, off = g.sun_window(cfg, date(2026, 6, 21), ZoneInfo("Arctic/Longyearbyen"))
+        _, _, on, off = light_mod.sun_window(cfg, date(2026, 6, 21), ZoneInfo("Arctic/Longyearbyen"))
         polar = (on.hour, off.hour) == (7, 19)
     except Exception:
         polar = False
@@ -431,7 +472,7 @@ def _sec5():
 
     # Last: this starts the real control loop thread, which keeps running.
     calls = {"n": 0}
-    real_sw = g.sun_window
+    real_sw = light_mod.sun_window
 
 
     def flaky(cfg_, day, tz_):
@@ -441,13 +482,13 @@ def _sec5():
         return real_sw(cfg_, day, tz_)
 
 
-    g.sun_window = flaky
-    g.LOOP_SECONDS = 0.1
-    t = threading.Thread(target=g.control_loop, daemon=True)
+    light_mod.sun_window = flaky
+    light_mod.LOOP_SECONDS = 0.1
+    t = threading.Thread(target=light_mod.control_loop, daemon=True)
     t.start()
     time.sleep(0.8)
     check(t.is_alive() and calls["n"] >= 2, "control loop survives an error and retries")
-    g.sun_window = real_sw
+    light_mod.sun_window = real_sw
 
 
 def _dli_band():
@@ -455,18 +496,18 @@ def _dli_band():
     check((cfg0.get("dli_target_low"), cfg0.get("dli_target_high")) == (10.0, 15.0),
           "default seedling DLI target is 10-15 and reaches the dashboard")
     r = c.post("/api/settings", json={"dli_target_low": 18, "dli_target_high": 12}).get_json()
-    check(not r["ok"] and "dli_target_low" in r["errors"] and g.dli_target() == (10.0, 15.0),
+    check(not r["ok"] and "dli_target_low" in r["errors"] and setups_mod.dli_target() == (10.0, 15.0),
           "a DLI target with low above high is refused and nothing changes")
     r = c.post("/api/settings", json={"dli_target_low": 10, "dli_target_high": 14}).get_json()
-    check(r["ok"] and g.dli_target() == (10.0, 14.0), "a valid DLI target saves")
-    real_md = g.measured_day
-    g.measured_day = lambda *a, **kw: {"mol": 12.0, "lit_hours": 12.0, "day": "yesterday"}
+    check(r["ok"] and setups_mod.dli_target() == (10.0, 14.0), "a valid DLI target saves")
+    real_md = setups_mod.measured_day
+    setups_mod.measured_day = lambda *a, **kw: {"mol": 12.0, "lit_hours": 12.0, "day": "yesterday"}
     try:
-        in_band = g.light_plan(dict(g.settings), None, None)["status"]
+        in_band = setups_mod.light_plan(dict(config.settings), None, None)["status"]
         c.post("/api/settings", json={"dli_target_low": 15, "dli_target_high": 20})
-        below = g.light_plan(dict(g.settings), None, None)
+        below = setups_mod.light_plan(dict(config.settings), None, None)
     finally:
-        g.measured_day = real_md
+        setups_mod.measured_day = real_md
     check(in_band == "ok" and below["status"] == "low" and any("15 mol" in a for a in below["advice"]),
           "the Plan verdict and advice follow the configured band (12 mol: in 10-14, short of 15-20)")
     import alerts
@@ -476,7 +517,7 @@ def _dli_band():
     check("15-20" in msg and "6-12" not in msg, "the short-day alert quotes the configured band")
     ctx = ai_report.build_context({"light_metrics": {"ppfd": 200, "dli": 9.0, "dli_target": [15, 20]}})
     check("15-20" in ctx and "6-12" not in ctx, "the AI report is told the configured band")
-    stale = [f for f in ("static/app.js", "templates/index.html", "growlight.py",
+    stale = [f for f in ("static/app.js", "templates/index.html", *APP_MODULES,
                          "alerts.py", "ai_report.py")
              if re.search(r"\b6-12\b", (APP / f).read_text())]
     check(not stale, "no hardcoded 6-12 band left" + (f" {stale}" if stale else ""))
@@ -489,34 +530,34 @@ def _camera_flatten():
           "the snapshot's flattening follows a visible setting")
     check(js.count("'/thumb/'+frames[") == 2 and "?v='+thumbsV" in js,
           "scrubber thumbnail URLs carry a version, so browsers drop cached ones")
-    g.TIMELAPSE_DIR.mkdir(parents=True, exist_ok=True)
-    g.THUMB_DIR.mkdir(parents=True, exist_ok=True)
+    camera_mod.TIMELAPSE_DIR.mkdir(parents=True, exist_ok=True)
+    camera_mod.THUMB_DIR.mkdir(parents=True, exist_ok=True)
     for i in range(3):
-        (g.TIMELAPSE_DIR / f"2026092{i}_120000.jpg").write_bytes(b"photo")
-        (g.THUMB_DIR / f"2026092{i}_120000.jpg").write_text("flat")
-    real_mt = g.make_thumb
+        (camera_mod.TIMELAPSE_DIR / f"2026092{i}_120000.jpg").write_bytes(b"photo")
+        (camera_mod.THUMB_DIR / f"2026092{i}_120000.jpg").write_text("flat")
+    real_mt = camera_mod.make_thumb
 
     def fake_thumb(ph, cfg=None, dst_dir=None):
         time.sleep(0.05)
-        ((dst_dir or g.THUMB_DIR) / ph.name).write_text(
+        ((dst_dir or camera_mod.THUMB_DIR) / ph.name).write_text(
             "flat" if (cfg or {}).get("timelapse_flatten", True) else "raw")
-    g.make_thumb = fake_thumb
+    camera_mod.make_thumb = fake_thumb
     counts = []
     try:
         v0 = c.get("/api/photos").get_json().get("v", 0)
-        with g.settings_lock:
-            g.settings["timelapse_flatten"] = True
+        with config.settings_lock:
+            config.settings["timelapse_flatten"] = True
         c.post("/api/settings", json={"timelapse_flatten": False})
         for _ in range(40):
             counts.append(len(c.get("/api/photos").get_json()["names"]))
-            if not g._thumbs_lock.locked() and counts[-1] and \
+            if not camera_mod._thumbs_lock.locked() and counts[-1] and \
                c.get("/api/photos").get_json().get("v", 0) != v0:
                 break
             time.sleep(0.05)
-        kinds = {p.read_text() for p in g.THUMB_DIR.glob("*.jpg")}
+        kinds = {p.read_text() for p in camera_mod.THUMB_DIR.glob("*.jpg")}
         v1 = c.get("/api/photos").get_json().get("v", 0)
     finally:
-        g.make_thumb = real_mt
+        camera_mod.make_thumb = real_mt
     check(kinds == {"raw"}, f"turning flattening off rebuilds the thumbnails raw ({kinds})")
     check(min(counts) == 3, f"the scrubber's frame list never empties during a rebuild (min {min(counts)})")
     check(v1 != v0, "the thumbnail version changes after a rebuild")
@@ -529,15 +570,15 @@ def _camera_preview():
         seen["size"] = (w, h)
         Path(out).write_bytes(b"\xff\xd8\xff\xd9")
         return True, ""
-    real = g._usb_capture
-    g._usb_capture = fake_usb
+    real = camera_mod._usb_capture
+    camera_mod._usb_capture = fake_usb
     try:
-        with g.settings_lock:
-            g.settings.update(camera_enabled=True, camera_backend="usb",
+        with config.settings_lock:
+            config.settings.update(camera_enabled=True, camera_backend="usb",
                               usb_width=2048, usb_height=1536)
         c.post("/api/preview", json={})
     finally:
-        g._usb_capture = real
+        camera_mod._usb_capture = real
     check(seen.get("size") == (2048, 1536),
           f"the align preview uses the photo's own camera mode ({seen.get('size')}), so it shows the same view")
 
@@ -554,18 +595,18 @@ def _camera_modes_and_reset():
 \t[1]: 'YUYV' (YUYV 4:2:2)
 \t\tSize: Discrete 4000x3000
 """
-    check(g.parse_mjpeg_modes(sample) == [(3264, 2448), (2048, 1536), (1280, 720)],
+    check(camera_mod.parse_mjpeg_modes(sample) == [(3264, 2448), (2048, 1536), (1280, 720)],
           "camera modes are read from v4l2-ctl, MJPEG only, largest first")
-    with g.settings_lock:
-        g.settings.update(usb_width=2048, usb_height=1536, roi="0.1,0.1,0.5,0.5")
+    with config.settings_lock:
+        config.settings.update(usb_width=2048, usb_height=1536, roi="0.1,0.1,0.5,0.5")
     # the settings form resubmits the crop unchanged along with a new size
     r = c.post("/api/settings", json={"usb_width": 3264, "usb_height": 2448,
                                       "roi": "0.1,0.1,0.5,0.5"}).get_json()
-    check(r.get("crop_reset") and g.settings["roi"] == "",
+    check(r.get("crop_reset") and config.settings["roi"] == "",
           "changing the capture size resets the crop, since each size frames a different view")
     r = c.post("/api/settings", json={"usb_width": 2048, "usb_height": 1536,
                                       "roi": "0.2,0.2,0.4,0.4"}).get_json()
-    check(not r.get("crop_reset") and g.settings["roi"] == "0.2,0.2,0.4,0.4",
+    check(not r.get("crop_reset") and config.settings["roi"] == "0.2,0.2,0.4,0.4",
           "a crop drawn in the same save as a new size is kept")
     js = (APP / "static" / "app.js").read_text()
     html = (APP / "templates" / "index.html").read_text()
@@ -577,21 +618,21 @@ def _camera_modes_and_reset():
 
 
 def _camera_crop():
-    check(g.crop_box({"roi": "0.1,0.2,0.5,0.6"}) == (0.1, 0.2, 0.5, 0.6)
-          and g.crop_box({"roi": ""}) is None and g.crop_box({"roi": "junk"}) is None,
+    check(camera_mod.crop_box({"roi": "0.1,0.2,0.5,0.6"}) == (0.1, 0.2, 0.5, 0.6)
+          and camera_mod.crop_box({"roi": ""}) is None and camera_mod.crop_box({"roi": "junk"}) is None,
           "the crop setting parses, and blank or bad means full frame")
-    gl = (APP / "growlight.py").read_text()
+    gl = app_source()
     check('"--roi"' not in gl, "photos are always stored full frame (no capture-time crop)")
     calls = {"n": 0}
-    real_rb = g.rebuild_thumbs_async
-    g.rebuild_thumbs_async = lambda: calls.__setitem__("n", calls["n"] + 1)
+    real_rb = camera_mod.rebuild_thumbs_async
+    camera_mod.rebuild_thumbs_async = lambda: calls.__setitem__("n", calls["n"] + 1)
     try:
         r = c.post("/api/settings", json={"roi": "0.1,0.2,0.5,0.6"}).get_json()
         bad = c.post("/api/settings", json={"roi": "0.9,0.9,0.5,0.5"}).get_json()
     finally:
-        g.rebuild_thumbs_async = real_rb
+        camera_mod.rebuild_thumbs_async = real_rb
     check(r["ok"] and calls["n"] == 1, "saving a crop rebuilds the thumbnails")
-    check(not bad["ok"] and "roi" in bad["errors"] and g.settings["roi"] == "0.1,0.2,0.5,0.6",
+    check(not bad["ok"] and "roi" in bad["errors"] and config.settings["roi"] == "0.1,0.2,0.5,0.6",
           "a crop running off the frame is refused and the old one kept")
     try:
         import cv2
@@ -601,22 +642,22 @@ def _camera_crop():
         return
     img = np.zeros((600, 1000, 3), np.uint8)
     for n in ("20260925_120000.jpg",):
-        cv2.imwrite(str(g.TIMELAPSE_DIR / n), img)
+        cv2.imwrite(str(camera_mod.TIMELAPSE_DIR / n), img)
     snap = c.get("/photo/cropped.jpg")
     shape = None
     if snap.status_code == 200:
         shape = cv2.imdecode(np.frombuffer(snap.data, np.uint8), 1).shape[:2]
     check(shape == (360, 500), f"the snapshot is served cut to the crop ({shape}, want (360, 500))")
     import base64
-    b = base64.b64decode(ai_report._image_b64(g.TIMELAPSE_DIR / "20260925_120000.jpg", (0.1, 0.2, 0.5, 0.6)))
+    b = base64.b64decode(ai_report._image_b64(camera_mod.TIMELAPSE_DIR / "20260925_120000.jpg", (0.1, 0.2, 0.5, 0.6)))
     ai_shape = cv2.imdecode(np.frombuffer(b, np.uint8), 1).shape[:2]
     check(ai_shape == (360, 500), f"the AI report gets the cropped photo ({ai_shape})")
     if shutil.which("ffmpeg"):
-        with g.settings_lock:
-            cfgc = dict(g.settings, timelapse_flatten=False)
+        with config.settings_lock:
+            cfgc = dict(config.settings, timelapse_flatten=False)
         out = WORK / "thumbtest"
         out.mkdir(exist_ok=True)
-        g.make_thumb(g.TIMELAPSE_DIR / "20260925_120000.jpg", cfgc, dst_dir=out)
+        camera_mod.make_thumb(camera_mod.TIMELAPSE_DIR / "20260925_120000.jpg", cfgc, dst_dir=out)
         t = cv2.imread(str(out / "20260925_120000.jpg"))
         check(t is not None and t.shape[:2] == (460, 640),
               f"raw thumbnails are cut to the crop ({None if t is None else t.shape[:2]}, want (460, 640))")
@@ -684,10 +725,10 @@ def _setups():
     check(all(not e["ok"] and "setups" in e["errors"] for e in errs),
           "a light or light sensor used twice, or a backwards band, is refused")
     r = c.post("/api/settings", json={"setups": good}).get_json()
-    check(r["ok"] and [x["id"] for x in g.settings["setups"]] == ["seedlings", "transplants", "shelf"],
+    check(r["ok"] and [x["id"] for x in config.settings["setups"]] == ["seedlings", "transplants", "shelf"],
           "three setups save, each with an id")
     now = int(time.time())
-    midnight = int(datetime.now(ZoneInfo(g.settings["timezone"])).replace(
+    midnight = int(datetime.now(ZoneInfo(config.settings["timezone"])).replace(
         hour=0, minute=0, second=0, microsecond=0).timestamp())
     t0 = max(midnight + 60, now - 3 * 3600)
     rows = []
@@ -722,12 +763,12 @@ def _setups():
         {"name": "Seedlings", "dli": 5, "band": [10, 15]}, {"name": "Transplants", "dli": None, "band": [15, 20]}]}})
     check("Seedlings: 5 mol" in ctx and "Transplants: not measured" in ctx,
           "the AI report is told about each setup")
-    with g.settings_lock:
-        g.settings["light_backend"] = "dim"
+    with config.settings_lock:
+        config.settings["light_backend"] = "dim"
     opts = {o["value"]: o["label"] for o in c.get("/api/status").get_json()["light_options"]}
-    with g.settings_lock:
-        g.settings["light_backend"] = "pwm"
-    opts2 = {o["value"]: o["label"] for o in g.light_options()}
+    with config.settings_lock:
+        config.settings["light_backend"] = "pwm"
+    opts2 = {o["value"]: o["label"] for o in setups_mod.light_options()}
     check(opts.get("main") == "AC fixture (dim line)" and opts2.get("main") == "5V LED panel",
           f"setups list lights by fixture, following the backend ({opts} / {opts2})")
     js = (APP / "static" / "app.js").read_text()
@@ -760,8 +801,8 @@ def _setups():
         for st_ in sensors._lux.values():
             st_.update(dev=None, init=False, fail=0)
     check(got == {"lux": 111.0, "lux:2": 222.0}, f"two light sensors read as lux and lux:2 ({got})")
-    with g.settings_lock:
-        g.settings["trays"] = dict(g.settings.get("trays") or {}, T3={"label": "Transplants", "rows": 4, "cols": 5, "cells": {}})
+    with config.settings_lock:
+        config.settings["trays"] = dict(config.settings.get("trays") or {}, T3={"label": "Transplants", "rows": 4, "cols": 5, "cells": {}})
     r = c.post("/api/settings", json={"setups": [dict(good[0], trays=["1", "2", "gone"]),
                                                   dict(good[1], trays=["T3"])]}).get_json()
     got_t = {x["id"]: x["trays"] for x in c.get("/api/status").get_json()["setups"]}
@@ -774,51 +815,51 @@ def _setups():
 
 
 def _fan_camera_timing():
-    tz = ZoneInfo(g.settings["timezone"])
+    tz = ZoneInfo(config.settings["timezone"])
     base = [{"name": "Seedlings", "light": "second", "lux": "", "sensors": [], "dli_low": 10, "dli_high": 15},
             {"name": "Transplants", "light": "main", "lux": "lux", "sensors": [], "dli_low": 15, "dli_high": 20}]
     two_fans = [dict(base[0], fan=True), dict(base[1], fan=True)]
     e = c.post("/api/settings", json={"setups": two_fans}).get_json()
     check(not e["ok"] and "fan" in e["errors"].get("setups", ""), "the fan can belong to only one setup")
-    with g.settings_lock:
-        g.settings.update(light2_start="20:00", light2_end="02:00", light2_on=True)
+    with config.settings_lock:
+        config.settings.update(light2_start="20:00", light2_end="02:00", light2_on=True)
     r = c.post("/api/settings", json={"setups": [dict(base[0], fan=True, camera=True), base[1]]}).get_json()
-    cfg = dict(g.settings)
+    cfg = dict(config.settings)
     now = datetime.now(tz)
     mon, moff = now.replace(hour=7, minute=0), now.replace(hour=19, minute=0)
-    sd, tr = g.setups(cfg)
-    on2, off2 = g.setup_window(cfg, sd, mon, moff)
+    sd, tr = setups_mod.setups(cfg)
+    on2, off2 = setups_mod.setup_window(cfg, sd, mon, moff)
     check(r["ok"] and (on2.hour, off2.hour) == (20, 2) and off2 > on2
-          and g.setup_window(cfg, tr, mon, moff) == (mon, moff),
+          and setups_mod.setup_window(cfg, tr, mon, moff) == (mon, moff),
           "each setup uses its own light's hours; an overnight window ends the next day")
-    none_on, none_off = g.setup_window(cfg, dict(sd, light=""), mon, moff)
+    none_on, none_off = setups_mod.setup_window(cfg, dict(sd, light=""), mon, moff)
     check(none_on == mon and none_off == off2, "a setup with no light spans both lights")
-    fon, foff = g.setup_window(cfg, g.setup_with(cfg, "fan"), mon, moff)
-    want, _ = g.fan_should_run(dict(cfg, fan_humidity_on=0), now.replace(hour=21, minute=0), fon, foff)
-    gl = (APP / "growlight.py").read_text()
-    check(want and 'setup_window(cfg, setup_with(cfg, "fan")' in gl,
+    fon, foff = setups_mod.setup_window(cfg, setups_mod.setup_with(cfg, "fan"), mon, moff)
+    want, _ = hardware.fan_should_run(dict(cfg, fan_humidity_on=0), now.replace(hour=21, minute=0), fon, foff)
+    gl = app_source()
+    check(want and 'setups_mod.setup_window(cfg, setups_mod.setup_with(cfg, "fan")' in gl,
           "the fan runs on its setup's light hours (21:00 under a 20:00-02:00 panel)")
     st = {x["id"]: x for x in c.get("/api/status").get_json()["setups"]}
     check(st["seedlings"]["on"] and datetime.fromisoformat(st["seedlings"]["on"]).hour == 20
           and st["seedlings"]["camera"] and st["seedlings"]["fan"],
           "the status gives each setup its own light window and its fan and camera")
     calls = {"n": 0}
-    real_sb, real_usb = g.set_brightness, g._usb_capture
-    g.set_brightness = lambda *a, **k: calls.__setitem__("n", calls["n"] + 1)
-    g._usb_capture = lambda cfg_, out, w, h, warmup=None: (False, "test")
+    real_sb, real_usb = light_mod.set_brightness, camera_mod._usb_capture
+    light_mod.set_brightness = lambda *a, **k: calls.__setitem__("n", calls["n"] + 1)
+    camera_mod._usb_capture = lambda cfg_, out, w, h, warmup=None: (False, "test")
     try:
-        with g.settings_lock:
-            g.settings["camera_backend"] = "usb"
-        g.take_photo(dict(g.settings), now)
+        with config.settings_lock:
+            config.settings["camera_backend"] = "usb"
+        camera_mod.take_photo(dict(config.settings), now)
         n_second = calls["n"]
         c.post("/api/settings", json={"setups": [dict(base[0], fan=True), dict(base[1], camera=True)]})
-        g.take_photo(dict(g.settings), now)
+        camera_mod.take_photo(dict(config.settings), now)
         n_main = calls["n"] - n_second
     finally:
-        g.set_brightness, g._usb_capture = real_sb, real_usb
+        light_mod.set_brightness, camera_mod._usb_capture = real_sb, real_usb
     check(n_second == 0 and n_main == 1,
           "the capture brightness bump only touches the main light when the camera watches it")
-    lm = g.gather_report_data()["light_metrics"]
+    lm = monitor.gather_report_data()["light_metrics"]
     check(lm["dli_target"] == [15.0, 20.0] and lm["photo_setup"] == "Transplants",
           f"the AI report judges the camera's setup ({lm.get('photo_setup')}, {lm.get('dli_target')})")
     js = (APP / "static" / "app.js").read_text()
@@ -831,49 +872,49 @@ def _probe_names():
     js = (APP / "static" / "app.js").read_text()
     check("'Soil moisture '+t" in js and "trayLabels[t]||('Tray '+t)" in js,
           "probes read as Soil moisture 1 and 2; canopy and watering rows use the tray's name")
-    check(g.settings.get("probe_names") == {"2": "Left bench"},
-          f"an old default probe name is cleared, a chosen one kept ({g.settings.get('probe_names')})")
-    gl = (APP / "growlight.py").read_text()
+    check(config.settings.get("probe_names") == {"2": "Left bench"},
+          f"an old default probe name is cleared, a chosen one kept ({config.settings.get('probe_names')})")
+    gl = app_source()
     check('"probe_names": {},' in gl and 'n == f"Tray {t}"' in gl,
           "the old stored probe names (Tray 1, Tray 2) are cleared so the new ones show")
 
 
 def _per_sensor_controls():
-    with g.settings_lock:
-        g.settings.update(auto_water=False, auto_water_trays=[])
-    real_b = g.auto_water_blockers
-    g.auto_water_blockers = lambda cfg=None: {}
+    with config.settings_lock:
+        config.settings.update(auto_water=False, auto_water_trays=[])
+    real_b = water.auto_water_blockers
+    water.auto_water_blockers = lambda cfg=None: {}
     try:
         a = c.post("/api/auto_water", json={"enabled": True, "trays": ["1"]}).get_json()
         b = c.post("/api/auto_water", json={"enabled": True, "trays": ["2"]}).get_json()
         d = c.post("/api/auto_water", json={"enabled": False, "trays": ["1"]}).get_json()
     finally:
-        g.auto_water_blockers = real_b
+        water.auto_water_blockers = real_b
     check(a["armed"] == ["1"] and b["armed"] == ["1", "2"] and d["armed"] == ["2"]
-          and g.settings["auto_water"] is True,
+          and config.settings["auto_water"] is True,
           "auto-watering arms and disarms per tray (a setup's trays)")
-    g.auto_water_blockers = lambda cfg=None: {"2": ["probe not calibrated"]}
+    water.auto_water_blockers = lambda cfg=None: {"2": ["probe not calibrated"]}
     try:
         e = c.post("/api/auto_water", json={"enabled": True, "trays": ["1"]}).get_json()
     finally:
-        g.auto_water_blockers = real_b
+        water.auto_water_blockers = real_b
     check(e["ok"], "a blocker on another setup's tray does not stop arming this one")
     c.post("/api/auto_water", json={"enabled": False})
     # calibrate the second light against its own sensor
     c.post("/api/settings", json={"setups": [
         {"name": "Seedlings", "light": "second", "lux": "lux:2", "sensors": [], "dli_low": 10, "dli_high": 15},
         {"name": "Transplants", "light": "main", "lux": "lux", "sensors": [], "dli_low": 15, "dli_high": 20}]})
-    main_before = g.settings.get("light_curve")
+    main_before = config.settings.get("light_curve")
     real_read = sensors.read_all
-    sensors.read_all = lambda: {"lux": 999.0, "lux:2": 100.0 * float(g.sweep_state.get("l2_raw") or 0)}
-    g.sweep_state.update(running=True, cancel=False, error="", target="second", l2_raw=0.0)
+    sensors.read_all = lambda: {"lux": 999.0, "lux:2": 100.0 * float(light_mod.sweep_state.get("l2_raw") or 0)}
+    light_mod.sweep_state.update(running=True, cancel=False, error="", target="second", l2_raw=0.0)
     try:
-        g.run_light_sweep(step=50, settle=0.0, linearize=False, target="second")
+        light_mod.run_light_sweep(step=50, settle=0.0, linearize=False, target="second")
     finally:
         sensors.read_all = real_read
-    c2 = g.settings.get("light2_curve") or {}
+    c2 = config.settings.get("light2_curve") or {}
     check(c2.get("sensor") == "lux:2" and [p[1] for p in c2.get("points", [])] == [0.0, 5000.0, 10000.0]
-          and g.settings.get("light_curve") == main_before,
+          and config.settings.get("light_curve") == main_before,
           f"the second light calibrates against its own sensor and keeps its own curve ({c2.get('points')})")
     st = c.get("/api/status").get_json()
     check("light2_cal" in st and st["light2_cal"]["light_curve"]["sensor"] == "lux:2",
@@ -886,8 +927,8 @@ def _per_sensor_controls():
 
 
 def _camera_canopy():
-    with g.settings_lock:
-        g.settings["trays"] = {"1": {"label": "Seedling 1", "rows": 4, "cols": 3, "cells": {}},
+    with config.settings_lock:
+        config.settings["trays"] = {"1": {"label": "Seedling 1", "rows": 4, "cols": 3, "cells": {}},
                                "2": {"label": "Seedling 2", "rows": 4, "cols": 3, "cells": {}},
                                "T3": {"label": "Transplants", "rows": 4, "cols": 5, "cells": {}}}
     base = [{"name": "Seedlings", "light": "second", "lux": "", "sensors": [], "trays": ["1", "2"],
@@ -904,20 +945,20 @@ def _camera_canopy():
     def fake_run(cmd, **kw):
         seen["payload"] = _json.loads(cmd[-1])
         return R()
-    real_run = g.subprocess.run
-    g.subprocess.run = fake_run
+    real_run = camera_mod.subprocess.run
+    camera_mod.subprocess.run = fake_run
     try:
-        g.record_growth(WORK / "x.jpg", dict(g.settings), datetime.now(ZoneInfo(g.settings["timezone"])))
+        camera_mod.record_growth(WORK / "x.jpg", dict(config.settings), datetime.now(ZoneInfo(config.settings["timezone"])))
     finally:
-        g.subprocess.run = real_run
+        camera_mod.subprocess.run = real_run
     ids = [t["id"] for t in (seen.get("payload") or {}).get("trays", [])]
     check(ids == ["T3"], f"canopy is measured only for the camera setup's trays ({ids})")
     db.log_many([("canopy:1", 3.1), ("canopy:T3", 7.5)])
-    with g.settings_lock:
-        g.settings["camera_enabled"] = True
+    with config.settings_lock:
+        config.settings["camera_enabled"] = True
     shown = set(c.get("/api/status").get_json()["sensors"])
     charted = set(c.get("/api/series_all?hours=1").get_json()["series"])
-    ai = g.gather_report_data().get("canopy") or {}
+    ai = monitor.gather_report_data().get("canopy") or {}
     check("canopy:T3" in shown and "canopy:1" not in shown and "canopy:1" not in charted
           and list(ai) == ["Transplants"],
           "trays the camera no longer watches drop out of the chips, charts and AI report")
@@ -928,19 +969,19 @@ def _camera_canopy():
 
 def _shutdown():
     """Last: sets the shutdown flag for good, the way SIGTERM does."""
-    with g.settings_lock:
-        g.settings.update(fill_max_seconds=5, auto_water=True)
-    g.fill_failure["msg"] = ""
-    for st in g.pump_state.values():
-        st.update(running=False, today_seconds=0, day=g._today_str())
+    with config.settings_lock:
+        config.settings.update(fill_max_seconds=5, auto_water=True)
+    water.fill_failure["msg"] = ""
+    for st in hardware.pump_state.values():
+        st.update(running=False, today_seconds=0, day=config._today_str())
     fl = sensors._floats()
     if "1" not in fl:                      # the watering checks removed it
         sensors._float_init = False
         sensors._float_devs.clear()
         fl = sensors._floats()
     fl["1"].is_pressed = True              # not full: the fill keeps running
-    with g.app.test_request_context("/api/stream"):
-        sg = iter(g.api_stream().response)
+    with routes.app.test_request_context("/api/stream"):
+        sg = iter(routes.api_stream().response)
     next(sg); next(sg)
     ended = {}
 
@@ -950,12 +991,12 @@ def _shutdown():
         ended["at"] = time.time()
     threading.Thread(target=drain, daemon=True).start()
     out = {}
-    t = threading.Thread(target=lambda: out.update(r=g.run_pump_until_full("1", "auto")))
+    t = threading.Thread(target=lambda: out.update(r=water.run_pump_until_full("1", "auto")))
     t.start()
     time.sleep(0.4)
     t0 = time.time()
     try:
-        g.cleanup()
+        hardware.cleanup()
         exited = False
     except SystemExit as e:
         exited = e.code in (0, None)
@@ -967,19 +1008,19 @@ def _shutdown():
     ok, why = out.get("r", (True, ""))
     check(not ok and "shutting down" in why and time.time() - t0 < 2.5,
           f"a running fill stops when shutdown starts ({why})")
-    check(not g._pumps["1"].value, "pump is off after shutdown")
-    check(g.settings.get("auto_water") and not g.fill_failure["msg"],
+    check(not hardware._pumps["1"].value, "pump is off after shutdown")
+    check(config.settings.get("auto_water") and not water.fill_failure["msg"],
           "a fill cut short by shutdown is not a failure: auto-water stays armed")
-    ok, why = g.run_pump("1", 3, "manual")
-    check(not ok and "shutting down" in why and not g._pumps["1"].value,
+    ok, why = water.run_pump("1", 3, "manual")
+    check(not ok and "shutting down" in why and not hardware._pumps["1"].value,
           "no pump can start after shutdown begins")
     n = len(PWM_WRITES)
-    g.set_brightness_raw(80)
+    light_mod.set_brightness_raw(80)
     check(len(PWM_WRITES) == n, "no light write can relight the fixture after shutdown begins")
-    if g._fan is not None:
-        g._fan.value = 0
-        g.set_fan(60, "test")
-        check(g._fan.value == 0, "fan cannot restart after shutdown begins")
+    if hardware._fan is not None:
+        hardware._fan.value = 0
+        hardware.set_fan(60, "test")
+        check(hardware._fan.value == 0, "fan cannot restart after shutdown begins")
 
 
 def run(name, fn):
