@@ -1132,10 +1132,10 @@ document.getElementById('scrub').addEventListener('input',ev=>{
 });
 
 // ---------------- enlarged view ----------------
-// Double-click (double-tap on a phone) the snapshot or the timelapse frame to
-// see it full screen; X, Esc or a click outside the picture closes it. Not
-// while the photo is being edited (grid corners or a crop), where double
-// clicks belong to the editor.
+// Click (tap on a phone) the snapshot or the timelapse frame to see it full
+// screen; X, Esc or a click outside the picture closes it. Not while the photo
+// is being edited (grid corners or a crop), and not on a cell of the shown grid
+// when signed in, where a click names the cell.
 var lbReturn=null, lbSeq=0, lbOpened=0;
 function openLightbox(src, cap, full){
   const lb=document.getElementById('lightbox'), im=document.getElementById('lbimg');
@@ -1164,8 +1164,9 @@ function closeLightbox(){
   document.getElementById('lbimg').removeAttribute('src');
   if(lbReturn&&lbReturn.focus)lbReturn.focus();
 }
-function enlargePhoto(){
+function enlargePhoto(e){
   if(cropping||gridEditable())return;
+  if(canEdit&&e&&e.target.classList&&e.target.classList.contains('gc'))return;
   const img=document.getElementById('photo');
   if(img&&img.naturalWidth)
     openLightbox(img.src, document.getElementById('photoinfo').textContent);
@@ -1177,29 +1178,12 @@ function enlargeFrame(){
   openLightbox(v.src, document.getElementById('pframe').textContent,
                '/frame/'+encodeURIComponent(frames[fidx]));
 }
-// dblclick is not reliable on touch screens, so a second tap within 350 ms
-// near the first counts too
-function onDoubleActivate(el, fn){
-  if(!el)return;
-  let lastTap=0, lx=0, ly=0, lastTouch=0;
-  el.addEventListener('dblclick',e=>{
-    if(Date.now()-lastTouch<800)return;   // the tap handler already did it
-    e.preventDefault();fn();
-  });
-  el.addEventListener('pointerup',e=>{
-    if(e.pointerType!=='touch')return;
-    lastTouch=Date.now();
-    const near=Math.abs(e.clientX-lx)<30&&Math.abs(e.clientY-ly)<30;
-    if(lastTouch-lastTap<350&&near){lastTap=0;fn();}
-    else{lastTap=lastTouch;lx=e.clientX;ly=e.clientY;}
-  });
-}
-onDoubleActivate(document.querySelector('#photocard .imgwrap'), enlargePhoto);
-onDoubleActivate(document.getElementById('vframe'), enlargeFrame);
+document.querySelector('#photocard .imgwrap').addEventListener('click',enlargePhoto);
+document.getElementById('vframe').addEventListener('click',enlargeFrame);
 document.getElementById('lbclose').addEventListener('click',closeLightbox);
 document.getElementById('lightbox').addEventListener('click',e=>{
-  // the backdrop, not the picture; and not the click the opening tap itself
-  // produces, which lands on the overlay that just appeared under the finger
+  // the backdrop, not the picture; and not in the first half second, so a
+  // habitual double click opens it rather than opening and closing it
   if(e.target.id==='lightbox'&&Date.now()-lbOpened>500)closeLightbox();
 });
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeLightbox();});

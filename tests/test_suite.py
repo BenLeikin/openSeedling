@@ -760,17 +760,19 @@ def _lightbox():
     check(re.search(r'<div id="lightbox"[^>]*role="dialog"[^>]*hidden>', html) and 'id="lbclose"' in html
           and 'aria-label="Close"' in html and re.search(r"\.lightbox\{position:fixed;inset:0;z-index:\d{3,}", css),
           "the enlarged view is a full-screen overlay with a Close (X) button, hidden until used")
-    check("onDoubleActivate(document.querySelector('#photocard .imgwrap'), enlargePhoto)" in js
-          and "onDoubleActivate(document.getElementById('vframe'), enlargeFrame)" in js
-          and re.search(r"addEventListener\('dblclick'", js) and "e.pointerType!=='touch'" in js,
-          "double-click, or double-tap on a phone, enlarges the snapshot and the timelapse frame")
-    ep = re.search(r"function enlargePhoto\(\)\{[\s\S]*?\n\}", js)
+    check("document.querySelector('#photocard .imgwrap').addEventListener('click',enlargePhoto)" in js
+          and "document.getElementById('vframe').addEventListener('click',enlargeFrame)" in js
+          and "dblclick" not in js,
+          "a single click (or tap) enlarges the snapshot and the timelapse frame")
+    ep = re.search(r"function enlargePhoto\(e\)\{[\s\S]*?\n\}", js)
     ef = re.search(r"function enlargeFrame\(\)\{[\s\S]*?\n\}", js)
     check(ep and "if(cropping||gridEditable())return;" in ep.group(0)
+          and "canEdit&&e&&e.target.classList&&e.target.classList.contains('gc')" in ep.group(0)
           and ef and "stopPlay()" in ef.group(0) and "'/frame/'" in ef.group(0),
-          "not while editing the grid or a crop; a timelapse frame pauses the player and opens full size")
+          "not while editing the grid or a crop, nor on a grid cell a signed-in click names; "
+          "a timelapse frame pauses the player and opens full size")
     check("e.key==='Escape')closeLightbox()" in js and "e.target.id==='lightbox'&&Date.now()-lbOpened>500" in js,
-          "Esc and a click outside the picture close it; the opening tap's own click does not")
+          "Esc and a click outside the picture close it; a habitual double click does not close it again")
 
 def _ai_reply():
     import io
