@@ -28,6 +28,8 @@ import sqlite3
 import statistics
 import threading
 import time
+
+from applog import log     # levelled logging; see applog.py
 from datetime import datetime, timedelta
 from functools import wraps
 from pathlib import Path
@@ -254,7 +256,7 @@ else:
     try:
         FAN_PIN = int(_fanenv) if _fanenv else FAN_PIN
     except ValueError:
-        print(f"GROWLIGHT_FAN_PIN unreadable; using {FAN_PIN}")
+        log.warning(f"GROWLIGHT_FAN_PIN unreadable; using {FAN_PIN}")
 # Speed control is software PWM: GPIO20 has no hardware PWM channel (those are
 # 18 and 19, and 18 drives the light). Software PWM is fine for a fan at these
 # duty cycles, but cheap fans can whine audibly or stall below ~30%, which is
@@ -262,13 +264,13 @@ else:
 _fan = None
 FAN_PWM_HZ = 100
 if FAN_PIN is None:
-    print("fan: none configured")
+    log.info("fan: none configured")
 else:
     try:
         from gpiozero import PWMOutputDevice as _PWMOut
         _fan = _PWMOut(FAN_PIN, frequency=FAN_PWM_HZ, initial_value=0)
     except Exception as _e:
-        print(f"fan GPIO{FAN_PIN} unavailable ({_e}); fan control disabled")
+        log.warning(f"fan GPIO{FAN_PIN} unavailable ({_e}); fan control disabled")
 FAN_HW = _fan is not None
 fan_state = {"on": False, "reason": "off", "speed": 0}
 
@@ -276,22 +278,22 @@ PUMP_PINS = {"1": 24, "2": 26}   # tray -> BCM (physical 18, 37)
 _pp = os.environ.get("GROWLIGHT_PUMP_PINS")
 if _pp is not None and not _pp.strip():
     PUMP_PINS = {}                      # explicitly configured as "no pumps"
-    print("pump pins: none configured")
+    log.info("pump pins: none configured")
 elif (_pp or "").strip():
     _pp = _pp.strip()
     try:
         PUMP_PINS = {t.strip(): int(v) for t, v in
                      (part.split(":") for part in _pp.split(","))}
-        print(f"pump pins from environment: {PUMP_PINS}")
+        log.info(f"pump pins from environment: {PUMP_PINS}")
     except Exception as _e:
-        print(f"GROWLIGHT_PUMP_PINS unreadable ({_e}); using {PUMP_PINS}")
+        log.warning(f"GROWLIGHT_PUMP_PINS unreadable ({_e}); using {PUMP_PINS}")
 _pumps = {}
 for _t, _pin in PUMP_PINS.items():
     try:
         from gpiozero import OutputDevice
         _pumps[_t] = OutputDevice(_pin, active_high=True, initial_value=False)
     except Exception as _e:
-        print(f"pump {_t} GPIO{_pin} unavailable ({_e}); disabled")
+        log.warning(f"pump {_t} GPIO{_pin} unavailable ({_e}); disabled")
 PUMP_HW = bool(_pumps)
 
 def _blank_pump():
@@ -319,7 +321,7 @@ def save_persistent_state():
         db.kv_set("pump_state", data)
         db.kv_set("fill_failure", {"msg": fill_failure.get("msg", "")})
     except Exception as e:
-        print(f"could not save pump state: {e}")
+        log.error(f"could not save pump state: {e}")
 
 
 def restore_persistent_state():
@@ -328,7 +330,7 @@ def restore_persistent_state():
         db.init()
         data = db.kv_get("pump_state") or {}
     except Exception as e:
-        print(f"could not restore pump state: {e}")
+        log.error(f"could not restore pump state: {e}")
         return
     today = _today_str()
     for tray, saved in (data.items() if isinstance(data, dict) else []):
@@ -351,7 +353,7 @@ def restore_persistent_state():
     if isinstance(ff, dict):
         fill_failure["msg"] = str(ff.get("msg") or "")
     restored = {t: round(st["today_seconds"], 1) for t, st in pump_state.items()}
-    print(f"restored pump state: today {restored}s")
+    log.info(f"restored pump state: today {restored}s")
 
 settings = dict(DEFAULTS)
 _file_keys = set()
@@ -365,7 +367,7 @@ if CONFIG_PATH.exists():
         _file_keys = set(_saved)
         settings.update(_saved)
     except Exception as e:
-        print(f"config.json unreadable ({e}), using defaults")
+        log.warning(f"config.json unreadable ({e}), using defaults")
 
 
 def save_config():
@@ -396,12 +398,12 @@ def _migrate_trays():
             t.update(rows=4, cols=3, cells=newcells)
             changed = True
             if newcells:
-                print(f"tray {tid}: migrated {len(newcells)} cells to 3x4 layout")
+                log.info(f"tray {tid}: migrated {len(newcells)} cells to 3x4 layout")
     if changed:
         try:
             save_config()
         except Exception as e:
-            print(f"tray migration not persisted ({e})")
+            log.warning(f"tray migration not persisted ({e})")
 _migrate_trays()
 
 # the soil low bound used to live under an alerts-only key; adopt it once so
@@ -413,8 +415,9 @@ if "alert_soil_low_f" in settings:
         settings["soil_temp_low_f"] = _old
     try:
         save_config()
-    except Exception:
-        pass
+    except Exception as e:
+        # a setting that looks saved and is not is worth saying out loud
+        log.error(f"settings not written to config.json: {e}")
 
 
 settings_lock = threading.Lock()
@@ -480,14 +483,14 @@ if GPIO_PIN2 and GPIO_PIN2 != GPIO_PIN:
         pwm2 = HardwarePWM(pwm_channel=(1 if GPIO_PIN2 == 19 else 0),
                            hz=PWM_FREQ, chip=0)
         pwm2.start(100.0)          # the dim channel: start pulled down = dark
-        print(f"dim-line fixture on GPIO{GPIO_PIN2}")
+        log.info(f"dim-line fixture on GPIO{GPIO_PIN2}")
     except Exception as e:
         # a missing second channel must not stop the controller: the main
         # light, the pumps and the sensors all still work without it
-        print(f"dim-line fixture on GPIO{GPIO_PIN2} unavailable ({e}); disabled")
+        log.warning(f"dim-line fixture on GPIO{GPIO_PIN2} unavailable ({e}); disabled")
         pwm2 = None
 elif GPIO_PIN2:
-    print("GROWLIGHT_DIM_PIN is the same pin as the panel; ignored")
+    log.warning("GROWLIGHT_DIM_PIN is the same pin as the panel; ignored")
 
 
 # ---- light output backends ----
@@ -595,7 +598,7 @@ def kasa_apply(on, retries=1):
     with _kasa_lock:
         kasa_state["fails"] += 1
         kasa_state.update(ok=False, error=last)
-    print(f"kasa plug command failed ({last})")
+    log.warning(f"kasa plug command failed ({last})")
     return False
 
 
@@ -615,9 +618,9 @@ def release_backend(old):
             # this runs, so asking pwm_duty_for would use the wrong wiring and
             # leave the old fixture at full brightness.
             pwm.change_duty_cycle(100.0 if old == "dim" else 0.0)
-        print(f"light backend released: {old} set to off")
+        log.info(f"light backend released: {old} set to off")
     except Exception as e:
-        print(f"could not release the {old} light backend: {e}")
+        log.error(f"could not release the {old} light backend: {e}")
 
 
 def light_backend(cfg=None):
@@ -727,7 +730,7 @@ def _dither_loop():
             if _dither_wake.wait(DITHER_PERIOD_S - lit):
                 _dither_wake.clear()
         except Exception as e:
-            print(f"dimming below the minimum failed: {e}")
+            log.error(f"dimming below the minimum failed: {e}")
             time.sleep(1)
 
 
@@ -1003,7 +1006,7 @@ def _stop_pwm(channel, mode):
         else:
             channel.stop()
     except Exception as e:
-        print(f"could not release a PWM channel cleanly: {e}")
+        log.error(f"could not release a PWM channel cleanly: {e}")
 
 
 def apply_floor(percent, cfg=None):
@@ -1191,14 +1194,14 @@ def make_thumb(photo_path, cfg=None):
                 cv2.imwrite(str(dst), warped, [cv2.IMWRITE_JPEG_QUALITY, 82])
                 return
         except Exception as e:
-            print(f"thumb rectify failed for {photo_path.name} ({e}); plain scale")
+            log.error(f"thumb rectify failed for {photo_path.name} ({e}); plain scale")
     try:
         subprocess.run(
             ["ffmpeg", "-loglevel", "error", "-y", "-i", str(photo_path),
              "-vf", "scale=640:-2", "-q:v", "7", str(dst)],
             capture_output=True, timeout=120)
     except Exception as e:
-        print(f"thumbnail error for {photo_path.name}: {e}")
+        log.error(f"thumbnail error for {photo_path.name}: {e}")
 
 
 def photo_inventory():
@@ -1370,7 +1373,7 @@ def run_pump_until_full(tray, reason="fill", force=False):
             try:
                 save_config()
             except Exception as e:
-                print(f"auto_water disable not persisted ({e})")
+                log.warning(f"auto_water disable not persisted ({e})")
     save_persistent_state()
     return False, f"ran to {elapsed:.1f}s cap without float trip (source empty?)"
 
@@ -1446,7 +1449,7 @@ def reading_filtered(key, snap=None):
     try:
         vals = db.recent_values(key, n=max(depth, PROBE_CONFIRM + 6))
     except Exception as e:
-        print(f"filter fell back to raw for {key} ({e})")
+        log.info(f"filter fell back to raw for {key} ({e})")
         return raw, ts
     if len(vals) < 3:
         return raw, ts
@@ -1494,7 +1497,7 @@ def probe_volts_filtered(tray, snap=None):
     try:
         vals = db.recent_values(key, n=depth)
     except Exception as e:
-        print(f"probe filter fell back to raw ({e})")
+        log.info(f"probe filter fell back to raw ({e})")
         return raw, ts
     vals = [v for v in vals if isinstance(v, (int, float))]
     if len(vals) < 3:
@@ -1713,7 +1716,7 @@ def gather_report_data():
     try:
         hist = db.plantings(limit=500)
     except Exception as e:
-        print(f"planting history unavailable ({e})")
+        log.warning(f"planting history unavailable ({e})")
     for h in hist:
         seed = (h.get("seed") or "").strip()
         if not seed or not h.get("planted"):
@@ -1838,7 +1841,7 @@ def run_report(reason="daily"):
         try:
             AI_REPORT_PATH.write_text(json.dumps(result, indent=2))
         except Exception as e:
-            print(f"report save error: {e}")
+            log.error(f"report save error: {e}")
         if result.get("ok") and cfg.get("ai_notify", True):
             rep = result.get("report") or {}
             summary = rep.get("summary") or "Daily report ready."
@@ -1927,11 +1930,11 @@ def report_loop():
                         last_day = now.date()
                     primed = True
                 if nowmin >= target and last_day != now.date():
-                    print("running daily AI report")
+                    log.info("running daily AI report")
                     run_report("daily")
                     last_day = now.date()
         except Exception as e:
-            print(f"report_loop error: {e}")
+            log.error(f"report_loop error: {e}")
         time.sleep(60)
 
 
@@ -2002,7 +2005,7 @@ def check_postfill(readings=None):
         postfill_result[tray] = {"ok": None if ok is None else bool(ok),
                                  "msg": msg, "ts": time.time()}
         if ok is not None:
-            print(f"post-fill check tray {tray}: {msg}")
+            log.info(f"post-fill check tray {tray}: {msg}")
             try:
                 db.log_event("probe", f"tray {tray} post-fill: {msg}")
             except Exception:
@@ -2056,12 +2059,90 @@ def auto_wet_calibrate(tray, pending):
         save_config()
     moved = "" if old is None else f" (was {old:.3f}V)"
     msg = f"wet anchor recalibrated to {live:.3f}V{moved}"
-    print(f"tray {tray}: {msg}")
+    log.info(f"tray {tray}: {msg}")
     try:
         db.log_event("probe", f"tray {tray} auto {msg}")
     except Exception:
         pass
     return msg
+
+
+# How far a fresh reading may sit above the threshold and still count as
+# agreeing with the decision to water. Enough to absorb noise between the
+# logged sample and the fresh one, nowhere near enough to water a wet tray.
+AUTO_WATER_AGREE_PCT = 10
+
+
+def auto_water_pass():
+    """One auto-watering decision: water at most one tray, or none.
+
+    Split out of the loop so it can be exercised directly, and so every exit
+    is an explicit return rather than a continue inside a thread.
+    """
+    with settings_lock:
+        cfg = dict(settings)
+    if not cfg.get("auto_water"):
+        return
+    blockers = auto_water_blockers(cfg)
+    threshold = float(cfg.get("moisture_threshold_pct", 30))
+    cooldown = float(cfg.get("pump_cooldown_min", 30)) * 60
+    cal = cfg.get("probe_cal") or {}
+    snap = db.latest()
+    stf = latest_soil_temp_f(snap)
+    for tray in sorted(PUMP_PINS):
+        if tray in blockers:
+            continue
+        volts, ts = probe_volts_filtered(tray, snap)
+        if volts is None:
+            continue
+        if time.time() - ts > 3600:
+            continue          # stale reading: do not water on old data
+        pct = probe_moisture(volts, cal.get(tray) or {}, stf)
+        if pct is None or pct > threshold:
+            continue
+        st = pump_state.get(tray) or {}
+        if time.time() - st.get("last_run", 0.0) < cooldown:
+            continue
+        f = sensors.read_float(tray)
+        if f is None or f < 1:
+            continue          # no float, or already full
+
+        # Confirm before pumping. The decision above came from the
+        # logged history; take a fresh reading now and require it to
+        # agree. A tray that reads wet right now is not watered, however
+        # the history got there. This exists because tray 2 was once
+        # filled at "0%" while every logged input said 97%, and nothing
+        # recorded what the loop had actually seen.
+        cal_t = cal.get(tray) or {}
+        fresh_v, spread = sensors.probe_spread(tray)
+        fresh_pct = (probe_moisture(fresh_v, cal_t, stf)
+                     if fresh_v is not None else None)
+        inputs = (f"logged {volts:.4f}V -> {pct:.0f}%, fresh "
+                  f"{'n/a' if fresh_v is None else f'{fresh_v:.4f}V'}"
+                  f" -> {'n/a' if fresh_pct is None else f'{fresh_pct:.0f}%'}"
+                  f" (spread {'n/a' if spread is None else f'{spread:.3f}V'})"
+                  f", anchors wet {cal_t.get('wet')} dry {cal_t.get('dry')}"
+                  f", soil {'n/a' if stf is None else f'{stf:.1f}F'}"
+                  f", threshold {threshold:.0f}%")
+        if fresh_pct is None or fresh_pct > threshold + AUTO_WATER_AGREE_PCT:
+            log.warning(f"auto-water tray {tray} NOT run: the fresh reading "
+                        f"disagrees. {inputs}")
+            try:
+                db.log_event("auto_water", f"tray {tray} skipped, readings "
+                             f"disagree: {inputs}")
+            except Exception:
+                pass
+            continue
+
+        ok, msg = run_pump_until_full(tray, reason="auto")
+        log.info(f"auto-water tray {tray}: {msg}. {inputs}")
+        if ok:
+            try:
+                db.log_event("auto_water",
+                             f"tray {tray} at {pct:.0f}% moisture: {msg}. {inputs}")
+            except Exception:
+                pass
+        return                # one pump per pass; re-evaluate next minute
 
 
 def watering_loop():
@@ -2079,44 +2160,9 @@ def watering_loop():
     while True:
         time.sleep(60)
         try:
-            with settings_lock:
-                cfg = dict(settings)
-            if not cfg.get("auto_water"):
-                continue
-            blockers = auto_water_blockers(cfg)
-            threshold = float(cfg.get("moisture_threshold_pct", 30))
-            cooldown = float(cfg.get("pump_cooldown_min", 30)) * 60
-            cal = cfg.get("probe_cal") or {}
-            snap = db.latest()
-            stf = latest_soil_temp_f(snap)
-            for tray in sorted(PUMP_PINS):
-                if tray in blockers:
-                    continue
-                volts, ts = probe_volts_filtered(tray, snap)
-                if volts is None:
-                    continue
-                if time.time() - ts > 3600:
-                    continue          # stale reading: do not water on old data
-                pct = probe_moisture(volts, cal.get(tray) or {}, stf)
-                if pct is None or pct > threshold:
-                    continue
-                st = pump_state.get(tray) or {}
-                if time.time() - st.get("last_run", 0.0) < cooldown:
-                    continue
-                f = sensors.read_float(tray)
-                if f is None or f < 1:
-                    continue          # no float, or already full
-                ok, msg = run_pump_until_full(tray, reason="auto")
-                print(f"auto-water tray {tray} at {pct:.0f}%: {msg}")
-                if ok:
-                    try:
-                        db.log_event("auto_water",
-                                     f"tray {tray} at {pct:.0f}% moisture: {msg}")
-                    except Exception:
-                        pass
-                break                 # one pump per pass; re-evaluate next minute
+            auto_water_pass()
         except Exception as e:
-            print(f"watering_loop error: {e}")
+            log.error(f"watering_loop error: {e}")
 
 
 def sample_loop():
@@ -2136,14 +2182,14 @@ def sample_loop():
                 check_postfill(readings)
                 publish("sample")
         except Exception as e:
-            print(f"sample_loop error: {e}")
+            log.error(f"sample_loop error: {e}")
         # housekeeping once a day: roll raw -> hourly, prune old raw
         now = time.time()
         if now - last_prune > 86400:
             try:
                 db.downsample_and_prune()
             except Exception as e:
-                print(f"prune error: {e}")
+                log.error(f"prune error: {e}")
             last_prune = now
         time.sleep(interval * 60)
 
@@ -2164,13 +2210,13 @@ def set_fan(speed, reason):
     try:
         _fan.value = speed / 100.0
     except Exception as e:
-        print(f"fan control error: {e}")
+        log.error(f"fan control error: {e}")
         return
     with state_lock:
         changed = round(fan_state.get("speed", 0)) != round(speed)
         fan_state.update(on=speed > 0, reason=reason, speed=round(speed))
     if changed:
-        print(f"fan {round(speed)}% ({reason})")
+        log.info(f"fan {round(speed)}% ({reason})")
         publish("fan")
 
 
@@ -2223,7 +2269,7 @@ def validate_readings(readings):
         _reject_counts[k] = _reject_counts.get(k, 0) + 1
         _reject_last[k] = why
     for k, v, why in dropped:
-        print(f"rejected {k}={v}: {why}")
+        log.info(f"rejected {k}={v}: {why}")
         try:
             db.log_event("sensor", f"rejected {k}={v}: {why}")
         except Exception:
@@ -2382,9 +2428,9 @@ def run_alerts(readings):
             prefix = {"fire": "", "remind": "Still: ", "clear": "Resolved: "}[action]
             discord_alert.send(prefix + title, message,
                                level="good" if action == "clear" else level)
-            print(f"alert {action}: {key}")
+            log.info(f"alert {action}: {key}")
     except Exception as e:
-        print(f"alert check error: {e}")
+        log.error(f"alert check error: {e}")
 
 
 # the only settings that move the light window; anything else (a planting-map
@@ -2477,7 +2523,7 @@ def _storm(seconds, style):
             if _lightning_stop.wait(max(0.0, min(gap, end - time.time()))):
                 break
     except Exception as e:
-        print(f"lightning stopped: {e}")
+        log.warning(f"lightning stopped: {e}")
     finally:
         with _lightning_lock:
             lightning_state.update(running=False, until=0.0, style="")
@@ -2502,7 +2548,7 @@ def control_loop():
         if key != seen:
             seen = key
             sunrise, sunset, on_time, off_time = sun_window(cfg, now.date(), tz)
-            print(f"{now.date()}: on {on_time:%H:%M}, off {off_time:%H:%M} "
+            log.info(f"{now.date()}: on {on_time:%H:%M}, off {off_time:%H:%M} "
                   f"({cfg['latitude']}, {cfg['longitude']}, {cfg['timezone']})")
         # the second light first, so the write below carries its new level
         if light2_fixture(cfg):
@@ -2666,7 +2712,7 @@ def _postprocess_file(path, cfg):
                                    270: cv2.ROTATE_90_COUNTERCLOCKWISE}[degrees])
         cv2.imwrite(str(path), img, [cv2.IMWRITE_JPEG_QUALITY, 90])
     except Exception as e:
-        print(f"post-process failed ({e}); keeping the frame as captured")
+        log.error(f"post-process failed ({e}); keeping the frame as captured")
 
 
 # kept for callers that only need the rotation
@@ -2698,7 +2744,7 @@ def take_photo(cfg, now, manual=False):
                 saved = fname
                 _camera_ok()
             else:
-                print(f"capture failed: {err}")
+                log.warning(f"capture failed: {err}")
                 _camera_fail(err)
             return saved
 
@@ -2717,7 +2763,7 @@ def take_photo(cfg, now, manual=False):
         r = subprocess.run(cmd, capture_output=True, timeout=90)
         if r.returncode != 0:
             err = r.stderr.decode(errors="replace")[-300:]
-            print(f"capture failed: {err}")
+            log.error(f"capture failed: {err}")
             _camera_fail(err.strip().splitlines()[-1] if err.strip() else "capture failed")
         else:
             _postprocess_file(fname, cfg)
@@ -2725,7 +2771,7 @@ def take_photo(cfg, now, manual=False):
             saved = fname
             _camera_ok()
     except Exception as e:
-        print(f"capture error: {e}")
+        log.error(f"capture error: {e}")
         _camera_fail(str(e))
     finally:
         capturing = False
@@ -2758,11 +2804,11 @@ def record_growth(path, cfg, now):
                            capture_output=True, timeout=120)
         out = json.loads((r.stdout or b"{}").decode(errors="replace") or "{}")
     except Exception as e:
-        print(f"growth analyze error: {e}")
+        log.error(f"growth analyze error: {e}")
         return
     if not out.get("ok"):
         if out.get("error"):
-            print(f"growth: {out['error']}")
+            log.error(f"growth: {out['error']}")
         return
     readings = validate_readings(out.get("readings") or {})
     if readings:
@@ -2931,6 +2977,7 @@ def _load_secret():
     try:
         SECRET_PATH.write_text(s)
         SECRET_PATH.chmod(0o600)
+        log.info(f"new session secret written to {SECRET_PATH}")
     except Exception:
         pass
     return s
@@ -3308,7 +3355,7 @@ def update_grid():
                              f"rows={rows} cols={cols} locked={locked}")
     except Exception:
         pass
-    print(f"grid saved: corners[0]={corners[0]} rows={rows} cols={cols} locked={locked}")
+    log.info(f"grid saved: corners[0]={corners[0]} rows={rows} cols={cols} locked={locked}")
     return jsonify(ok=True)
 
 
@@ -3543,7 +3590,7 @@ def api_backup():
     try:
         blob, name = build_backup(include_secrets=want_secrets)
     except Exception as e:
-        print(f"backup failed: {e}")
+        log.error(f"backup failed: {e}")
         return jsonify(ok=False, error=str(e)[:200]), 500
     db.log_event("backup", f"downloaded {name} ({len(blob)/1024:.0f} KB)")
     return Response(blob, mimetype="application/gzip", headers={
@@ -3644,7 +3691,7 @@ def api_reset_timelapse():
             ph.rename(dest / ph.name)
             moved += 1
         except Exception as e:
-            print(f"archive {ph.name} failed: {e}")
+            log.error(f"archive {ph.name} failed: {e}")
     for t in THUMB_DIR.glob("*.jpg"):
         t.unlink(missing_ok=True)
     if VIDEO_PATH.exists():
@@ -3659,10 +3706,10 @@ def api_reset_timelapse():
             try:
                 cleared += db.delete_series_prefix(prefix)
             except Exception as e:
-                print(f"clear {prefix} failed: {e}")
+                log.error(f"clear {prefix} failed: {e}")
     with render_lock:
         render.update(state="idle", frames=0, msg="", started=None, elapsed=None)
-    print(f"timelapse reset: {moved} photos archived to {dest}, "
+    log.info(f"timelapse reset: {moved} photos archived to {dest}, "
           f"{cleared} readings cleared")
     return jsonify(ok=True, archived=moved, cleared=cleared, path=str(dest))
 
@@ -3685,7 +3732,7 @@ def api_rebuild_thumbs():
             old.unlink(missing_ok=True)
         for i, ph in enumerate(photos):
             make_thumb(ph, cfg)
-        print(f"rebuilt {len(photos)} thumbnails")
+        log.info(f"rebuilt {len(photos)} thumbnails")
     threading.Thread(target=work, daemon=True).start()
     return jsonify(ok=True, started=True)
 
@@ -3708,7 +3755,7 @@ def api_purge_series():
         n = db.delete_series_prefix(prefix)
     except Exception as e:
         return jsonify(ok=False, error=str(e)), 200
-    print(f"purged {n} readings with prefix {prefix!r}")
+    log.info(f"purged {n} readings with prefix {prefix!r}")
     return jsonify(ok=True, deleted=n, prefix=prefix)
 
 
@@ -3927,7 +3974,7 @@ def live_loop():
                     last = dict(vals)
                     publish("live")
         except Exception as e:
-            print(f"live sensor read failed: {e}")
+            log.error(f"live sensor read failed: {e}")
         time.sleep(max(2, every))
 
 
@@ -3969,7 +4016,7 @@ def publish(reason="update"):
 
 def _switch_changed(key):
     """A float or reservoir switch flipped: push the status right away."""
-    print(f"{key} changed")
+    log.info(f"{key} changed")
     publish(key)
 
 
@@ -3977,7 +4024,7 @@ sensors.on_change(_switch_changed)
 try:
     sensors.arm_watchers()
 except Exception as e:           # a missing switch must never stop the app
-    print(f"switch watchers not armed: {e}")
+    log.info(f"switch watchers not armed: {e}")
 
 
 @app.route("/api/stream")
@@ -4450,8 +4497,9 @@ def run_light_sweep(step=5, settle=2.0, linearize=False):
     finally:
         try:
             set_brightness(before)                # always hand the light back
-        except Exception:
-            pass
+        except Exception as e:
+            log.error(f"light not restored after the sweep ({e}); it is left "
+                      f"at the sweep's last level")
         complete = points and points[-1][0] == 100 and not sweep_state["error"]
         if complete:
             lin = None
@@ -4474,10 +4522,10 @@ def run_light_sweep(step=5, settle=2.0, linearize=False):
                 db.log_event("light", f"linear calibration built: light from "
                              f"{lin['cutoff_raw']}%, full by "
                              f"{lin['saturation_raw']}% raw")
-            print(f"light sweep: {len(points)} points, "
+            log.info(f"light sweep: {len(points)} points, "
                   f"peak {max(p[1] for p in points):.0f} lx")
         elif points:
-            print(f"light sweep stopped at {points[-1][0]}%; keeping previous curve")
+            log.warning(f"light sweep stopped at {points[-1][0]}%; keeping previous curve")
         with sweep_lock:
             sweep_state["running"] = False
             sweep_state["cancel"] = False
@@ -4498,7 +4546,7 @@ def sharpness_score(path):
         img = img[h // 4: 3 * h // 4, w // 4: 3 * w // 4]
         return float(cv2.Laplacian(img, cv2.CV_64F).var())
     except Exception as e:
-        print(f"sharpness score failed: {e}")
+        log.error(f"sharpness score failed: {e}")
         return None
 
 
@@ -4567,13 +4615,13 @@ def run_focus_sweep():
                 focus_state["best"] = {"focus": int(best),
                                        "score": round(best_score, 1),
                                        "tested": len(results)}
-            print(f"focus sweep: best {best} "
+            log.info(f"focus sweep: best {best} "
                   f"(score {best_score:.0f}, {len(results)} points)")
             db.log_event("camera", f"focus sweep pinned focus_absolute={best}")
     except Exception as e:
         with focus_lock:
             focus_state["error"] = str(e)[:200]
-        print(f"focus sweep failed: {e}")
+        log.error(f"focus sweep failed: {e}")
     finally:
         tmp.unlink(missing_ok=True)
         capturing = False
@@ -5017,7 +5065,7 @@ def api_schedule():
             save_config()
     if changed:
         wake.set()                      # recompute the window immediately
-        print(f"schedule updated from chart: {changed}")
+        log.info(f"schedule updated from chart: {changed}")
     return jsonify(ok=True, changed=changed, mode=mode)
 
 
@@ -5313,7 +5361,7 @@ if __name__ == "__main__":
     threading.Thread(target=live_loop, daemon=True).start()
     threading.Thread(target=watering_loop, daemon=True).start()
     threading.Thread(target=report_loop, daemon=True).start()
-    print(f"Dashboard at http://0.0.0.0:{HTTP_PORT}")
+    log.info(f"Dashboard at http://0.0.0.0:{HTTP_PORT}")
     # Waitress rather than Flask's development server: it is a real WSGI server,
     # it stops the "do not use in production" warning filling the journal, and
     # its worker threads can hold long-lived connections, which the dev server
@@ -5327,5 +5375,5 @@ if __name__ == "__main__":
         serve(app, host="0.0.0.0", port=HTTP_PORT, threads=16,
               channel_timeout=120, ident="OpenSeedling")
     except ImportError:
-        print("waitress not installed; falling back to the Flask dev server")
+        log.info("waitress not installed; falling back to the Flask dev server")
         app.run(host="0.0.0.0", port=HTTP_PORT, threaded=True)

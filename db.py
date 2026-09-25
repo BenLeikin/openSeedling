@@ -25,6 +25,8 @@ import sqlite3
 import time
 from pathlib import Path
 
+from applog import log     # levelled logging; see applog.py
+
 DB_PATH = Path(__file__).with_name("growlight.db")
 
 RAW_RETENTION_DAYS = 30   # raw samples older than this are rolled up + deleted
@@ -298,16 +300,16 @@ if __name__ == "__main__":
     import random
     init()
     now = int(time.time())
-    print("seeding 3 days of fake data for moisture:B2 ...")
+    log.info("seeding 3 days of fake data for moisture:B2 ...")
     for i in range(3 * 24 * 12):                 # every 5 min for 3 days
         t = now - i * 300
         log_reading("moisture:B2", 40 + 10 * random.random(), ts=t)
     log_event("pump", "ran 8s (self-test)")
     s = series("moisture:B2", hours=72)
-    print(f"series points: {len(s)}  first={s[0]}  last={s[-1]}")
-    print("latest:", latest())
-    print("events:", recent_events(3))
-    print("near now:", reading_near("moisture:B2", now))
+    log.info(f"series points: {len(s)}  first={s[0]}  last={s[-1]}")
+    log.info(f"latest: {latest()}")
+    log.info(f"events: {recent_events(3)}")
+    log.info(f"near now: {reading_near('moisture:B2', now)}")
     downsample_and_prune()
-    print("after prune, raw points 72h:", len(series('moisture:B2', hours=72)))
-    print("OK")
+    log.info(f"after prune, raw points 72h: {len(series('moisture:B2', hours=72))}")
+    log.info("OK")

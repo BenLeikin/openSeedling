@@ -35,6 +35,8 @@ import statistics
 import threading
 import time
 
+from applog import log     # levelled logging; see applog.py
+
 # One lock for every I2C read. The sample loop, the calibration endpoints, and
 # the light sweep all touch these devices from different threads. Blinka only
 # locks per bus transaction, but an ADS1115 read is write-config-then-read:
@@ -61,15 +63,15 @@ FLOAT_PINS = {"1": 23, "2": 22}   # tray -> BCM pin (physical 16, 15)
 _fp = os.environ.get("GROWLIGHT_FLOAT_PINS")
 if _fp is not None and not _fp.strip():
     FLOAT_PINS = {}                     # explicitly configured as "no floats"
-    print("float pins: none configured")
+    log.info("float pins: none configured")
 elif (_fp or "").strip():
     _fp = _fp.strip()
     try:
         FLOAT_PINS = {a.strip(): int(b) for a, b in
                       (part.split(":") for part in _fp.split(","))}
-        print(f"float pins from environment: {FLOAT_PINS}")
+        log.info(f"float pins from environment: {FLOAT_PINS}")
     except Exception as _e:
-        print(f"GROWLIGHT_FLOAT_PINS unreadable ({_e}); using {FLOAT_PINS}")
+        log.warning(f"GROWLIGHT_FLOAT_PINS unreadable ({_e}); using {FLOAT_PINS}")
 FLOAT_ENABLED = True
 _float_devs = {}
 _float_init = False
@@ -86,15 +88,15 @@ RESERVOIR_PINS = {"low": 27, "high": 17}   # BCM (physical 13, 11), as built
 _rp = os.environ.get("GROWLIGHT_RESERVOIR_PINS")
 if _rp is not None and not _rp.strip():
     RESERVOIR_PINS = {}
-    print("reservoir pins: none configured")
+    log.info("reservoir pins: none configured")
 elif (_rp or "").strip():
     _rp = _rp.strip()
     try:
         RESERVOIR_PINS = {a.strip(): int(b) for a, b in
                           (part.split(":") for part in _rp.split(","))}
-        print(f"reservoir pins from environment: {RESERVOIR_PINS}")
+        log.info(f"reservoir pins from environment: {RESERVOIR_PINS}")
     except Exception as _e:
-        print(f"GROWLIGHT_RESERVOIR_PINS unreadable ({_e}); using {RESERVOIR_PINS}")
+        log.warning(f"GROWLIGHT_RESERVOIR_PINS unreadable ({_e}); using {RESERVOIR_PINS}")
 RESERVOIR_INVERT = bool((os.environ.get("GROWLIGHT_RESERVOIR_INVERT") or "")
                         .strip())
 _res_devs = {}
@@ -118,7 +120,7 @@ def _fire(key):
         try:
             cb(key)
         except Exception as e:
-            print(f"change listener failed for {key}: {e}")
+            log.error(f"change listener failed for {key}: {e}")
 
 
 def _edge(key):
@@ -145,7 +147,7 @@ def _reservoirs():
     try:
         from gpiozero import Button
     except Exception as e:
-        print(f"reservoir sensors unavailable ({e}); reporting unknown")
+        log.warning(f"reservoir sensors unavailable ({e}); reporting unknown")
         return _res_devs
     for which, pin in RESERVOIR_PINS.items():
         try:
@@ -153,7 +155,7 @@ def _reservoirs():
             dev.when_pressed = dev.when_released = _edge(f"reservoir:{which}")
             _res_devs[which] = dev
         except Exception as e:
-            print(f"reservoir {which} (GPIO{pin}) unavailable ({e}); "
+            log.warning(f"reservoir {which} (GPIO{pin}) unavailable ({e}); "
                   "reporting unknown")
     return _res_devs
 
@@ -170,7 +172,7 @@ def read_reservoir_level(which):
             wet = not wet
         return 1.0 if wet else 0.0
     except Exception as e:
-        print(f"reservoir {which} read error: {e}")
+        log.error(f"reservoir {which} read error: {e}")
         return None
 
 
@@ -194,7 +196,7 @@ def _floats():
     try:
         from gpiozero import Button
     except Exception as e:
-        print(f"float switches unavailable ({e}); reporting unknown")
+        log.warning(f"float switches unavailable ({e}); reporting unknown")
         return _float_devs
     for tray, pin in FLOAT_PINS.items():
         try:
@@ -202,7 +204,7 @@ def _floats():
             dev.when_pressed = dev.when_released = _edge(f"float:{tray}")
             _float_devs[tray] = dev
         except Exception as e:
-            print(f"float {tray} (GPIO{pin}) unavailable ({e}); reporting unknown")
+            log.warning(f"float {tray} (GPIO{pin}) unavailable ({e}); reporting unknown")
     return _float_devs
 
 
@@ -216,7 +218,7 @@ def read_float(tray="1"):
     try:
         return 1.0 if dev.is_pressed else 0.0
     except Exception as e:
-        print(f"float {tray} read error: {e}")
+        log.error(f"float {tray} read error: {e}")
         return None
 
 
@@ -267,7 +269,7 @@ def _probes_init_locked():
         _probe_chans = {tray: AnalogIn(ads, idx)
                         for tray, idx in PROBE_CHANNELS.items()}
     except Exception as e:
-        print(f"ADS1115 unavailable ({e}); moisture probes disabled")
+        log.warning(f"ADS1115 unavailable ({e}); moisture probes disabled")
         _probe_chans = {}
     return _probe_chans
 
@@ -288,7 +290,7 @@ def read_probes(samples=8):
                 vals = [ch.voltage for _ in range(max(1, samples))]
             out[f"probe:{tray}"] = round(statistics.median(vals), 4)
         except Exception as e:
-            print(f"probe {tray} read error: {e}")
+            log.error(f"probe {tray} read error: {e}")
     return out
 
 
@@ -399,12 +401,12 @@ def _read_air():
                     _air_has_humidity = False
                 else:
                     continue
-                print(f"air sensor: {'BME280' if _air_has_humidity else 'BMP280'} at {hex(addr)}")
+                log.info(f"air sensor: {'BME280' if _air_has_humidity else 'BMP280'} at {hex(addr)}")
                 break
             except Exception:
                 continue
         if _air_dev is None:
-            print("air sensor (BME/BMP280) not found at 0x76/0x77; disabled")
+            log.warning("air sensor (BME/BMP280) not found at 0x76/0x77; disabled")
     if _air_dev is None:
         return {}
     try:
@@ -415,7 +417,7 @@ def _read_air():
                 out["humidity"] = round(_air_dev.relative_humidity, 1)
         return out
     except Exception as e:
-        print(f"air sensor read error: {e}")
+        log.error(f"air sensor read error: {e}")
         return {}
 
 
@@ -437,20 +439,57 @@ def _read_lux():
                 import adafruit_bh1750
                 _lux_dev = adafruit_bh1750.BH1750(_i2c(), address=addr)
                 _lux_dev.lux  # probe read
-                print(f"lux sensor: BH1750 at {hex(addr)}")
+                log.info(f"lux sensor: BH1750 at {hex(addr)}")
                 break
             except Exception:
                 _lux_dev = None
         if _lux_dev is None:
-            print("lux sensor (BH1750) not found at 0x23/0x5C; disabled")
+            if _lux_fail["n"]:
+                # recovering from errors, not a sensor that was never fitted:
+                # keep looking on later reads instead of giving up for good
+                _lux_init = False
+                _lux_fail["n"] += 1
+                if _lux_fail["n"] % 50 == 0:
+                    log.error(f"lux sensor still not answering "
+                              f"({_lux_fail['n']} attempts)")
+            else:
+                log.warning("lux sensor (BH1750) not found at 0x23/0x5C; disabled")
     if _lux_dev is None:
         return {}
     try:
         with _io_lock:
-            return {"lux": round(_lux_dev.lux, 1)}
+            v = round(_lux_dev.lux, 1)
     except Exception as e:
-        print(f"lux read error: {e}")
+        _lux_failed(e)
         return {}
+    if _lux_fail["n"]:
+        log.info(f"lux sensor recovered after {_lux_fail['n']} failed reads")
+        _lux_fail["n"] = 0
+    return {"lux": v}
+
+
+# A BH1750 that loses power, even for a moment through a poor contact, wakes up
+# powered down and needs its measurement mode set again. The driver only does
+# that when it is created, so after a glitch the old handle can keep failing
+# until the service restarts. After a few failures in a row the handle is
+# dropped and the chip is found and configured afresh on the next read, so a
+# reseated sensor comes back on its own. Errors are logged on the first
+# failure and then sparingly, not once per read.
+LUX_REINIT_AFTER = 3
+_lux_fail = {"n": 0}
+
+
+def _lux_failed(err):
+    global _lux_dev, _lux_init
+    _lux_fail["n"] += 1
+    n = _lux_fail["n"]
+    if n == 1 or n % 50 == 0:
+        log.error(f"lux read error ({n} in a row): {err}")
+    if n % LUX_REINIT_AFTER == 0:
+        _lux_dev = None
+        _lux_init = False          # the next read finds and configures it again
+        if n == LUX_REINIT_AFTER:
+            log.warning("lux sensor: re-initializing after repeated read errors")
 
 
 # -------------------------- soil temp (DS18B20) ---------------------------
@@ -475,17 +514,17 @@ def _read_soil_temps():
             with open(f"{dev}/w1_slave") as f:
                 lines = f.readlines()
             if len(lines) < 2 or not lines[0].strip().endswith("YES"):
-                print(f"{serial}: CRC failed, skipping")
+                log.warning(f"{serial}: CRC failed, skipping")
                 continue
             if "t=" not in lines[1]:
                 continue
             c = int(lines[1].split("t=")[1]) / 1000.0
             if c in (85.0, -127.0):   # power-on default / disconnected
-                print(f"{serial}: bogus reading {c}C, skipping")
+                log.info(f"{serial}: bogus reading {c}C, skipping")
                 continue
             out[key] = round(c, 2)   # Celsius; the dashboard converts to F
         except Exception as e:
-            print(f"{serial}: read error ({e})")
+            log.error(f"{serial}: read error ({e})")
     return out
 
 
@@ -504,7 +543,7 @@ def _read_set(fns):
         try:
             out.update(fn())
         except Exception as e:
-            print(f"sensor read error in {fn.__name__}: {e}")
+            log.error(f"sensor read error in {fn.__name__}: {e}")
     return out
 
 
@@ -521,8 +560,8 @@ def read_fast():
 if __name__ == "__main__":
     for k, v in sorted(read_all().items()):
         if k.startswith("temp:"):
-            print(f"  {k:18s} {v * 9 / 5 + 32:.1f} F   ({v} C)")
+            log.info(f"  {k:18s} {v * 9 / 5 + 32:.1f} F   ({v} C)")
         elif k.startswith("probe:"):
-            print(f"  {k:18s} {v} V")
+            log.info(f"  {k:18s} {v} V")
         else:
-            print(f"  {k:18s} {v}")
+            log.info(f"  {k:18s} {v}")
