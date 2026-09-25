@@ -166,6 +166,9 @@ js = (APP / "static" / "app.js").read_text()
 posts = re.findall(r"fetch\((['\"`][^'\"`]+['\"`])\s*,\s*\{method:'POST'(.{0,160})", js, re.S)
 no_json = [u for u, rest in posts if "application/json" not in rest]
 check(posts and not no_json, f"every dashboard POST sends JSON ({len(posts)} calls)" + (f" {no_json}" if no_json else ""))
+gl = (APP / "growlight.py").read_text()
+check("str(VIDEO_PATH)]" not in gl and "os.replace(part, VIDEO_PATH)" in gl,
+      "timelapse is written beside the old video and swapped in, never rewritten in place")
 check(re.search(r"async function doLogin[\s\S]{0,600}restartStream\(\)", js) is not None
       and re.search(r"async function doLogout[\s\S]{0,400}restartStream\(\)", js) is not None,
       "login and logout reopen the live stream")
@@ -406,6 +409,49 @@ def _sec5():
     g.sun_window = real_sw
 
 
+def _shutdown():
+    """Last: sets the shutdown flag for good, the way SIGTERM does."""
+    with g.settings_lock:
+        g.settings.update(fill_max_seconds=5, auto_water=True)
+    g.fill_failure["msg"] = ""
+    for st in g.pump_state.values():
+        st.update(running=False, today_seconds=0, day=g._today_str())
+    fl = sensors._floats()
+    if "1" not in fl:                      # the watering checks removed it
+        sensors._float_init = False
+        sensors._float_devs.clear()
+        fl = sensors._floats()
+    fl["1"].is_pressed = True              # not full: the fill keeps running
+    out = {}
+    t = threading.Thread(target=lambda: out.update(r=g.run_pump_until_full("1", "auto")))
+    t.start()
+    time.sleep(0.4)
+    t0 = time.time()
+    try:
+        g.cleanup()
+        exited = False
+    except SystemExit as e:
+        exited = e.code in (0, None)
+    t.join(3)
+    check(exited, "cleanup finishes with a clean exit")
+    ok, why = out.get("r", (True, ""))
+    check(not ok and "shutting down" in why and time.time() - t0 < 2.5,
+          f"a running fill stops when shutdown starts ({why})")
+    check(not g._pumps["1"].value, "pump is off after shutdown")
+    check(g.settings.get("auto_water") and not g.fill_failure["msg"],
+          "a fill cut short by shutdown is not a failure: auto-water stays armed")
+    ok, why = g.run_pump("1", 3, "manual")
+    check(not ok and "shutting down" in why and not g._pumps["1"].value,
+          "no pump can start after shutdown begins")
+    n = len(PWM_WRITES)
+    g.set_brightness_raw(80)
+    check(len(PWM_WRITES) == n, "no light write can relight the fixture after shutdown begins")
+    if g._fan is not None:
+        g._fan.value = 0
+        g.set_fan(60, "test")
+        check(g._fan.value == 0, "fan cannot restart after shutdown begins")
+
+
 def run(name, fn):
     """A section that crashes counts as one failure; the rest still run."""
     section(name)
@@ -421,6 +467,7 @@ run('Live stream', _sec2)
 run('Watering', _sec3)
 run('Data', _sec4)
 run('Light schedule', _sec5)
+run('Shutdown', _shutdown)
 
 # --------------------------------------------------------------------------
 print(f"\n{'All checks passed.' if not FAILS else f'{len(FAILS)} FAILED:'}")

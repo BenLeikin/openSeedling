@@ -518,8 +518,16 @@ scheduled frame so an off-schedule dark shot never becomes its input.
 float trips, debounced against slosh, with `fill_max_seconds` as a backstop.
 Both honour the per-dose, cooldown, and daily caps, run one pump at a time,
 refuse outright when the reservoir reads empty, and always force the pump off in
-a `finally`. A fill that hits the cap without the float tripping raises a
-Discord alert and switches `auto_water` off. Keep `auto_water` off until the
+a `finally`. A fill also stops if the reservoir runs empty partway through. A
+fill that hits the cap, loses its float, or empties the reservoir raises a
+Discord alert and switches `auto_water` off.
+
+On shutdown (SIGTERM from `systemctl stop` or a reboot) every output is turned
+off, running pumps stop within a tenth of a second, and nothing may turn back
+on: pump starts are refused and light and fan writes can only go dark. The
+outputs are switched off a second time after running pumps finish, to catch
+any write that was already in flight. A fill cut short this way is not treated
+as a failure, so `auto_water` comes back up the way it went down. Keep `auto_water` off until the
 probes are calibrated and the seedlings are established; overwatering
 (damping-off) is the number-one seedling killer.
 

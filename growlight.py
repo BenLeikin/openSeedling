@@ -647,6 +647,12 @@ def light_backend(cfg=None):
     return "pwm"
 
 
+# Set by cleanup() the moment a shutdown starts. After that, hardware writes
+# may only turn things OFF: a pump thread or the control loop finishing a pass
+# must not relight the fixture or restart a pump behind cleanup's back.
+SHUTTING_DOWN = threading.Event()
+
+
 def set_brightness(percent):
     """Apply a dashboard brightness through the fixture's calibration.
 
@@ -746,6 +752,8 @@ def set_brightness_raw(percent):
     correct the correction.
     """
     percent = max(0.0, min(100.0, percent))
+    if SHUTTING_DOWN.is_set() and percent > 0:
+        return                        # shutting down: dark writes only
     with settings_lock:
         cfg = dict(settings)
     mode = light_backend(cfg)
@@ -1266,6 +1274,8 @@ def run_pump(tray, seconds, reason="manual", force=False):
         daily_cap = float(settings.get("pump_daily_max_seconds", 180))
     secs = max(0.0, min(float(seconds), cap))
     with pump_lock:
+        if SHUTTING_DOWN.is_set():
+            return False, "shutting down"
         if tray not in _pumps:
             return False, f"pump {tray} hardware not available"
         if any(st["running"] for st in pump_state.values()):
@@ -1283,7 +1293,7 @@ def run_pump(tray, seconds, reason="manual", force=False):
     try:
         _pumps[tray].on()
         t0 = time.time()
-        time.sleep(secs)
+        SHUTTING_DOWN.wait(secs)          # a shutdown ends the run early
         elapsed = time.time() - t0
     finally:
         _pumps[tray].off()
@@ -1322,6 +1332,8 @@ def run_pump_until_full(tray, reason="fill", force=False):
         if st["day"] != _today_str():
             st["day"] = _today_str()
             st["today_seconds"] = 0.0
+        if SHUTTING_DOWN.is_set():
+            return False, "shutting down"
         f0 = sensors.read_float(tray)
         if f0 is None and not force:
             return False, f"no float sensor on tray {tray}; refusing to fill blind"
@@ -1344,6 +1356,9 @@ def run_pump_until_full(tray, reason="fill", force=False):
             elapsed = time.time() - t0
             if elapsed >= run_cap:
                 break                        # cap hit, float never stayed full
+            if SHUTTING_DOWN.is_set():
+                stop_why = "shutdown"
+                break
             if not force and reservoir_state() == "empty":
                 stop_why = "reservoir"       # ran the source dry mid-fill
                 break
@@ -1372,6 +1387,9 @@ def run_pump_until_full(tray, reason="fill", force=False):
             elif stop_why == "float_lost":
                 detail = (f"tray {tray} {reason}: STOPPED at {elapsed:.1f}s, "
                           "float sensor stopped answering")
+            elif stop_why == "shutdown":
+                detail = (f"tray {tray} {reason}: STOPPED at {elapsed:.1f}s, "
+                          "service shutting down")
             else:
                 detail = (f"tray {tray} {reason}: STOPPED at {elapsed:.1f}s cap, "
                           "no float trip")
@@ -1386,6 +1404,11 @@ def run_pump_until_full(tray, reason="fill", force=False):
         save_persistent_state()
         schedule_postfill(tray, tripped=True)   # judge the probe once water wicks
         return True, f"filled in {elapsed:.1f}s"
+    if stop_why == "shutdown":
+        # Not a failed fill: no alert, and auto-watering stays as it was, so
+        # the service comes back up the way it went down.
+        save_persistent_state()
+        return False, f"stopped at {elapsed:.1f}s, service shutting down"
     fill_failure["msg"] = {
         "reservoir": f"Tray {tray} fill stopped at {elapsed:.1f}s: the "
                      "reservoir ran empty. Refill it before watering again.",
@@ -2260,6 +2283,8 @@ def set_fan(speed, reason):
     if not FAN_HW:
         return
     speed = max(0.0, min(100.0, float(speed or 0)))
+    if SHUTTING_DOWN.is_set() and speed > 0:
+        return
     if speed > 0:
         with settings_lock:
             floor = float(settings.get("fan_min_speed", 0) or 0)
@@ -2529,6 +2554,8 @@ def _flash(level_pct):
     Goes to whichever channel carries the dim fixture, which is its own pin
     when one is configured and the main pin otherwise.
     """
+    if SHUTTING_DOWN.is_set() and level_pct > 0:
+        return                        # shutting down: dark writes only
     ch = pwm2 if pwm2 is not None else pwm
     ch.change_duty_cycle(100.0 - max(0.0, min(100.0, level_pct)))
 
@@ -2992,12 +3019,19 @@ def render_worker():
             capture_output=True, timeout=3600)
         # Faststart as a stream-copy remux: no re-encode, trivial memory.
         if r.returncode == 0 and tmp.exists():
+            # Remux beside the finished video, then swap it in with one
+            # rename: a download running during the remux keeps reading the
+            # old file instead of a half-written one.
+            part = VIDEO_PATH.with_name("timelapse.part.mp4")
             r2 = subprocess.run(
                 ["ffmpeg", "-loglevel", "error", "-y", "-i", str(tmp),
-                 "-c", "copy", "-movflags", "+faststart", str(VIDEO_PATH)],
+                 "-c", "copy", "-movflags", "+faststart", str(part)],
                 capture_output=True, timeout=600)
             tmp.unlink(missing_ok=True)
-            if r2.returncode != 0:
+            if r2.returncode == 0 and part.exists():
+                os.replace(part, VIDEO_PATH)
+            else:
+                part.unlink(missing_ok=True)
                 r = r2  # surface the remux error below
         dt = _t.monotonic() - t0
         if r.returncode == 0 and VIDEO_PATH.exists():
@@ -5466,9 +5500,8 @@ def update_settings():
     return jsonify(ok=not errors, saved=sorted(new), errors=errors)
 
 
-def cleanup(*_):
-    # explicit off for every actuator: a SIGTERM mid-fill must not leave a
-    # pump relying on gpiozero's atexit teardown and a gate pulldown
+def _all_off():
+    """Every actuator off: pumps, fan, both light channels."""
     for _p in _pumps.values():
         try:
             _p.off()
@@ -5481,7 +5514,23 @@ def cleanup(*_):
             pass
     _dither_stop()
     light2_state["level"] = 0.0     # or the write below would keep it lit
-    set_brightness(0)          # darkens both channels
+    set_brightness(0)               # darkens both channels
+
+
+def cleanup(*_):
+    # From here on, hardware writes may only turn things off (see
+    # SHUTTING_DOWN). Explicit off for every actuator: a SIGTERM mid-fill must
+    # not leave a pump relying on gpiozero's atexit teardown and a gate pulldown.
+    SHUTTING_DOWN.set()
+    _all_off()
+    # A pump thread or control pass already past its check could still write
+    # once more. They poll every 0.1 s and now see the flag; wait for running
+    # pumps to finish, then turn everything off a second time to be sure.
+    deadline = time.time() + 2.0
+    while time.time() < deadline and any(st["running"] for st in pump_state.values()):
+        time.sleep(0.05)
+    time.sleep(0.2)
+    _all_off()
     # Stopping the PWM releases the pin, and on the optocoupler wiring that
     # means the dim line floats back to its own ~10.8V and the fixture goes to
     # FULL. Exactly backwards for a shutdown. The hardware PWM lives in sysfs
