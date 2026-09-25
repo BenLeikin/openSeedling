@@ -47,7 +47,8 @@ function draw(){
 }
 // the on/off edges are draggable in the modes where those are real settings
 function schedDraggable(){
-  return canEdit && S && (S.schedule_mode==='fixed'||S.schedule_mode==='duration');
+  return canEdit && S && (S.schedule_mode==='fixed'||S.schedule_mode==='duration'
+    ||(S.schedule_mode==='light2'&&S.off>S.on));
 }
 function schedHandles(x,y,on,off,T,H,B){
   if(!schedDraggable())return '';
@@ -102,6 +103,18 @@ function bindSchedDrag(){
     if(m==null){refresh();return;}
     const hhmm=`${String(Math.floor(m/60)).padStart(2,'0')}:${String(m%60).padStart(2,'0')}`;
     const body={};
+    if(S.schedule_mode==='light2'){
+      body[edge==='on'?'light2_start':'light2_end']=hhmm;
+      try{
+        const r=await fetch('/api/settings',{method:'POST',
+          headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+        const j=await r.json().catch(()=>({}));
+        const info=document.getElementById('lightinfo');
+        if(info&&j.ok===false)info.textContent=(j.errors&&Object.values(j.errors)[0])||'could not update the schedule';
+      }catch(e){}
+      refresh();
+      return;
+    }
     if(S.schedule_mode==='fixed'){
       body[edge==='on'?'fixed_on':'fixed_off']=hhmm;
     }else{                                    // duration: end anchors, start sets length
@@ -296,6 +309,7 @@ function holdBright(v){
 }
 
 async function setLight(mode, brightness, quiet){
+  if(ctlTarget==='second')return setLight2(mode, brightness, quiet);
   const info=document.getElementById('lightinfo');
   if(info && !quiet)info.textContent='...';
   const body={};
@@ -320,6 +334,24 @@ async function setLight(mode, brightness, quiet){
     else if(info)info.textContent = r.status===401?'log in to control the light'
                       :('failed: '+(j.error||('HTTP '+r.status)));
   }catch(e){if(info && !quiet)info.textContent='request failed';}
+}
+// The second light has no /api/light of its own: its mode and brightness are
+// the light2_override and light2_bright settings.
+async function setLight2(mode, brightness, quiet){
+  const info=document.getElementById('lightinfo');
+  const body={};
+  if(mode!=null)body.light2_override=mode;
+  if(brightness!=null){body.light2_bright=Math.round(brightness);holdBright(body.light2_bright);}
+  try{
+    const r=await fetch('/api/settings',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const j=await r.json().catch(()=>({}));
+    if(r.ok&&j.ok!==false){
+      if(mode!=null){pendingMode=mode;showLightMode(mode, brightness!=null?body.light2_bright:S.manual_bright);}
+      if(!quiet)refresh();
+    }else if(info)info.textContent=r.status===401?'log in to control the light'
+      :('failed: '+((j.errors&&Object.values(j.errors)[0])||j.error||('HTTP '+r.status)));
+  }catch(e){if(info&&!quiet)info.textContent='request failed';}
 }
 // While dragging, push the level at ~8/sec so the light tracks the slider
 // instead of waiting for release. Trailing call guarantees the final value.
@@ -468,7 +500,34 @@ function applySetup(j){
   }
   {const lbl=document.getElementById('dlisetup');
    if(lbl)lbl.textContent=(setupsList.length>1&&cs)?' \u00b7 '+cs.name:'';}
+  applyLightView(j, cs);
   renderSetupConfig(j);
+}
+// Which light the Light card, the day phase and the schedule chart describe:
+// the selected setup's. The second light is shown through the same controls
+// by mapping its schedule onto S; writes go to its own settings.
+var ctlTarget='main';
+function hhmmToday(ref,hhmm){
+  const m=/^(\d{1,2}):(\d{2})$/.exec(hhmm||'');
+  const d=new Date(ref); if(m)d.setHours(+m[1],+m[2],0,0); return d;
+}
+function applyLightView(j, cs){
+  const l2=j.light2||{};
+  ctlTarget=(cs&&cs.light==='second'&&l2.fixture)?'second':'main';
+  const tgt=document.getElementById('lctarget');
+  if(tgt)tgt.textContent=(setupsList.length>1&&cs&&cs.light_label)?' \u00b7 '+cs.light_label:'';
+  const line=document.getElementById('l2line');
+  if(line&&setupsList.length>1)line.dataset.hide='1';else if(line)delete line.dataset.hide;
+  if(ctlTarget!=='second')return;
+  S.brightness=+l2.level||0;
+  S.light_override=l2.override||'auto';
+  S.manual_bright=+l2.bright||0;
+  S.max=+l2.bright||0;
+  S.ramp=+l2.ramp_min||0;
+  S.on=hhmmToday(S.now,l2.start); S.off=hhmmToday(S.now,l2.end);
+  S.schedule_mode='light2';
+  S.light_linear_on=false;
+  lightBackend='pwm';                 // the second light always dims by PWM
 }
 {
   const nav=document.getElementById('setuptabs');
@@ -2439,7 +2498,7 @@ function renderLight2(j){
   const el=document.getElementById('l2line');
   if(!el)return;
   const l=j.light2;
-  if(!l||!l.enabled){el.style.display='none';return;}
+  if(!l||!l.enabled||el.dataset.hide){el.style.display='none';return;}
   el.style.display='';
   const name=l.fixture==='pwm'?'5V panel':(l.fixture==='dim'?'dim fixture':'second light');
   if(!l.fixture){
@@ -3546,6 +3605,41 @@ function renderLightPlan(j){
   const ul=document.getElementById('lpadvice');
   if(ul)ul.innerHTML=(p.advice||[]).map(a=>`<li>${a}</li>`).join('');
 }
+// Daily light through today (solid) and yesterday (dashed) against the target:
+// the band the day should end in, and the wedge where the total should be by
+// each hour of the photoperiod.
+function drawDliChart(day){
+  const svg=document.getElementById('dlichart');
+  if(!svg)return;
+  const cv=day&&day.curve;
+  if(!cv||(!(cv.today||[]).length&&!(cv.yesterday||[]).length)){svg.style.display='none';return;}
+  svg.style.display='';
+  const W=320,H=130,L=28,R=8,T=8,B=18;
+  const {lo,hi,max}=dliBand;
+  const top=Math.max(max, ...[...(cv.today||[]),...(cv.yesterday||[])].map(p=>p[1]*1.1));
+  const x=m=>L+(W-L-R)*m/1440, y=v=>H-B-(H-T-B)*Math.min(v,top)/top;
+  const path=pts=>pts.map((p,i)=>(i?'L':'M')+x(p[0]).toFixed(1)+' '+y(p[1]).toFixed(1)).join('');
+  const on=S?mins(S.on):420, off=S?mins(S.off):1140;
+  let h='';
+  // target band for the whole day, across the chart
+  h+=`<rect x="${L}" y="${y(hi).toFixed(1)}" width="${W-L-R}" height="${(y(lo)-y(hi)).toFixed(1)}" class="dcband"/>`;
+  // pace wedge: 0 at lights on, the band at lights off
+  if(off>on)h+=`<path d="M${x(on).toFixed(1)} ${y(0)} L${x(off).toFixed(1)} ${y(hi).toFixed(1)} `
+    +`L${x(1440).toFixed(1)} ${y(hi).toFixed(1)} L${x(1440).toFixed(1)} ${y(lo).toFixed(1)} `
+    +`L${x(off).toFixed(1)} ${y(lo).toFixed(1)} Z" class="dcpace"/>`;
+  for(const hr of [0,6,12,18,24])
+    h+=`<line x1="${x(hr*60)}" y1="${T}" x2="${x(hr*60)}" y2="${H-B}" class="dcgrid"/>`
+      +`<text x="${x(hr*60)}" y="${H-5}" class="dcax" text-anchor="middle">${String(hr).padStart(2,'0')}</text>`;
+  for(const v of [lo,hi])
+    h+=`<text x="${L-4}" y="${(y(v)+3).toFixed(1)}" class="dcax" text-anchor="end">${v}</text>`;
+  if((cv.yesterday||[]).length)h+=`<path d="${path(cv.yesterday)}" class="dcyest"/>`;
+  if((cv.today||[]).length){
+    const last=cv.today[cv.today.length-1];
+    h+=`<path d="${path(cv.today)}" class="dctoday"/>`
+      +`<circle cx="${x(last[0]).toFixed(1)}" cy="${y(last[1]).toFixed(1)}" r="3" class="dcnow"/>`;
+  }
+  svg.innerHTML=h;
+}
 function renderDayProgress(j){
   const wrap=document.getElementById('dayprog');
   if(!wrap||!S.on||!S.off)return;
@@ -3565,6 +3659,7 @@ function renderDayProgress(j){
     else            left.textContent=durStr(off-now)+' of light left';
   }
   const day=j.day_light||null;
+  drawDliChart(day);
   // how long the light has actually delivered today
   const lit=document.getElementById('dplit');
   if(lit)lit.textContent=(day&&day.lit_minutes)?durStr(day.lit_minutes*60000)+' lit':'';

@@ -78,12 +78,14 @@
     </div>
 
     <dl class="daystats" id="daystats"></dl>
+    <svg id="dlichart" class="dlichart" viewBox="0 0 320 130" role="img"
+         aria-label="Daily light integral through today against the target" style="display:none"></svg>
   </div>
 </div>
 
 <div class="card lightctl editonly" id="lightctl">
   <div class="lcrow">
-    <span class="lclabel">Light</span>
+    <span class="lclabel">Light<span id="lctarget" class="lctarget"></span></span>
     <button type="button" class="lcbtn" id="lcauto" data-mode="auto">Auto</button>
     <button type="button" class="lcbtn" id="lcon" data-mode="on">On</button>
     <button type="button" class="lcbtn" id="lcoff" data-mode="off">Off</button>

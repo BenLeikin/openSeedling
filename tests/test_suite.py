@@ -693,6 +693,15 @@ def _setups():
     d1, d2 = (out["seedlings"]["day"] or {}).get("dli"), (out["transplants"]["day"] or {}).get("dli")
     check(d1 and d2 and abs(d2 / d1 - 2 * 60 / 70) < 0.02,
           f"each setup's DLI comes from its own sensor and factor ({d1} vs {d2})")
+    cur = ((out["seedlings"]["day"] or {}).get("curve") or {}).get("today") or []
+    vals_ = [v for _, v in cur]
+    check(len(cur) > 3 and vals_ == sorted(vals_) and abs(vals_[-1] - d1) < 0.2,
+          f"the Day card's DLI curve climbs to today's total ({vals_[-1] if vals_ else None} vs {d1})")
+    js2 = (APP / "static" / "app.js").read_text()
+    check("function setLight2" in js2 and "light2_override" in js2 and "S.schedule_mode==='light2'" in js2,
+          "the Light card and schedule chart drive the selected setup's light")
+    check('id="dlichart"' in (APP / "templates" / "index.html").read_text(),
+          "the Day card has the DLI-against-target chart")
     check(out["transplants"]["band"] == [15.0, 20.0] and out["shelf"]["plan"]["status"] == "no_sensor",
           "each setup keeps its own band; a setup without a light sensor says so")
     import alerts

@@ -157,8 +157,17 @@ With two or more setups, tabs appear at the top of the dashboard. The chosen
 tab decides whose light the Day card's DLI bar, pace and forecast, and the Plan
 card describe, and which sensor chips and charts are shown. The short-day and
 too-much-light alerts are judged per setup and name it, and the AI report is
-told each setup's light. The photoperiod bar and brightness still show the main
-light's schedule, and the watering controls show every tray.
+told each setup's light. The Light card, the day phase and brightness, the
+photoperiod bar and the schedule chart follow the selected setup's light too:
+on a tab whose light is the second fixture, Auto/On/Off and the slider set that
+light (`light2_override`, `light2_bright`) and dragging the chart's edges sets
+its hours (`light2_start`, `light2_end`); windows that cross midnight are not
+draggable. The one-line second-light status is hidden when there are tabs. The
+watering controls show every tray.
+
+The Day card also charts daily light through today (solid) and yesterday
+(dashed) against the target: the shaded band is where the day should end, and
+the wedge is where the total should be at each hour of the photoperiod.
 
 ### Daily AI report
 

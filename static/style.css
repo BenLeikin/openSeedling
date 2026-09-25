@@ -1169,3 +1169,14 @@ details.fgroup[open]{padding-bottom:12px}
 .setupsens{display:flex;flex-wrap:wrap;gap:6px 14px;margin:8px 0}
 .setupsens label{white-space:nowrap}
 .setupbtns{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+
+/* Day card: daily light through today against the target */
+.dlichart{width:100%;height:auto;margin-top:10px}
+.dlichart .dcband{fill:var(--good);opacity:.12}
+.dlichart .dcpace{fill:var(--good);opacity:.10}
+.dlichart .dcgrid{stroke:var(--line);stroke-width:1}
+.dlichart .dcax{font-size:9px;fill:var(--leaf)}
+.dlichart .dcyest{fill:none;stroke:var(--leaf);stroke-width:1.5;stroke-dasharray:4 3;opacity:.6}
+.dlichart .dctoday{fill:none;stroke:#e8b04b;stroke-width:2.2}
+.dlichart .dcnow{fill:#e8b04b}
+.lctarget{font-weight:400;opacity:.8;font-size:.85em}

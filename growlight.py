@@ -4482,7 +4482,9 @@ def status_payload(authed=None):
                 "level": light2_state["level"],
                 "why": light2_state["why"],
                 "start": cfg.get("light2_start"), "end": cfg.get("light2_end"),
-                "override": cfg.get("light2_override", "auto")},
+                "override": cfg.get("light2_override", "auto"),
+                "bright": cfg.get("light2_bright", 50),
+                "ramp_min": cfg.get("light2_ramp_min", 0)},
         lightning={"available": lightning_available(cfg),
                    "running": lightning_state["running"]},
         kasa={"host": kasa_conf(cfg)[0],
@@ -5175,6 +5177,44 @@ def dli_target(cfg=None):
     return setup_band(setups(cfg)[0])
 
 
+_dli_curve_cache = {}
+
+
+def dli_curves(key, k, tz):
+    """Cumulative DLI through today and through yesterday, as [[minute of
+    the day, mol], ...] every 15 minutes, for the Day card's chart. Same
+    integration as dli_between (gaps over 30 min are skipped). Cached for a
+    minute: it reads two days of samples and a push can ask several times."""
+    now = datetime.now(tz)
+    ck = (key, k, int(time.time() // 60))
+    if ck in _dli_curve_cache:
+        return _dli_curve_cache[ck]
+    k = k or lux_k()
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+    pts = db.series(key, hours=50) if k else []
+    cf = canopy_factor()
+
+    def curve(t0, t1):
+        out, total, nxt = [[0, 0.0]], 0.0, t0 + 900
+        seg = [(ts, v) for ts, v in pts if t0 <= ts <= t1]
+        for (a, va), (b, vb) in zip(seg, seg[1:]):
+            while b > nxt and nxt <= t1:
+                out.append([round((nxt - t0) / 60), round(total * cf / 1e6, 2)])
+                nxt += 900
+            dt = b - a
+            if 0 < dt <= 1800:
+                total += ((va + vb) / 2 / k) * dt
+        out.append([round((min(t1, seg[-1][0] if seg else t0) - t0) / 60),
+                    round(total * cf / 1e6, 2)])
+        return out if seg else []
+    res = {"today": curve(midnight, now.timestamp()),
+           "yesterday": curve(midnight - 86400, midnight)}
+    if len(_dli_curve_cache) > 32:
+        _dli_curve_cache.clear()
+    _dli_curve_cache[ck] = res
+    return res
+
+
 def setup_status(cfg, setup, on_time, off_time, tz):
     """One setup as the dashboard shows it: its measured day and verdict."""
     key, k = setup.get("lux") or "", setup_k(setup)
@@ -5187,6 +5227,7 @@ def setup_status(cfg, setup, on_time, off_time, tz):
         midnight = now_.replace(hour=0, minute=0, second=0, microsecond=0)
         rest = dli_between(now_.timestamp() - 86400, midnight.timestamp(), key, k)
         day["forecast_remaining"] = rest[0] if rest and rest[1] >= 0.9 else None
+        day["curve"] = dli_curves(key, k, tz)
     lo, hi = setup_band(setup)
     return {"id": setup.get("id"), "name": setup.get("name"),
             "light": setup.get("light", ""), "lux": key, "k": k,
