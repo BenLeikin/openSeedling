@@ -386,6 +386,14 @@ def _rotate_file(path, degrees):
     _postprocess_file(path, {"cam_rotate": degrees})
 
 
+
+def light_for_photo(cfg):
+    """Whether a photo sets the main light to capture_brightness."""
+    if not cfg.get("capture_set_light", False):
+        return False
+    cam = setups_mod.setup_with(cfg, "camera")
+    return cam is None or cam.get("light") == "main"
+
 def take_photo(cfg, now, manual=False):
     """Capture one frame. `manual` tags the filename with an _m suffix so the
     daily AI report can prefer scheduled frames: a manual shot at midnight is
@@ -394,11 +402,11 @@ def take_photo(cfg, now, manual=False):
     capturing = True
     saved = None
     try:
-        # The capture brightness is a main-light setting: only raise it when
-        # the camera watches the main light's setup, or it would flash the
-        # wrong area and leave the photographed one as it was.
-        cam = setups_mod.setup_with(cfg, "camera")
-        if cam is None or cam.get("light") == "main":
+        # The light is left as it is unless "Set the light for each photo" is
+        # on. The capture brightness is a main-light setting: only apply it
+        # when the camera watches the main light's setup, or it would change
+        # the wrong area and leave the photographed one as it was.
+        if light_for_photo(cfg):
             light_mod.set_brightness(cfg["capture_brightness"])
         time.sleep(2)  # let light and auto-exposure settle
         suffix = "_m" if manual else ""
@@ -726,7 +734,8 @@ def run_focus_sweep():
     """Coarse pass across the full focus range, fine pass around the winner,
     then pin usb_focus_absolute to the sharpest value. Holds capture_lock for
     the duration (~60-90s) so the timelapse can't interleave, and holds the
-    light at capture_brightness so every frame is scored under the same light."""
+    light steady (at capture_brightness when photos set the light, otherwise
+    where it is) so every frame is scored under the same light."""
     with config.settings_lock:
         cfg = dict(config.settings)
     dev = cfg.get("usb_device", "/dev/video0")
@@ -736,7 +745,8 @@ def run_focus_sweep():
     try:
         with capture_lock:
             capturing = True                  # control loop leaves the light alone
-            light_mod.set_brightness(cfg.get("capture_brightness", 100))
+            if light_for_photo(cfg):
+                light_mod.set_brightness(cfg.get("capture_brightness", 100))
             # manual focus must be active or focus_absolute writes are rejected
             subprocess.run(["v4l2-ctl", "-d", dev,
                             "-c", "focus_automatic_continuous=0"],

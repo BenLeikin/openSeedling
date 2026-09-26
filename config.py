@@ -94,6 +94,10 @@ DEFAULTS = {
                                #   a working camera is connected.
     "capture_enabled": False,
     "capture_interval_min": 30,
+    # Photos are taken under whatever the light is doing. With this on, the
+    # main light is set to capture_brightness for the few seconds of each
+    # photo (and the focus sweep), so every frame is lit the same.
+    "capture_set_light": False,
     "capture_brightness": 100,  # light level held during each photo
     "roi": "",                  # view crop as "x,y,w,h" fractions of the stored
                                 # frame, blank = full frame. Applied when photos
@@ -478,6 +482,7 @@ SETTINGS_VALIDATORS = {
     "cam_rotate": _v_choice(0, 90, 180, 270),
     "live_interval_s": _v_int(0, 120),
     "capture_interval_min": _v_int(5, 720, clamp=False),
+    "capture_set_light": _v_bool,
     "capture_brightness": _v_int(1, 100, clamp=False),
     "roi": _v_roi,
     "alert_sustain_min": _v_int(1, 120),

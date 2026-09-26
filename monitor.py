@@ -410,7 +410,7 @@ def report_by_setup(cfg, state, snap, now, probe_txt, floats, planting_by_tray):
             # take_photo raises the light only when the camera's setup is on
             # the main light; otherwise the photo is at whatever it was
             "capture_brightness": (cfg.get("capture_brightness")
-                                   if cam is None or cam.get("light") == "main" else None),
+                                   if camera_mod.light_for_photo(cfg) else None),
             "fan": ((f"{'on' if hardware.fan_state['on'] else 'off'}"
                      + (f" at {hardware.fan_state['speed']}% ({hardware.fan_state['reason']})"
                         if hardware.fan_state["on"] else f" ({hardware.fan_state['reason']})")

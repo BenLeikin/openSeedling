@@ -959,6 +959,7 @@ def _fan_camera_timing():
     try:
         with config.settings_lock:
             config.settings["camera_backend"] = "usb"
+            config.settings["capture_set_light"] = True   # the bump is opt-in
         camera_mod.take_photo(dict(config.settings), now)
         n_second = calls["n"]
         c.post("/api/settings", json={"setups": [dict(base[0], fan=True), dict(base[1], camera=True)]})
@@ -966,6 +967,8 @@ def _fan_camera_timing():
         n_main = calls["n"] - n_second
     finally:
         light_mod.set_brightness, camera_mod._usb_capture = real_sb, real_usb
+        with config.settings_lock:
+            config.settings["capture_set_light"] = False
     check(n_second == 0 and n_main == 1,
           "the capture brightness bump only touches the main light when the camera watches it")
     lm = monitor.gather_report_data()["light_metrics"]
@@ -1397,6 +1400,45 @@ def _oom():
           and lines.count("dtoverlay=vc4-kms-v3d") == 0 and "CmaTotal" in setup,
           "the boot block sets CMA to 64 MB, comments out the stock KMS line, and setup.sh checks CmaTotal")
 
+
+def _photo_light():
+    """Photos leave the light alone unless "Set the light for each photo" is on
+    (Ben did not like the light changing for every photo)."""
+    set_to = []
+    real_sb, real_usb = light_mod.set_brightness, camera_mod._usb_capture
+    light_mod.set_brightness = lambda p, *a, **k: set_to.append(p)
+    camera_mod._usb_capture = lambda cfg_, out, w, h, warmup=None: (False, "test")
+    with config.settings_lock:
+        saved = {k: config.settings.get(k) for k in ("capture_set_light", "capture_brightness",
+                                                      "camera_backend", "setups")}
+        config.settings.update(camera_backend="usb", capture_brightness=80, setups=[])
+        config.settings.pop("capture_set_light", None)       # as on an existing install
+    try:
+        camera_mod.take_photo(dict(config.DEFAULTS, **config.settings), datetime.now())
+        off = list(set_to)
+        r = c.post("/api/settings", json={"capture_set_light": True}).get_json()
+        camera_mod.take_photo(dict(config.settings), datetime.now())
+        on = set_to[len(off):]
+    finally:
+        light_mod.set_brightness, camera_mod._usb_capture = real_sb, real_usb
+        with config.settings_lock:
+            config.settings.update(saved)
+    check(config.DEFAULTS.get("capture_set_light") is False and off == [],
+          "by default a photo leaves the light where it is")
+    check(r["ok"] and on == [80], f"with the setting on, a photo sets the main light to the photo brightness ({on})")
+    html = (APP / "templates" / "index.html").read_text()
+    js = (APP / "static" / "app.js").read_text()
+    check('name="capture_set_light"' in html and 'class="capbright"' in html
+          and "body.capture_set_light=f.elements['capture_set_light'].checked;" in js
+          and "function syncCaptureLight()" in js
+          and "formHolds('capture_set_light',cfg)" in js,
+          "Settings, Camera has the switch, and Photo brightness shows only when it is on")
+    src = (APP / "camera.py").read_text()
+    fs = re.search(r"def run_focus_sweep\(\):[\s\S]*?score_at", src)
+    check(fs and "if light_for_photo(cfg):" in fs.group(0)
+          and "camera_mod.light_for_photo(cfg)" in (APP / "monitor.py").read_text(),
+          "the focus sweep and the AI report's photo-light line follow the same switch")
+
 def run(name, fn):
     """A section that crashes counts as one failure; the rest still run."""
     section(name)
@@ -1429,6 +1471,7 @@ run('AI report by setup', _report_by_setup)
 run('Startup log noise and thumbnail race', _startup_log_noise)
 run('Unsaved settings', _unsaved_settings)
 run('Out of memory', _oom)
+run('Photo light', _photo_light)
 run('Shutdown', _shutdown)
 
 # --------------------------------------------------------------------------

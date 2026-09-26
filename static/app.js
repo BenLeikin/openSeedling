@@ -973,6 +973,9 @@ function fillForm(cfg){
     if(f.elements[k]&&!formHolds(k,cfg))f.elements[k].value=cfg[k]||'';
   if(f.elements['little_buddy']&&!formHolds('little_buddy',cfg))
     f.elements['little_buddy'].checked=cfg['little_buddy']!==false;
+  if(f.elements['capture_set_light']&&!formHolds('capture_set_light',cfg))
+    f.elements['capture_set_light'].checked=!!cfg['capture_set_light'];
+  syncCaptureLight();
   if(f.elements['auto_wet_cal']&&!formHolds('auto_wet_cal',cfg))
     f.elements['auto_wet_cal'].checked=!!cfg['auto_wet_cal'];
   if(f.elements['light_linear_on']&&!formHolds('light_linear_on',cfg))
@@ -3020,6 +3023,8 @@ document.getElementById('cfgform').addEventListener('submit',async ev=>{
     body.camera_enabled=f.elements['camera_enabled'].checked;
   if(f.elements['little_buddy'])
     body.little_buddy=f.elements['little_buddy'].checked;
+  if(f.elements['capture_set_light'])
+    body.capture_set_light=f.elements['capture_set_light'].checked;
   if(f.elements['auto_wet_cal'])
     body.auto_wet_cal=f.elements['auto_wet_cal'].checked;
   if(f.elements['light_linear_on'])
@@ -4059,6 +4064,14 @@ function initCameraBackend(){
     syncUsbAuto();
   });
 }
+// Photo brightness only matters when photos set the light
+function syncCaptureLight(){
+  const cb=document.querySelector('#cfgform [name=capture_set_light]');
+  document.querySelectorAll('.capbright').forEach(el=>
+    el.style.display=(cb&&cb.checked)?'':'none');
+}
+{const cb=document.querySelector('#cfgform [name=capture_set_light]');
+ if(cb)cb.addEventListener('change',syncCaptureLight);}
 function initSchedule(){
   const sm=document.querySelector('[name=schedule_mode]');
   if(!sm)return;

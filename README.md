@@ -470,7 +470,8 @@ editable from the dashboard Settings panel; the rest are edited in the file.
 | `units` | `imperial` | Display only; storage is always Celsius / hPa and switching never converts data |
 | `capture_enabled` | false | Timelapse on/off |
 | `capture_interval_min` | 30 | Minutes between frames |
-| `capture_brightness` | 100 | Brightness held during each photo |
+| `capture_set_light` | false | Set the main light to `capture_brightness` for each photo and the focus sweep; off leaves the light as it is |
+| `capture_brightness` | 100 | Brightness held during each photo when `capture_set_light` is on |
 | `camera_backend` | `usb` | `usb` (v4l2) or `rpicam` |
 | `timelapse_flatten` / `cam_rectify` | true / true | Show the snapshot, thumbnails and video flattened / flatten before canopy analysis |
 | `cam_rotate` | 0 | Rotation baked in at capture (0/90/180/270) for an upside-down mount |
