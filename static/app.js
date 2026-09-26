@@ -482,6 +482,8 @@ function trayInSetup(id){
 function inSetup(k){
   const cs=curSetup();
   if(!cs||setupsList.length<2)return true;
+  // the heat mat's power level shows on the heat mat's setup (all tabs if none)
+  if(k.startsWith('heat:')){const hs=setupsList.find(s=>s.heat);return !hs||hs.id===cs.id;}
   // a tray's own sensors (probe, canopy, float) come with the tray
   const m=/^(probe|canopy|float):(.+)$/.exec(k);
   if(m&&cs.trays&&cs.trays.length&&cs.trays.includes(m[2]))return true;
@@ -1281,6 +1283,7 @@ function readingStale(key, ts){
   const now=Date.now()/1000;
   if(key.startsWith('canopy:'))
     return canopyDue!=null && now-Math.max(ts,canopyDue) > 3*capMin*60;
+  if(key.startsWith('heat:'))return false;   // logged only while Auto runs
   return now-ts > 3*sampleMin*60;
 }
 let probeCal={}, probeNames={}, probeDefaultCal=null;   // per-tray anchors, labels, fallback
@@ -1349,6 +1352,8 @@ function sensorMeta(key, val){
                   title:val.toFixed(3)+'V'+(m.approx?' - estimated, not yet calibrated':'')};
     return {group:'Soil', label:nm, value:val.toFixed(3), unit:'V', suffix:warn};
   }
+  if(key==='heat:duty')  return {group:'Soil', label:'Heat mat power', value:Math.round(val), unit:'%',
+                                  title:'the share of each 15-minute cycle the heat mat ran'};
   return {group:'Other', label:key, value:String(val), unit:''};
 }
 // Per-cell camera readings, laid out to match the physical trays. Canopy and

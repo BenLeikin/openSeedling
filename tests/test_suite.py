@@ -1530,7 +1530,8 @@ def _heat_mat():
           "safety cut-offs and the grower's On and Off switch at once; Auto keeps to its cycle")
     # Auto: one pulse per window, its length set by the duty
     st = {}
-    near = [d(base, c75 - 0.2, 60, None, now + k, c75 - 3.0, st)[0] for k in range(0, heat.WINDOW_S, 30)]
+    air_half = (c75 - heat.FF_BASE_C - 0.5 * heat.FF_GAIN_C) / heat.FF_AIR   # feed-forward ~ 50%
+    near = [d(base, c75 - 0.2, 60, None, now + k, air_half, st)[0] for k in range(0, heat.WINDOW_S, 30)]
     on_s = 30 * sum(near)
     first_off = near.index(False) if False in near else len(near)
     check(0.3 < st["duty"] < 1.0 and all(near[:first_off]) and not any(near[first_off:])
@@ -1547,45 +1548,51 @@ def _heat_mat():
     check(not any(tiny) and st["duty"] == 0.0,
           "a pulse shorter than a minute is skipped rather than clicking the relay")
 
-    # A simulation of Ben's rig (two-node mat/soil model fitted to his 25-26 Sep
-    # data, 0.19C rms), with a room cooling and warming: Auto must hold the
-    # soil much tighter than on/off did, centred on the target.
-    def simulate(ctrl, hours=24.0):
-        q, k1, k2, k3, k4 = 16.43, 0.67, 1.15, 1.28, 0.754        # per hour
-        tgt = f_to_c = (86 - 32) * 5 / 9
-        dt, x, m, u = 15.0, tgt - 0.5, tgt + 2.0, False
-        meas, seen, hot = x, [], []
-        stc = {}
+    # A simulation of Ben's rig as it behaved under proportional control on
+    # 26 Sep (about 12 min dead time and two ~15 min lags; soil settles near
+    # 16.5 + 0.38 air + 3.69 duty C). With update 21's tuning this model swings
+    # about 2.8F, as the real soil did, so it is fit to judge a retune.
+    def simulate(ctrl, hours=14.0):
+        dt, dead, tau, g, c0, a0 = 30.0, 741.0, 0.24, 3.69, 16.5, 0.38
+        tgt = (86 - 32) * 5 / 9
+        x = z = tgt - 0.7
+        meas, seen, hist, stc = x, [], [], {}
         for i in range(int(hours * 3600 / dt)):
             t = i * dt
-            air = 24.8 + 1.2 * math.sin(2 * math.pi * t / 86400.0)   # 23.6-26.0C
-            if i % 20 == 0:                                            # a reading every 5 min
+            air = 26.2 + 1.6 * math.sin(2 * math.pi * (t / 86400.0 - 0.1))
+            if i % 10 == 0:                                            # a reading every 5 min
                 meas = round(x / 0.0625) * 0.0625
-            u = ctrl(meas, air, u, t, stc)
+            hist.append(1.0 if ctrl(meas, air, t, stc) else 0.0)
+            u = hist[i - int(dead / dt)] if i >= int(dead / dt) else 1.0
             h = dt / 3600
-            dm = q * u - k1 * (m - x) - k3 * (m - air)
-            dx = k2 * (m - x) - k4 * (x - air)
-            m += h * dm
-            x += h * dx
-            if t > 4 * 3600:
+            z += h * ((c0 + a0 * air + g * u) - z) / tau
+            x += h * (z - x) / tau
+            if t > 3 * 3600:
                 seen.append(x)
         return min(seen), max(seen), sum(seen) / len(seen)
     cfg86 = dict(base, heat_target_f=86, heat_max_f=95)
     t86 = (86 - 32) * 5 / 9
 
-    def old_onoff(meas, air, u, t, stc):                  # what Auto did before
-        if meas < t86 - 1.0 * 5 / 9:
-            return True
-        return False if meas >= t86 else u
+    def old_pi(meas, air, t, stc):                    # update 21: Kp 0.6, Ti 1 h, air + 6.4C
+        if stc.get("w") is None or t >= stc["w"] + 900:
+            e = t86 - meas
+            ff = (t86 - air) / 6.4
+            raw = ff + 0.6 * e + stc.get("i", 0.0)
+            if 0 < raw < 1 or (raw >= 1 and e < 0) or (raw <= 0 and e > 0):
+                stc["i"] = stc.get("i", 0.0) + 0.6 * e * 900 / 3600
+            duty = min(1, max(0, ff + 0.6 * e + stc.get("i", 0.0)))
+            on = duty * 900
+            on = 0 if on < 60 else (900 if 900 - on < 60 else on)
+            stc["w"], stc["until"] = t, t + on
+        return t < stc["until"]
 
-    def auto(meas, air, u, t, stc):
-        return heat.decide(cfg86, meas, 60, u, t, air, stc)[0]
-    lo0, hi0, mean0 = simulate(old_onoff)
+    def auto(meas, air, t, stc):
+        return heat.decide(cfg86, meas, 60, None, t, air, stc)[0]
+    lo0, hi0, mean0 = simulate(old_pi)
     lo1, hi1, mean1 = simulate(auto)
-    check((hi1 - lo1) * 1.8 < 1.3 and abs(mean1 - t86) < 0.15 and (hi1 - lo1) < (hi0 - lo0) / 1.8,
-          f"on the fitted rig model Auto holds {(hi1 - lo1) * 1.8:.1f}F peak to peak around the "
-          f"target (mean {(mean1 - t86) * 1.8:+.2f}F); on/off swung {(hi0 - lo0) * 1.8:.1f}F "
-          f"(mean {(mean0 - t86) * 1.8:+.2f}F)")
+    check((hi0 - lo0) * 1.8 > 2.0 and (hi1 - lo1) * 1.8 < 1.0 and abs(mean1 - t86) * 1.8 < 0.3,
+          f"on a model of the rig that reproduces update 21's swing ({(hi0 - lo0) * 1.8:.1f}F), the "
+          f"retuned Auto holds {(hi1 - lo1) * 1.8:.1f}F peak to peak, mean {(mean1 - t86) * 1.8:+.2f}F")
 
     sent = []
     reading = {"v": (c75 - 2, now)}
@@ -1625,6 +1632,19 @@ def _heat_mat():
         heat.heat_pass(now + 2 * heat.WINDOW_S + 1)           # on again
         check(len(db.recent_events(500)) == ev_before,
               "Auto's pulses are not logged as events (dozens a day); safety and mode changes are")
+        logged = db.series("heat:duty", hours=48)
+        check(len(logged) >= 3 and all(0 <= v <= 100 for _, v in logged),
+              f"each window's power level is logged as heat:duty for the charts ({len(logged)} so far)")
+        saved_i = db.kv_get(heat.INTEGRAL_KEY) or {}
+        heat._restored = False
+        heat.heat_state["integral"] = 0.0
+        heat._restore_integral(saved_i.get("ts", 0) + 60)
+        restored = heat.heat_state["integral"]
+        heat._restored = False
+        heat.heat_state["integral"] = 0.0
+        heat._restore_integral(saved_i.get("ts", 0) + 7200)
+        check("integral" in saved_i and restored == saved_i["integral"] and heat.heat_state["integral"] == 0.0,
+              "the controller's integral survives a restart within the hour, and an old one is ignored")
         reading["v"] = (36.0, now + 2 * heat.WINDOW_S + 10)
         n = len(sent)
         heat.heat_pass(now + 2 * heat.WINDOW_S + 15)          # past the cut-off...
@@ -1702,6 +1722,12 @@ def _heat_mat():
           and "body[k]=Math.round(tToF(parseFloat(f.elements[k].value))*10)/10;" in js,
           "the Light card has Heat mat buttons, Settings has the plug use and thermostat, "
           "temperatures are saved in F, and the light's buttons ignore the heat buttons")
+    mon = (APP / "monitor.py").read_text()
+    check("if(key==='heat:duty')" in js and "if(key.startsWith('heat:'))return false;" in js
+          and "if(k.startsWith('heat:')){const hs=setupsList.find(s=>s.heat);" in js
+          and '"dry:", "growth", "moisture:", "heat:"' in mon and '"canopy:", "heat:")' in mon,
+          "the power level is charted as Heat mat power on the heat mat's tab, never marked stale, "
+          "and kept out of sensor health and stuck-sensor checks")
     css = (APP / "static" / "style.css").read_text()
     check(html.count('class="devrow ') == 2 and 'id="heatdot"' in html and 'id="fandot"' in html
           and ".lightctl .lcrow{flex-wrap:nowrap}" in css and "#lightinfo:empty{display:none}" in css

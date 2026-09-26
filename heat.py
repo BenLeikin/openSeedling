@@ -25,19 +25,31 @@ LOOP_S = 30                 # how often the thermostat decides
 # duty (0 to 1) and is on for that share of the window, once, so the soil sees
 # the average power instead of full-on/full-off swings.
 #
-# Why (fitted to Ben's 25-26 Sep data, a two-node mat/soil model, 0.19C rms):
-# the soil sits at about air + 6.4C with the mat on full, so near an 86F
-# target the mat needs 85-100% power. On/off switched it fully off at the
-# target, the soil fell ~1.5C in 30 min toward the air (6C below), then took
-# 1-2 h to climb back on the small margin left: 2-4F swings, averaging ~1F
-# low. Simulated over the same air, this controller holds about 0.9F peak to
-# peak, centred on the target, with ~45 plug switches a day (at most 192).
+# Tuning history (Ben's rig, 26 Sep):
+# - Update 21 tuned on a model fitted to 10 h of on/off data (slow soil,
+#   soil = air + 6.4C at full power). It predicted 0.9F peak to peak; the rig
+#   swung 2.8F at a ~70 min period. That model had the lag wrong.
+# - Replaying update 21's own decisions over the 09:14-13:48 readings
+#   (the replay matched the live 77% duty) and fitting to that period gives a
+#   faster, delayed rig: about 12 min dead time and two ~15 min lags, soil
+#   settling near 16.5 + 0.38 x air + 3.69 x duty (C). In a closed-loop
+#   simulation that model reproduces the observed swing (2.75F), which is
+#   what makes it worth tuning on.
+# - Retuned on it: KP 0.25 per C (was 0.6), TI 2 h (was 1 h), and the
+#   feed-forward from that fit. Simulated over the same day: about 0.4F peak
+#   to peak, mean on target; under 1F with the rig's gain off by 30%, its
+#   lags 40-60% off, or its delay 50% off. About 165 plug switches a day.
 WINDOW_S = 900              # one on-pulse per 15 min
 MIN_PULSE_S = 60            # skip on or off pulses shorter than this (relay wear)
-KP_PER_C = 0.6              # duty per degree C below target
-TI_S = 3600                 # integral time: a steady 1C error adds 0.6 duty an hour
-MAT_RISE_C = 6.4            # soil rise over air at full power; the feed-forward's guess,
-                            # the integral trims whatever it gets wrong
+KP_PER_C = 0.25             # duty per degree C below target
+TI_S = 7200                 # integral time: a steady 1C error adds 0.25 duty per 2 h
+# feed-forward: the duty that holds the target at this air temperature, from
+# the fit above (soil ~ FF_BASE_C + FF_AIR x air + FF_GAIN_C x duty); the
+# integral trims whatever it gets wrong
+FF_BASE_C = 16.5
+FF_AIR = 0.38
+FF_GAIN_C = 3.69
+INTEGRAL_KEY = "heat_integral"   # kv: the integral survives a restart (under an hour old)
 REASSERT_S = 600            # re-send the state now and then (the Kasa app can flip it)
 STALE_SAMPLES = 3           # a reading older than this many sample intervals is gone
 
@@ -71,7 +83,8 @@ def duty_for(cfg, temp_c, air_c, st, window_s=WINDOW_S):
     flat out and still short)."""
     target_c = f_to_c(cfg.get("heat_target_f", 75))
     err = target_c - temp_c
-    ff = (target_c - air_c) / MAT_RISE_C if air_c is not None else 0.7
+    ff = ((target_c - FF_BASE_C - FF_AIR * air_c) / FF_GAIN_C
+          if air_c is not None else 0.7)
     integ = st.get("integral", 0.0)
     raw = ff + KP_PER_C * err + integ
     if 0.0 < raw < 1.0 or (raw >= 1.0 and err < 0) or (raw <= 0.0 and err > 0):
@@ -117,6 +130,7 @@ def decide(cfg, temp_c, age_s, on_now, now, air_c=None, st=None):
         elif WINDOW_S - on_s < MIN_PULSE_S:
             on_s = float(WINDOW_S)
         st.update(window=now, duty=on_s / WINDOW_S, on_until=now + on_s)
+        st["new_window"] = True
     want = now < st["on_until"]
     pct = round(st["duty"] * 100)
     return want, f"{pct}% power", "", False
@@ -157,11 +171,22 @@ def _heat_pass(now=None):
         age = None if ts is None else now - ts
         with _lock:
             on_now, sent = heat_state["on"], heat_state["sent"]
+        _restore_integral(now)
         air_c, air_ts = monitor.reading_filtered("temp:air")
         if air_ts is None or now - air_ts > 3600:
             air_c = None                            # feed-forward falls back to a guess
         with _lock:
             want, reason, fault, urgent = decide(cfg, temp_c, age, on_now, now, air_c)
+            fresh = heat_state.pop("new_window", False)
+            duty, integ = heat_state.get("duty"), heat_state.get("integral", 0.0)
+        if fresh and duty is not None:
+            # the power it chose, charted beside the soil temperature, and the
+            # integral kept so a restart does not throw away what it learned
+            try:
+                db.log_reading("heat:duty", round(duty * 100, 1), ts=now)
+                db.kv_set(INTEGRAL_KEY, {"integral": integ, "ts": now})
+            except Exception as e:
+                log.warning(f"heat mat: could not record the power level ({e})")
         if hardware.SHUTTING_DOWN.is_set():
             want, reason = False, "shutting down"
         change = want != on_now
@@ -189,6 +214,24 @@ def _heat_pass(now=None):
             heat_state.update(reason=reason, fault=fault, temp_c=temp_c)
     except Exception:
         log.exception("heat mat pass failed")
+
+
+_restored = False
+
+
+def _restore_integral(now):
+    """Once per process: pick up the integral a previous run left, if recent."""
+    global _restored
+    if _restored:
+        return
+    _restored = True
+    try:
+        saved = db.kv_get(INTEGRAL_KEY) or {}
+        if saved and now - float(saved.get("ts", 0)) < 3600:
+            with _lock:
+                heat_state["integral"] = max(-1.0, min(1.0, float(saved.get("integral", 0.0))))
+    except Exception as e:
+        log.warning(f"heat mat: could not restore the controller state ({e})")
 
 
 def heat_loop():

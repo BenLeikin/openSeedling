@@ -133,6 +133,11 @@ the watering controls, and the daily AI plant-health report.*
   at about air + 6.4C with the mat on full), it holds about 0.9F peak to peak
   in simulation where on/off swung 2-4F. Your own On or Off acts at once.
   Pulses are logged at debug level, not as events.
+- Retuned 26 Sep after the first tuning swung 2.8F on the real rig (see the
+  comment in `heat.py`): gentler gain, slower integral, and a feed-forward
+  fitted to how the rig behaved under proportional control. Each window's
+  power level is logged as the reading `heat:duty` ("Heat mat power" in the
+  Soil charts), and the controller's integral is kept across a restart.
 - Belongs to one setup, like the fan: tick Heat mat under that setup's
   "Here" in Settings, Setups, and its controls show on that setup's tab and in
   that setup's block of the AI report.

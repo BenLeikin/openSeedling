@@ -651,7 +651,7 @@ SEEN_TTL = 3 * 86400    # a sensor silent this long is treated as removed
 
 # binary sensors are legitimately constant for days; a flatline there means
 # nothing and accusing them would train you to ignore the rule
-NON_STUCK_PREFIXES = ("float:", "reservoir:", "canopy:")
+NON_STUCK_PREFIXES = ("float:", "reservoir:", "canopy:", "heat:")
 
 
 def stuck_sensors(cadence_s):
@@ -682,7 +682,7 @@ def sensor_health(cfg, snap=None, max_age=60):
     out = {}
     canopy_since = camera_mod.canopy_due_since(cfg)
     for key, (ts, _v) in snap.items():
-        if key.startswith(("dry:", "growth", "moisture:")):
+        if key.startswith(("dry:", "growth", "moisture:", "heat:")):
             continue
         age = now - ts
         if key.startswith("canopy:"):
