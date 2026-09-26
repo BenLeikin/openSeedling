@@ -520,6 +520,8 @@ function applySetup(j){
   document.body.classList.toggle('camelsewhere', camElsewhere);
   if(camElsewhere)document.body.classList.add('nocam');
   document.body.classList.toggle('fanelsewhere', !!(multi&&fanSet&&cs&&fanSet.id!==cs.id));
+  const heatSet=setupsList.find(s=>s.heat);
+  document.body.classList.toggle('heatelsewhere', !!(multi&&heatSet&&cs&&heatSet.id!==cs.id));
   renderSetupConfig(j);
 }
 // Which light the Light card, the day phase and the schedule chart describe:
@@ -594,16 +596,19 @@ function renderSetupConfig(j){
     ? j.settings.setups
     : (j.setups||[]).map(s=>({id:s.id,name:s.name,light:s.light,lux:s.lux,
         k:null,sensors:s.sensors,trays:s.trays||[],fan:!!s.fan,camera:!!s.camera,
-        reservoir:!!s.reservoir,
+        reservoir:!!s.reservoir,heat:!!s.heat,
         dli_low:s.band[0],dli_high:s.band[1]}))));
   drawSetupConfig();
 }
 function drawSetupConfig(){
   const box=document.getElementById('setupcfg');
   if(!box||!setupDraft)return;
-  const keys=Object.keys(sensorData||{}).filter(k=>!k.startsWith('growth')&&!k.startsWith('dry:')
+  const all=Object.keys(sensorData||{}).filter(k=>!k.startsWith('growth')&&!k.startsWith('dry:')
     &&!k.startsWith('moisture:')).sort();
-  const luxKeys=[...new Set(['lux','lux:2',...keys.filter(k=>k.startsWith('lux'))])];
+  const luxKeys=[...new Set(['lux','lux:2',...all.filter(k=>/^lux(:|$)/.test(k))])];
+  // only sensors that need placing: a tray's probe, float and canopy come with
+  // the tray, the light sensor is picked above, the reservoir follows its box
+  const keys=all.filter(k=>!/^(probe|canopy|float|reservoir):|^lux(:|$)/.test(k));
   box.innerHTML=setupDraft.map((s,i)=>`<fieldset class="setupedit" data-i="${i}">
       <div class="frow">
         <div><label>Name <input data-f="name" value="${esc(s.name||'')}" maxlength="40"></label></div>
@@ -623,13 +628,16 @@ function drawSetupConfig(){
         <label><input type="checkbox" data-flag="fan"${s.fan?' checked':''}> Fan</label>
         <label><input type="checkbox" data-flag="camera"${s.camera?' checked':''}> Camera</label>
         <label><input type="checkbox" data-flag="reservoir"${s.reservoir?' checked':''}> Reservoir</label>
+        <label><input type="checkbox" data-flag="heat"${s.heat?' checked':''}> Heat mat</label>
         <span class="fhint">one setup each; the fan follows this setup's light</span></div>
       <div class="setupsens"><b>Trays</b>${trayOpts.map(([id,lbl])=>`<label><input type="checkbox" data-t="${esc(id)}"`
         +`${(s.trays||[]).includes(id)?' checked':''}> ${esc(lbl)}</label>`).join('')}
         <span class="fhint">none ticked = all trays</span></div>
       <div class="setupsens"><b>Sensors</b>${keys.map(k=>`<label><input type="checkbox" data-k="${esc(k)}"`
         +`${(s.sensors||[]).includes(k)?' checked':''}> ${esc(sensorMeta(k,0).label)}</label>`).join('')}
-        <span class="fhint">a tray's probe, float and canopy come with the tray</span></div>
+        <span class="fhint">tick a sensor in each setup it serves (one air sensor
+          between two close areas can count for both); a tray's probe, float and
+          canopy come with the tray</span></div>
       ${setupDraft.length>1?'<button type="button" class="setuprm">Remove</button>':''}
     </fieldset>`).join('');
 }

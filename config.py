@@ -450,7 +450,13 @@ def _v_setups(v):
             raise ValueError(f"{name}: the DLI band needs a low and a high")
         if not (0.5 <= lo < hi <= 65):
             raise ValueError(f"{name}: the DLI band low must be below the high (0.5 to 65)")
-        for flag in ("fan", "camera", "reservoir"):
+        # A tray's probe, canopy and float come with the tray, the light sensor
+        # is chosen on its own, and the reservoir follows its flag: none of
+        # them belong in the sensor list. A sensor may be listed in more than
+        # one setup: one air sensor between two close areas counts for both.
+        sens = [q for q in sens
+                if not re.match(r"(probe|canopy|float|reservoir):|lux(:|$)", q)]
+        for flag in ("fan", "camera", "reservoir", "heat"):
             if x.get(flag):
                 if any(o.get(flag) for o in out):
                     raise ValueError(f"{name}: the {flag} is already assigned to another setup")
@@ -462,7 +468,7 @@ def _v_setups(v):
         out.append({"id": sid, "name": name, "light": light, "lux": lux, "k": k,
                     "sensors": sorted(set(sens)), "trays": trays_,
                     "fan": bool(x.get("fan")), "camera": bool(x.get("camera")),
-                    "reservoir": bool(x.get("reservoir")),
+                    "reservoir": bool(x.get("reservoir")), "heat": bool(x.get("heat")),
                     "dli_low": lo, "dli_high": hi})
     return out
 

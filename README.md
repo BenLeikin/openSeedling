@@ -128,6 +128,9 @@ the watering controls, and the daily AI plant-health report.*
   light code never touches it (before, every light write drove the plug off).
 - Auto is a thermostat on a soil probe: on 1F below the target, off at it, and
   no faster than every 2 minutes. Your own On or Off acts at once.
+- Belongs to one setup, like the fan: tick Heat mat under that setup's
+  "Here" in Settings, Setups, and its controls show on that setup's tab and in
+  that setup's block of the AI report.
 - Safety: at the cut-off the mat goes off in any mode. In Auto, no soil reading
   for three sample intervals holds it off. Both raise an alert, and so does a
   plug that stops answering. Stopping the service turns it off. A Pi that loses

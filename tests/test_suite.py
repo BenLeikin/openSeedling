@@ -1649,6 +1649,71 @@ def _heat_mat():
     check("Heat mat under the trays: on now, thermostat holding the soil at 75F" in ctx,
           "the AI report knows the heat mat's state")
 
+
+def _shared_sensors():
+    """One air sensor between two close areas counts for both setups; the heat
+    mat belongs to one setup like the fan."""
+    with config.settings_lock:
+        trays = sorted(config.settings.get("trays") or {})
+        saved = {k: config.settings.get(k) for k in ("setups", "plug_use", "heat_mode")}
+    t1, t2 = trays[0], trays[1]
+    tran = {"name": "Transplants", "light": "main", "lux": "lux", "trays": [t2], "fan": True,
+            "sensors": ["humidity", "temp:air", "pressure", "lux", f"float:{t1}", "reservoir:low"],
+            "dli_low": 12, "dli_high": 15}
+    seed = {"name": "Seedlings", "light": "second", "lux": "", "trays": [t1], "heat": True,
+            "sensors": ["humidity", "temp:air", "pressure", "temp:soil"], "dli_low": 8, "dli_high": 10}
+    try:
+        r = c.post("/api/settings", json={"setups": [tran, seed]}).get_json()
+        with config.settings_lock:
+            sts = {x["name"]: x for x in config.settings["setups"]}
+        check(r["ok"] and sts["Transplants"]["sensors"] == ["humidity", "pressure", "temp:air"]
+              and "humidity" in sts["Seedlings"]["sensors"],
+              "a sensor may be ticked in two setups; a tray's, the light sensor's and the "
+              "reservoir's keys are dropped from sensor lists (they are placed elsewhere)")
+        with config.settings_lock:
+            cfg = dict(config.settings)
+        both = [x["name"] for x in setups_mod.sensor_setups(cfg, "humidity")]
+        check(both == ["Transplants", "Seedlings"]
+              and [x["name"] for x in setups_mod.sensor_setups(cfg, "temp:soil")] == ["Seedlings"]
+              and [x["name"] for x in setups_mod.sensor_setups(cfg, f"probe:{t1}")] == ["Seedlings"],
+              "a shared sensor counts for every setup that ticks it; tray readings follow the tray")
+        r2 = c.post("/api/settings", json={"setups": [dict(tran, heat=True), seed]}).get_json()
+        st = {x["name"]: x for x in c.get("/api/status").get_json()["setups"]}
+        check(not r2["ok"] and st["Seedlings"]["heat"] and not st["Transplants"]["heat"],
+              "the heat mat belongs to one setup, like the fan and camera")
+        db.log_many([("humidity", 55.0), ("temp:air", 24.0), ("temp:soil", 29.0)])
+        with config.settings_lock:
+            config.settings.update(plug_use="heat", heat_mode="auto")
+        ctx = ai_report.build_context(monitor.gather_report_data())
+        blk = {}
+        cur = None
+        for line in ctx.splitlines():
+            m = re.match(r'Setup "(.+?)"', line)
+            if m:
+                cur = m.group(1)
+                blk[cur] = ""
+            elif cur and line.startswith("  "):
+                blk[cur] += line + "\n"
+            else:
+                cur = None
+        check("RH 55% (same sensor as Seedlings)" in blk.get("Transplants", "")
+              and "RH 55% (same sensor as Transplants)" in blk.get("Seedlings", "")
+              and "Heat mat" in blk.get("Seedlings", "") and "Heat mat" not in blk.get("Transplants", "")
+              and not any(l.startswith("Heat mat") for l in ctx.splitlines()),
+              "the AI report lists a shared sensor under both setups, says it is one sensor, "
+              "and puts the heat mat under its own setup")
+    finally:
+        c.post("/api/settings", json={"setups": saved["setups"] or []})
+        with config.settings_lock:
+            config.settings.update(plug_use=saved["plug_use"], heat_mode=saved["heat_mode"])
+    js = (APP / "static" / "app.js").read_text()
+    css = (APP / "static" / "style.css").read_text()
+    check("const keys=all.filter(k=>!/^(probe|canopy|float|reservoir):|^lux(:|$)/.test(k));" in js
+          and 'data-flag="heat"' in js and "heatelsewhere" in js
+          and "body.heatelsewhere #heatrow{display:none !important}" in css,
+          "the Setups editor offers only sensors that need placing, has a Heat mat box, and the "
+          "heat mat controls show on their setup's tab")
+
 def run(name, fn):
     """A section that crashes counts as one failure; the rest still run."""
     section(name)
@@ -1684,6 +1749,7 @@ run('Out of memory', _oom)
 run('Photo light', _photo_light)
 run('Canopy staleness', _canopy_stale)
 run('Heat mat', _heat_mat)
+run('Shared sensors and the heat mat setup', _shared_sensors)
 run('Shutdown', _shutdown)
 
 # --------------------------------------------------------------------------

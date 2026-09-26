@@ -372,6 +372,7 @@ def report_by_setup(cfg, state, snap, now, probe_txt, floats, planting_by_tray):
         "photo": bool(st.get("camera")) or len(sts) == 1,
         "fan": bool(st.get("fan")) or len(sts) == 1,
         "reservoir": bool(st.get("reservoir")) or len(sts) == 1,
+        "heat": bool(st.get("heat")) or len(sts) == 1,
         "band": list(setups_mod.setup_band(st)),
         "light_sensor": st.get("lux") or None, "ppfd": None, "lux": None, "dli": None,
         "trays": [], "readings": {}} for st in sts}
@@ -405,7 +406,13 @@ def report_by_setup(cfg, state, snap, now, probe_txt, floats, planting_by_tray):
             continue                      # reported as the setup's light sensor
         r = reading(key, v)
         if r:
-            group_of(setups_mod.sensor_setup(cfg, key))["readings"][r[0]] = r[1]
+            owners = setups_mod.sensor_setups(cfg, key)
+            if not owners:
+                shared["readings"][r[0]] = r[1]
+            for stp in owners:
+                others = [o.get("name") for o in owners if o is not stp]
+                group_of(stp)["readings"][r[0]] = r[1] + (
+                    f" (same sensor as {', '.join(others)})" if others else "")
     return {"setups": list(groups.values()), "shared": shared,
             "photo_setup_known": cam is not None or len(sts) == 1,
             # take_photo raises the light only when the camera's setup is on
@@ -416,7 +423,8 @@ def report_by_setup(cfg, state, snap, now, probe_txt, floats, planting_by_tray):
                      + (f" at {hardware.fan_state['speed']}% ({hardware.fan_state['reason']})"
                         if hardware.fan_state["on"] else f" ({hardware.fan_state['reason']})")
                      + f", mode {cfg.get('fan_mode', 'auto')}") if hardware.FAN_HW else None),
-            "reservoir": water.reservoir_state()}
+            "reservoir": water.reservoir_state(),
+            "heat": heat_mod.status(cfg)}
 
 
 def run_report(reason="daily"):

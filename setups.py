@@ -329,18 +329,31 @@ def tray_setup(cfg, tid):
     return open_[0] if len(open_) == 1 else None
 
 
-def sensor_setup(cfg, key):
+def sensor_setups(cfg, key):
+    """Every setup a reading counts for (a list; empty means shared by none).
+
+    A tray's probe, canopy and float go with the tray; the light sensor with
+    the setup that chose it; any other sensor with each setup that ticks it
+    (one sensor near two areas can count for both), else with the one setup
+    whose sensor list is empty."""
     sts = setups(cfg)
     if len(sts) == 1:
-        return sts[0]
+        return [sts[0]]
     m = _TRAY_KEY.match(key)
     if m:
-        return tray_setup(cfg, m.group(2))
-    for st in sts:
-        if key == st.get("lux") or key in (st.get("sensors") or []):
-            return st
+        st = tray_setup(cfg, m.group(2))
+        return [st] if st else []
+    mine = [st for st in sts if key == st.get("lux") or key in (st.get("sensors") or [])]
+    if mine:
+        return mine
     open_ = [st for st in sts if not st.get("sensors")]
-    return open_[0] if len(open_) == 1 else None
+    return open_ if len(open_) == 1 else []
+
+
+def sensor_setup(cfg, key):
+    """The first setup a reading counts for, or None."""
+    sts = sensor_setups(cfg, key)
+    return sts[0] if sts else None
 
 def setup_with(cfg, flag):
     """The setup that has the fan or the camera ("fan" / "camera"), or None."""
@@ -419,7 +432,7 @@ def setup_status(cfg, setup, on_time, off_time, tz):
             "sensors": list(setup.get("sensors") or []),
             "trays": [str(t) for t in (setup.get("trays") or [])],
             "fan": bool(setup.get("fan")), "camera": bool(setup.get("camera")),
-            "reservoir": bool(setup.get("reservoir")),
+            "reservoir": bool(setup.get("reservoir")), "heat": bool(setup.get("heat")),
             "on": on_time.isoformat() if on_time else None,
             "off": off_time.isoformat() if off_time else None,
             "band": [lo, hi], "day": day,
