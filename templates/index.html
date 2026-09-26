@@ -97,12 +97,14 @@
   </div>
   <span id="lightinfo" role="status"></span>
   <div id="l2line" class="l2line" style="display:none"></div>
-  <div class="lcrow fanrow" id="fanrow" style="display:none">
-    <span class="lclabel">Fan</span>
-    <button type="button" class="lcbtn fanbtn" data-mode="auto">Auto</button>
-    <button type="button" class="lcbtn fanbtn" data-mode="on">On</button>
-    <button type="button" class="lcbtn fanbtn" data-mode="off">Off</button>
-    <span id="faninfo" role="status"></span>
+  <div class="devrow fanrow" id="fanrow" style="display:none">
+    <div class="lcrow">
+      <span class="lclabel">Fan</span>
+      <button type="button" class="lcbtn fanbtn" data-mode="auto">Auto</button>
+      <button type="button" class="lcbtn fanbtn" data-mode="on">On</button>
+      <button type="button" class="lcbtn fanbtn" data-mode="off">Off</button>
+    </div>
+    <div class="devstatus"><span class="devdot" id="fandot"></span><span id="faninfo" role="status"></span></div>
   </div>
   <div class="lcslider fanslider" id="fanslider" style="display:none">
     <span class="fanslabel">speed</span>
@@ -110,12 +112,14 @@
            aria-label="Fan speed">
     <b id="fanval">100%</b>
   </div>
-  <div class="lcrow heatrow" id="heatrow" style="display:none">
-    <span class="lclabel">Heat mat</span>
-    <button type="button" class="lcbtn heatbtn" data-mode="auto">Auto</button>
-    <button type="button" class="lcbtn heatbtn" data-mode="on">On</button>
-    <button type="button" class="lcbtn heatbtn" data-mode="off">Off</button>
-    <span id="heatinfo" role="status"></span>
+  <div class="devrow heatrow" id="heatrow" style="display:none">
+    <div class="lcrow">
+      <span class="lclabel">Heat mat</span>
+      <button type="button" class="lcbtn heatbtn" data-mode="auto">Auto</button>
+      <button type="button" class="lcbtn heatbtn" data-mode="on">On</button>
+      <button type="button" class="lcbtn heatbtn" data-mode="off">Off</button>
+    </div>
+    <div class="devstatus"><span class="devdot" id="heatdot"></span><span id="heatinfo" role="status"></span></div>
   </div>
   <div class="lcurve editonly" id="lcurvewrap">
     <div class="lcurvehead">

@@ -3972,9 +3972,15 @@ function renderFan(j){
   row.style.display='';
   document.querySelectorAll('.fanbtn').forEach(b=>
     b.classList.toggle('on', b.dataset.mode===f.mode));
-  const info=document.getElementById('faninfo');
-  if(info)info.textContent=f.on?`${f.speed}% \u00b7 ${f.reason}`
-                               :(f.mode==='auto'?`idle \u00b7 ${f.reason}`:'off');
+  const info=document.getElementById('faninfo'), dot=document.getElementById('fandot');
+  if(dot)dot.className='devdot'+(f.on?' on':'');
+  if(info){
+    let t, why=f.reason&&f.reason!=='idle'?f.reason:'';
+    if(f.on)t=`<b>Running</b> at ${f.speed}%`+(why?` \u00b7 ${esc(why)}`:'');
+    else if(f.mode==='auto')t=`<b>Off</b> \u00b7 runs in the photoperiod or on high humidity`;
+    else t='<b>Off</b>';
+    info.innerHTML=t;
+  }
   // the slider edits manual speed in "on", auto speed in "auto"; hidden in "off"
   if(sl){
     sl.style.display=(f.mode==='off')?'none':'';
@@ -3995,16 +4001,22 @@ function renderHeat(j){
   row.style.display='';
   document.querySelectorAll('.heatbtn').forEach(b=>
     b.classList.toggle('on', b.dataset.mode===h.mode));
-  const info=document.getElementById('heatinfo');
+  const info=document.getElementById('heatinfo'), dot=document.getElementById('heatdot');
   if(!info)return;
-  const t=h.temp_c!=null?tDisp(h.temp_c).toFixed(1)+tUnit():null;
-  let txt=h.on==null?'state unknown':(h.on?'on':'off');
-  if(t)txt+=` \u00b7 soil ${t}`;
-  if(h.mode==='auto')txt+=`, target ${Math.round(tFromF(+h.target_f)*10)/10}${tUnit()}`;
-  if(h.reason&&h.reason!=='off')txt+=` \u00b7 ${h.reason}`;
-  if(h.plug_ok===false&&h.plug_error)txt+=` \u00b7 plug: ${h.plug_error}`;
-  info.textContent=txt;
-  info.classList.toggle('warn', !!h.fault||h.plug_ok===false);
+  const plugBad=h.plug_ok===false;
+  const warn=!!h.fault||plugBad;
+  if(dot)dot.className='devdot'+(warn?' warn':(h.on?' on':''));
+  const state=h.on==null?'Unknown':(h.on?'On':'Off');
+  const soil=h.temp_c!=null?`soil ${tDisp(h.temp_c).toFixed(1)}${tUnit()}`:'no soil reading';
+  const tgt=`${Math.round(tFromF(+h.target_f)*10)/10}${tUnit()}`;
+  let t=`<b>${state}</b> \u00b7 ${soil}`;
+  if(h.fault)t+=` \u00b7 held off: ${esc(h.fault)}`;
+  else if(h.mode==='auto')t+=h.on?` \u00b7 heating to ${tgt}`:` \u00b7 target ${tgt}`;
+  else if(h.mode==='on')t+=' \u00b7 held on';
+  else t+=' \u00b7 switched off';
+  if(plugBad)t+=' \u00b7 plug not responding';
+  info.innerHTML=t;
+  info.title=plugBad&&h.plug_error?h.plug_error:'';
 }
 async function setHeat(mode){
   const info=document.getElementById('heatinfo');

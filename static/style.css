@@ -715,8 +715,24 @@ svg.cmini{height:120px}
 .tcell textarea.tnotes:focus{border-color:var(--leaf);outline:none;
   box-shadow:0 0 0 3px rgba(74,124,89,.15)}
 body.readonly .tcell textarea{background:var(--surface-2);border-color:transparent;pointer-events:none}
-.fanrow{margin-top:8px;padding-top:8px;border-top:1px solid var(--line)}
-#faninfo{font-size:12px;color:var(--leaf);margin-left:auto;text-align:right}
+/* Fan and Heat mat: label and buttons on one line, a status line under them */
+.devrow{margin-top:8px;padding-top:10px;border-top:1px solid var(--line);
+  display:flex;flex-direction:column;gap:6px}
+/* button groups line up on the right edge in every row of the card; a long
+   label ("Light \u00b7 AC fixture (dim line)") wraps instead of the buttons */
+.lightctl .lcrow{flex-wrap:nowrap}
+.lightctl .lcrow .lclabel{flex:1 1 0;min-width:0}
+.lightctl .lcrow .lcbtn{flex:none}
+.devrow .lclabel{white-space:nowrap}
+.devstatus{display:flex;align-items:baseline;gap:7px;font-size:12px;color:var(--muted);
+  line-height:1.4}
+.devdot{flex:none;width:8px;height:8px;border-radius:50%;box-sizing:border-box;
+  border:1.5px solid var(--muted);transform:translateY(-1px)}
+.devdot.on{background:var(--leaf);border-color:var(--leaf);
+  box-shadow:0 0 0 3px rgba(111,168,123,.18)}
+.devdot.warn{background:var(--warn);border-color:var(--warn)}
+.devstatus b{color:var(--fir);font-weight:600}
+#lightinfo:empty{display:none}
 .fanslider{margin-top:6px}
 .fanslabel{font-size:11px;color:var(--leaf);width:66px;flex:none}
 
@@ -1209,5 +1225,4 @@ body.reselsewhere #resrow{display:none !important}
 .lbclose:hover,.lbclose:focus-visible{background:rgba(255,255,255,.3)}
 html.lbopen,html.lbopen body{overflow:hidden}
 #photo,#vframe{touch-action:manipulation;cursor:zoom-in}
-#heatinfo.warn{color:var(--warn)}
 #cfgform [aria-invalid="true"]{outline:2px solid var(--bad);outline-offset:1px}

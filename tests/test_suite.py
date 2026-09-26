@@ -1637,6 +1637,12 @@ def _heat_mat():
           and "body[k]=Math.round(tToF(parseFloat(f.elements[k].value))*10)/10;" in js,
           "the Light card has Heat mat buttons, Settings has the plug use and thermostat, "
           "temperatures are saved in F, and the light's buttons ignore the heat buttons")
+    css = (APP / "static" / "style.css").read_text()
+    check(html.count('class="devrow ') == 2 and 'id="heatdot"' in html and 'id="fandot"' in html
+          and ".lightctl .lcrow{flex-wrap:nowrap}" in css and "#lightinfo:empty{display:none}" in css
+          and "info.title=plugBad&&h.plug_error?h.plug_error:'';" in js,
+          "Fan and Heat mat rows: buttons on one line, a status line with a dot under them, "
+          "the plug's raw error only in a tooltip")
     ctx = ai_report.build_context({"by_setup": {"setups": []}, "units": {"temp": "F"},
                                    "heat": {"use": True, "mode": "auto", "on": True,
                                             "target_f": 75, "reason": "below target"}})
