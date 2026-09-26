@@ -671,9 +671,14 @@ def sensor_health(cfg, snap=None, max_age=60):
     cadence = max(1, int(cfg.get("sample_interval_min", 5))) * 60
     cap = max(1, int(cfg.get("capture_interval_min", 10))) * 60
     out = {}
+    canopy_since = camera_mod.canopy_due_since(cfg)
     for key, (ts, _v) in snap.items():
         if key.startswith(("dry:", "growth", "moisture:")):
             continue
+        age = now - ts
+        if key.startswith("canopy:"):
+            # only due while photos are being taken (see canopy_due_since)
+            age = None if canopy_since is None else now - max(ts, canopy_since)
         try:
             vals = db.recent_values(key, n=24, max_age=48 * 3600)
         except Exception:
@@ -683,7 +688,7 @@ def sensor_health(cfg, snap=None, max_age=60):
         if key.startswith(NON_STUCK_PREFIXES):
             vals = vals[:1]      # binary sensors are meant to sit still
         score, grade, why = quality.health(
-            vals, age_s=now - ts,
+            vals, age_s=age,
             cadence_s=cap if key.startswith("canopy:") else cadence,
             rejects=_reject_counts.get(key, 0), verdict=verdict,
             noise_ref=0.01 if key.startswith("probe:") else None)

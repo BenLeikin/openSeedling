@@ -207,6 +207,8 @@ def status_payload(authed=None):
                 "last_ok": (datetime.fromtimestamp(cam["last_ok"], tz).isoformat()
                             if cam["last_ok"] else None)},
         capturing=camera_mod.capturing,
+        # canopy readings are due only while photos are taken; null at night
+        canopy_due_since=camera_mod.canopy_due_since(cfg),
         render=dict(camera_mod.render),
         video_time=(datetime.fromtimestamp(camera_mod.VIDEO_PATH.stat().st_mtime)
                     .isoformat() if camera_mod.VIDEO_PATH.exists() else None),

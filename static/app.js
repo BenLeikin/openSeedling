@@ -1245,6 +1245,17 @@ function initAuth(){
 // ---------------- sensors: readout, chart, overlay ----------------
 let sensorData={};
 let sampleMin=5, capMin=30, capOn=false, camHealth=null, presTrend=null, lightMetrics=null;
+// Canopy comes from photos, which are taken only while the camera's light is
+// on: stale only while due, counted from when they became due (null = not due,
+// e.g. at night)
+let canopyDue=null;
+function readingStale(key, ts){
+  if(!ts)return false;
+  const now=Date.now()/1000;
+  if(key.startsWith('canopy:'))
+    return canopyDue!=null && now-Math.max(ts,canopyDue) > 3*capMin*60;
+  return now-ts > 3*sampleMin*60;
+}
 let probeCal={}, probeNames={}, probeDefaultCal=null;   // per-tray anchors, labels, fallback
 let probeFlags={};             // per-tray below_wet/above_dry from the server
 let filteredVals={};           // sensor -> transient-filtered value
@@ -1381,6 +1392,7 @@ function renderSensors(j){
     capMin=+j.settings.capture_interval_min||30;
     capOn=!!j.settings.capture_enabled;
   }
+  if('canopy_due_since' in j)canopyDue=j.canopy_due_since;
   // charts drawn before this status arrived lacked calibration context
   // (probe %, thresholds); re-render them once from the cached series
   if(!window._chartCtxSynced && Object.keys(seriesData).length){
@@ -1412,8 +1424,7 @@ function renderSensors(j){
     h+=`<div class="sgroup"><h3>${g}</h3>`;
     for(const m of groups[g]){
       {const ts=sensorData[m.key0]&&sensorData[m.key0].ts;
-       const lim=(m.key0&&m.key0.startsWith('canopy:'))?3*capMin:3*sampleMin;
-       const isStale=ts&&(Date.now()/1000-ts)>lim*60;
+       const isStale=readingStale(m.key0||'', ts);
        if(isStale){m.stale=true;m.title=(m.title?m.title+' \u00b7 ':'')
          +'last reading '+agoStr(new Date(ts*1000));}}
       {const fill=(m.unit==='%'&&!isNaN(parseFloat(m.value)))
@@ -1722,9 +1733,8 @@ function drawMini(key){
   const dec=(unit==='%')?0:(unit==='lx'?0:(unit==='inHg'?2:(unit==='hPa'?0:1)));
   const cur=ys[ys.length-1], lo=Math.min(...ys), hi=Math.max(...ys);
   const over=(hiLine!=null&&cur>hiLine)||(loLine!=null&&cur<loLine);
-  const lim=key.startsWith('canopy:')?3*capMin:3*sampleMin;
   const lastTs=xs[xs.length-1];
-  const isStale=(Date.now()/1000-lastTs)>lim*60;
+  const isStale=readingStale(key, lastTs);
   svg.classList.toggle('cstale', isStale);
   const ppfdNow = key==='lux' ? ppfdFromLux(cur) : null;
   if(stat)stat.innerHTML=`<b${over?' class="hot"':''}>${cur.toFixed(dec)}</b>`

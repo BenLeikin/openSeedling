@@ -26,7 +26,7 @@ import tempfile
 import threading
 import time
 import types
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 # --------------------------------------------------------------------------
@@ -1439,6 +1439,65 @@ def _photo_light():
           and "camera_mod.light_for_photo(cfg)" in (APP / "monitor.py").read_text(),
           "the focus sweep and the AI report's photo-light line follow the same switch")
 
+
+def _canopy_stale():
+    """Canopy comes from photos, taken only while the camera's light is on:
+    at night its last reading is hours old by design and must not read stale."""
+    js = (APP / "static" / "app.js").read_text()
+    rs = re.search(r"function readingStale\(key, ts\)\{[\s\S]*?\n\}", js)
+    check(rs and "canopyDue!=null && now-Math.max(ts,canopyDue) > 3*capMin*60" in rs.group(0)
+          and js.count("readingStale(") >= 3 and "const lim=" not in js
+          and "if('canopy_due_since' in j)canopyDue=j.canopy_due_since;" in js,
+          "the chips and charts use the same rule, so a night-time canopy chip is not dimmed")
+
+    tz = ZoneInfo(config.settings["timezone"])
+    day = datetime.now(tz).replace(hour=12, minute=0, second=0, microsecond=0)
+    with config.settings_lock:
+        saved = {k: config.settings.get(k) for k in ("camera_enabled", "capture_enabled", "grid",
+                                                      "capture_interval_min", "setups")}
+        config.settings.update(camera_enabled=True, capture_enabled=True, capture_interval_min=10,
+                               setups=[], grid={"corners": [[0.1, 0.1], [0.9, 0.1], [0.9, 0.9], [0.1, 0.9]],
+                                                "rows": 4, "cols": 6})
+        cfg = dict(config.settings)
+    with config.state_lock:
+        saved_state = {k: config.state.get(k) for k in ("on", "off")}
+        config.state.update(on=day.replace(hour=7), off=day.replace(hour=19))
+    try:
+        night = camera_mod.canopy_due_since(cfg, day.replace(hour=22))
+        noon = camera_mod.canopy_due_since(cfg, day)
+        check(night is None and noon == day.replace(hour=7).timestamp(),
+              "canopy readings are due only inside the camera's light window")
+        cfg_off = dict(cfg, capture_enabled=False)
+        check(camera_mod.canopy_due_since(cfg_off, day) is None
+              and camera_mod.canopy_due_since(dict(cfg, grid={}), day) is None,
+              "and never when timelapse capture is off or the grid has no corners")
+
+        def health_why(now_dt, last_dt, key):
+            db.log_reading(key, 40.0, ts=last_dt.timestamp())
+            monitor._health_cache["ts"] = 0
+            real_time, real_due = monitor.time.time, camera_mod.canopy_due_since
+            monitor.time.time = lambda: now_dt.timestamp()
+            camera_mod.canopy_due_since = lambda c, now=None: real_due(c, now_dt)
+            try:
+                return " ".join(monitor.sensor_health(cfg).get(key, {}).get("why", []))
+            finally:
+                monitor.time.time, camera_mod.canopy_due_since = real_time, real_due
+        at_night = health_why(day.replace(hour=23), day.replace(hour=18, minute=55), "canopy:91")
+        morning = health_why(day.replace(hour=7, minute=10),
+                             (day - timedelta(days=1)).replace(hour=18, minute=55), "canopy:92")
+        midday = health_why(day.replace(hour=12), day.replace(hour=9), "canopy:93")
+        check("last reading" not in at_night and "last reading" not in morning and "last reading" in midday,
+              "sensor health calls canopy stale only when photos are due and missing, "
+              "counting from lights-on in the morning")
+        st = c.get("/api/status").get_json()
+        check("canopy_due_since" in st, "the status tells the page when canopy readings are due")
+    finally:
+        with config.settings_lock:
+            config.settings.update(saved)
+        with config.state_lock:
+            config.state.update(saved_state)
+        monitor._health_cache["ts"] = 0
+
 def run(name, fn):
     """A section that crashes counts as one failure; the rest still run."""
     section(name)
@@ -1472,6 +1531,7 @@ run('Startup log noise and thumbnail race', _startup_log_noise)
 run('Unsaved settings', _unsaved_settings)
 run('Out of memory', _oom)
 run('Photo light', _photo_light)
+run('Canopy staleness', _canopy_stale)
 run('Shutdown', _shutdown)
 
 # --------------------------------------------------------------------------

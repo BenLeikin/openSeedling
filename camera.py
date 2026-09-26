@@ -491,6 +491,39 @@ def record_growth(path, cfg, now):
         db.log_many(list(readings.items()), ts=int(now.timestamp()))
 
 
+
+def capture_window(cfg):
+    """Today's photo hours: the light window of the camera's setup (or the
+    main light's when no setup holds the camera). The capture loop shoots
+    only inside it."""
+    with config.state_lock:
+        on_time, off_time = config.state["on"], config.state["off"]
+    cam = setups_mod.setup_with(cfg, "camera")
+    if cam and on_time is not None:
+        on_time, off_time = setups_mod.setup_window(cfg, cam, on_time, off_time)
+    return on_time, off_time
+
+
+def canopy_due_since(cfg, now=None):
+    """Epoch seconds since when fresh canopy readings are due, or None when
+    none are due now.
+
+    Canopy is measured from each photo, and photos are taken only while the
+    camera's light is on, with timelapse capture on and grid corners set. At
+    night the last reading is hours old by design, so it must not read as
+    stale; and in the morning the age counts from when the light came on,
+    not from last night's final photo.
+    """
+    if not (cfg.get("camera_enabled") and cfg.get("capture_enabled")):
+        return None
+    if not (cfg.get("grid") or {}).get("corners"):
+        return None
+    now = now or datetime.now(ZoneInfo(cfg["timezone"]))
+    on_time, off_time = capture_window(cfg)
+    if on_time is None or not (on_time <= now <= off_time):
+        return None
+    return on_time.timestamp()
+
 def capture_loop():
     last_shot = None
     while True:
@@ -509,11 +542,7 @@ def capture_loop():
         if cfg.get("camera_enabled") and cfg["capture_enabled"]:
             tz = ZoneInfo(cfg["timezone"])
             now = datetime.now(tz)
-            with config.state_lock:
-                on_time, off_time = config.state["on"], config.state["off"]
-            cam = setups_mod.setup_with(cfg, "camera")
-            if cam and on_time is not None:
-                on_time, off_time = setups_mod.setup_window(cfg, cam, on_time, off_time)
+            on_time, off_time = capture_window(cfg)
             in_day = on_time is not None and on_time <= now <= off_time
             due = (last_shot is None or
                    now - last_shot >= timedelta(minutes=cfg["capture_interval_min"]))

@@ -114,6 +114,11 @@ the watering controls, and the daily AI plant-health report.*
 - Per-cell measurement and camera-based soil-dryness estimation existed and
   were deliberately retired: seedlings spill across cell lines, and a closed
   canopy hides the soil. Trays are physical boundaries; cells are not.
+- Canopy readings come from photos, so they are only due while photos are
+  taken: timelapse capture on, grid corners set, and the camera's light on. At
+  night, or with capture off, a canopy chip or chart is never marked stale; in
+  the morning its age counts from lights-on. Past three photo intervals of that
+  it is stale.
 
 ### Planting map
 
