@@ -1325,6 +1325,11 @@ def _unsaved_settings():
     js = (APP / "static" / "app.js").read_text()
     fh = re.search(r"function formHolds\(key, cfg\)\{[\s\S]*?\n\}", js)
     ff = re.search(r"function fillForm\(cfg\)\{[\s\S]*?(?=\nlet frames=)", js)
+    sub2 = re.search(r"getElementById\('cfgform'\)\.addEventListener\('submit'[\s\S]*?\n\}\);", js)
+    check(sub2 and "if(setupDirty&&setupDraft)body.setups=setupDraft;" in sub2.group(0)
+          and "setupDirty=false;" in sub2.group(0) and "if(k==='setups')return 'Setups:';" in js,
+          "the main Save also saves pending Setups edits (a daily light target changed there was "
+          "silently dropped before)")
     check("f.addEventListener('input',markDirty);f.addEventListener('change',markDirty);" in js
           and fh and "if(formDirty.has(key))return true;" in fh.group(0),
           "a changed setting is marked unsaved and kept over any incoming status")

@@ -649,6 +649,9 @@ function drawSetupConfig(){
     box.addEventListener('input',ev=>{
       const fs=ev.target.closest('fieldset[data-i]');if(!fs||!setupDraft)return;
       const s=setupDraft[+fs.dataset.i];setupDirty=true;
+      // either Save button sends it now; say so where both can be seen
+      {const sm=document.getElementById('setupmsg');if(sm)sm.textContent='Unsaved changes';
+       const m=document.getElementById('msg');if(m&&!/Planting/.test(m.textContent)){m.textContent='Unsaved changes';m.className='';}}
       const f=ev.target.dataset.f, k=ev.target.dataset.k;
       if(f)s[f]=(f==='dli_low'||f==='dli_high')?parseFloat(ev.target.value)
         :(f==='k'?(ev.target.value===''?null:parseFloat(ev.target.value)):ev.target.value);
@@ -3012,6 +3015,9 @@ document.getElementById('cfgform').addEventListener('submit',async ev=>{
   ev.preventDefault();
   const f=ev.target,msg=document.getElementById('msg');
   const body={};
+  // Setups have their own Save button, but a change there must not be lost
+  // when the main Save is the one pressed (it used to be, silently)
+  if(setupDirty&&setupDraft)body.setups=setupDraft;
   for(const k of ['latitude','longitude','max_bright','ramp_min',
                   'sunrise_offset_min','sunset_offset_min',
                   'capture_interval_min','capture_brightness'])
@@ -3106,7 +3112,7 @@ document.getElementById('cfgform').addEventListener('submit',async ev=>{
     // sections holding any errors so the message points at something on screen
     f.querySelectorAll('[aria-invalid="true"]').forEach(el=>el.removeAttribute('aria-invalid'));
     for(const k of (errs||[])){
-      const el=f.elements[k];
+      const el=k==='setups'?document.getElementById('setupcfg'):f.elements[k];
       const grp=el&&el.closest&&el.closest('details.fgroup');
       if(grp)grp.open=true;
       if(el&&el.setAttribute)el.setAttribute('aria-invalid','true');   // outlined until fixed
@@ -3118,6 +3124,10 @@ document.getElementById('cfgform').addEventListener('submit',async ev=>{
     for(const k of Object.keys(body))
       if(!(j.errors&&k in j.errors))formDirty.delete(k);
     formDirty.delete('kasa_pass');
+    if('setups' in body&&(j.saved||[]).includes('setups')){
+      setupDirty=false;
+      const sm=document.getElementById('setupmsg');if(sm)sm.textContent='Saved.';
+    }
     if(r.ok&&j.ok){msg.textContent='Saved \u{1F331}';msg.className='ok';refresh();}
     else if(errs&&errs.length){
       // everything valid was saved; say exactly which fields were rejected
@@ -4161,6 +4171,7 @@ function initCameraBackend(){
 // A field's label as the page shows it ("Cut-off (\u00b0F)"), for messages that
 // would otherwise show the setting's internal name
 function fieldLabel(f, k){
+  if(k==='setups')return 'Setups:';
   const el=f.elements[k];
   const lab=el&&el.closest&&el.closest('label');
   if(!lab)return k;
