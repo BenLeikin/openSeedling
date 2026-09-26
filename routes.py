@@ -1583,11 +1583,19 @@ def update_settings():
                 new.pop(k)
                 errors[k] = ("the smart plug cannot be the light and the heat mat; "
                              "pick another light backend or give the plug to the light")
+    # The mat keeps heating the soil for a while after it switches off, and the
+    # probe is read every few minutes, so the soil overshoots the target. A
+    # cut-off closer than 3F would trip on that ordinary overshoot, hold the
+    # mat off and alert. One message, on the field to change; the target
+    # waits with it so the pair is never saved half-changed.
     if ("heat_target_f" in new or "heat_max_f" in new) and float(mx) < float(tgt) + 3:
-        for k in ("heat_target_f", "heat_max_f"):
-            if k in new:
-                new.pop(k)
-                errors[k] = "the heat mat cut-off must be at least 3F above its target"
+        new.pop("heat_target_f", None)
+        new.pop("heat_max_f", None)
+        errors["heat_max_f"] = (f"must be at least {float(tgt) + 3:g}F with the soil target at "
+                                f"{float(tgt):g}F (3F above it, room for the soil's overshoot "
+                                "after the mat switches off)")
+        if "heat_target_f" in data:
+            errors["heat_target_f"] = "not saved until the cut-off is at least 3F above it"
     if new:
         if any(k.startswith("kasa_") for k in new):
             light_mod._kasa_dev = None      # reconnect with the new address or credentials

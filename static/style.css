@@ -1210,3 +1210,4 @@ body.reselsewhere #resrow{display:none !important}
 html.lbopen,html.lbopen body{overflow:hidden}
 #photo,#vframe{touch-action:manipulation;cursor:zoom-in}
 #heatinfo.warn{color:var(--warn)}
+#cfgform [aria-invalid="true"]{outline:2px solid var(--bad);outline-offset:1px}

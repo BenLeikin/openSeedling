@@ -3091,10 +3091,12 @@ document.getElementById('cfgform').addEventListener('submit',async ev=>{
     const errs=j.errors&&Object.keys(j.errors);
     // a rejected field inside a collapsed section would be invisible: open the
     // sections holding any errors so the message points at something on screen
+    f.querySelectorAll('[aria-invalid="true"]').forEach(el=>el.removeAttribute('aria-invalid'));
     for(const k of (errs||[])){
       const el=f.elements[k];
       const grp=el&&el.closest&&el.closest('details.fgroup');
       if(grp)grp.open=true;
+      if(el&&el.setAttribute)el.setAttribute('aria-invalid','true');   // outlined until fixed
     }
     // hold every accepted field until the server echoes it back; it is no
     // longer an unsaved edit. A rejected one stays as typed, to be fixed.
@@ -3107,7 +3109,7 @@ document.getElementById('cfgform').addEventListener('submit',async ev=>{
     else if(errs&&errs.length){
       // everything valid was saved; say exactly which fields were rejected
       msg.textContent='Saved, except: '
-        +errs.map(k=>k+' ('+j.errors[k]+')').join(', ');
+        +errs.map(k=>fieldLabel(f,k)+' '+j.errors[k]).join('; ');
       msg.className='err';refresh();
     }
     else{msg.textContent=j.error||'Save failed';msg.className='err';}
@@ -4130,6 +4132,21 @@ function initCameraBackend(){
     syncUsbAuto();
   });
 }
+// A field's label as the page shows it ("Cut-off (\u00b0F)"), for messages that
+// would otherwise show the setting's internal name
+function fieldLabel(f, k){
+  const el=f.elements[k];
+  const lab=el&&el.closest&&el.closest('label');
+  if(!lab)return k;
+  let t='';
+  for(const n of lab.childNodes)
+    if(n.nodeType===3||(n.nodeType===1&&!/^(INPUT|SELECT|TEXTAREA)$/.test(n.tagName)))
+      t+=n.textContent;
+  t=t.replace(/\s+/g,' ').trim();
+  return t?t+':':k;
+}
+{const f=document.getElementById('cfgform');
+ if(f)f.addEventListener('input',e=>{if(e.target.removeAttribute)e.target.removeAttribute('aria-invalid');});}
 // Photo brightness only matters when photos set the light
 function syncCaptureLight(){
   const cb=document.querySelector('#cfgform [name=capture_set_light]');

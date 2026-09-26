@@ -1602,6 +1602,14 @@ def _heat_mat():
               and "heat_sensor" in r3.get("errors", {}),
               "the plug cannot be the light and the heat mat at once; the cut-off must clear "
               "the target by 3F; the probe must be a soil probe")
+        r4 = c.post("/api/settings", json={"heat_target_f": 85, "heat_max_f": 87}).get_json()
+        e4 = r4.get("errors", {})
+        js_ = (APP / "static" / "app.js").read_text()
+        check("88F" in e4.get("heat_max_f", "") and "85F" in e4.get("heat_max_f", "")
+              and "not saved until" in e4.get("heat_target_f", "")
+              and "fieldLabel(f,k)+' '+j.errors[k]" in js_ and "function fieldLabel(f, k)" in js_,
+              "a cut-off too close to the target says what it must be, on the page by the field's "
+              "label rather than its internal name")
         h1 = c.post("/api/heat", json={"mode": "on"}).get_json()
         with config.settings_lock:
             config.settings["plug_use"] = "light"
