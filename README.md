@@ -605,6 +605,17 @@ camera offers, largest first; the largest is normally the whole sensor, the
 widest view. Photos, Align and Crop all use the chosen size, so Align frames
 exactly what gets captured. Changing the size resets the crop.
 
+**Memory and large capture sizes.** The camera driver allocates its frame
+buffers (about 16 MB each at 3264x2448) from memory the kernel cannot take out
+of its contiguous (CMA) pool. With the stock 256 MB CMA reservation that left
+too little, and the kernel's out-of-memory killer took the whole controller.
+`deploy/boot-config.txt` sets CMA to 64 MB (headless, USB camera; raise it for
+a CSI camera), captures request two buffers instead of four, and every camera,
+thumbnail, render and analysis helper runs as the first thing the kernel kills
+if memory still runs out, so a failed capture is logged ("killed by the kernel
+for running out of memory") and the controller keeps running. Check the CMA
+size with `grep Cma /proc/meminfo` (want `CmaTotal: 65536 kB`).
+
 With flattening off, **Crop** on the snapshot takes a fresh full frame from the
 camera; drag a rectangle over the area to keep and press **Save crop**. **Reset
 crop** (in crop mode, and beside Crop whenever a crop is set) goes back to the

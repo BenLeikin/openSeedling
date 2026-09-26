@@ -20,6 +20,7 @@ import ast
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -1331,6 +1332,71 @@ def _unsaved_settings():
           and "formDirty.add('kasa_host');" in js,
           "fields filled in by the camera-mode and plug pickers count as unsaved edits too")
 
+
+def _oom():
+    """25 Sep: a 3264x2448 capture asked the camera driver for four 16 MB
+    buffers from the ~36 MB the kernel had outside its 256 MB contiguous pool,
+    and the out-of-memory killer took the controller three times."""
+    of = getattr(camera_mod, "oom_first", lambda c: list(c))
+    wrapped = of(["v4l2-ctl", "--all"])
+    ok_wrap = wrapped[:2] == ["sh", "-c"] and wrapped[-2:] == ["v4l2-ctl", "--all"]
+    if sys.platform.startswith("linux") and Path("/proc/self/oom_score_adj").exists():
+        child = subprocess.run(of(["cat", "/proc/self/oom_score_adj"]),
+                               capture_output=True).stdout.decode().strip()
+        mine = Path("/proc/self/oom_score_adj").read_text().strip()
+        check(ok_wrap and child == "1000" and mine != "1000",
+              f"a helper runs as the first thing killed on out-of-memory, not the controller "
+              f"(helper {child}, controller {mine})")
+    else:
+        skip("helper OOM score (no /proc here)")
+    seen = []
+    real_run = camera_mod.subprocess.run
+
+    def fake_run(a, **kw):
+        seen.append(list(a))
+        return types.SimpleNamespace(returncode=-9, stderr=b"", stdout=b"")
+    dev = WORK / "video0"
+    dev.write_bytes(b"")
+    camera_mod.subprocess.run = fake_run
+    try:
+        with config.settings_lock:
+            cfgc = dict(config.settings, usb_device=str(dev))
+        ok, err = camera_mod._usb_capture(cfgc, WORK / "oomtest.jpg", 3264, 2448)
+    finally:
+        camera_mod.subprocess.run = real_run
+    cap = next((a for a in seen if "--stream-to" in " ".join(a)), [])
+    check(cap[:2] == ["sh", "-c"] and "--stream-mmap=2" in cap and "--stream-mmap" not in cap,
+          "the capture runs as an OOM-first helper and asks the driver for two buffers, not four")
+    check(not ok and err and "out of memory" in err and "3264x2448" in err,
+          f"a capture killed for memory says so instead of 'no frames' ({err})")
+    cam_src = (APP / "camera.py").read_text()
+    runs = re.findall(r"subprocess\.run\((?!\[\"v4l2-ctl\", \"-d\", dev)[^\n]*", cam_src)
+    unwrapped = [r for r in runs if "oom_first(" not in r and not r.rstrip().endswith("(")]
+    heavy = cam_src.count("subprocess.run(oom_first(") + cam_src.count("oom_first([\"ffmpeg\"") \
+        + cam_src.count("oom_first(\n            [\"ffmpeg\"")
+    rsrc = (APP / "routes.py").read_text()
+    check(not unwrapped and heavy >= 5 and "camera_mod.oom_first([sys.executable, str(helper)" in rsrc
+          and "camera_mod.oom_first(cmd)" in rsrc,
+          "captures, thumbnails, the render, canopy analysis, previews and corner detection all run OOM-first")
+    boot = (APP / "deploy" / "boot-config.txt").read_text()
+    setup = (APP / "scripts" / "setup.sh").read_text()
+    m = re.search(r"want=\"\$\(awk '\n([\s\S]*?)\n  ' \"\$CONFIG_TXT\"\)\"", setup)
+    sample = ("dtparam=audio=on\ndtoverlay=vc4-kms-v3d\nmax_framebuffers=2\n"
+              "[all]\ndtparam=i2c_arm=on\n")
+    out = ""
+    if m and shutil.which("awk"):
+        block = "\n".join(["# BEGIN growlight"]
+                          + [ln for ln in boot.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+                          + ["# END growlight"])
+        sf = WORK / "config.sample"
+        sf.write_text(sample)
+        out = subprocess.run(["awk", m.group(1), str(sf)], capture_output=True, text=True,
+                             env=dict(os.environ, BOOT_BLOCK=block)).stdout
+    lines = out.splitlines()
+    check("#growlight# dtoverlay=vc4-kms-v3d" in lines and "dtoverlay=vc4-kms-v3d,cma-64" in lines
+          and lines.count("dtoverlay=vc4-kms-v3d") == 0 and "CmaTotal" in setup,
+          "the boot block sets CMA to 64 MB, comments out the stock KMS line, and setup.sh checks CmaTotal")
+
 def run(name, fn):
     """A section that crashes counts as one failure; the rest still run."""
     section(name)
@@ -1362,6 +1428,7 @@ run('Camera canopy trays', _camera_canopy)
 run('AI report by setup', _report_by_setup)
 run('Startup log noise and thumbnail race', _startup_log_noise)
 run('Unsaved settings', _unsaved_settings)
+run('Out of memory', _oom)
 run('Shutdown', _shutdown)
 
 # --------------------------------------------------------------------------

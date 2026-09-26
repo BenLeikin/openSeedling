@@ -15,3 +15,10 @@ dtparam=i2c_arm=on,i2c_arm_baudrate=50000
 dtoverlay=w1-gpio
 # GPIO18 = channel 0 (5V panel), GPIO19 = channel 1 (AC fixture dim line)
 dtoverlay=pwm-2chan,pin=18,func=2,pin2=19,func2=2
+# Contiguous memory (CMA) for the display and a CSI camera: 64 MB. The default
+# 256 MB is reserved away from the kernel's other allocations, which left
+# about 36 MB for everything else; the USB camera driver's buffers (16 MB each
+# at 3264x2448) could not fit, and the kernel killed the controller three
+# times on 25 Sep. This Pi is headless with a USB camera, so 64 MB is ample.
+# Raise it again if a CSI camera (rpicam backend) is ever fitted.
+dtoverlay=vc4-kms-v3d,cma-64

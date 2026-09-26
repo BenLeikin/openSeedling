@@ -444,7 +444,7 @@ def detect_grid():
     if not helper.exists():
         return jsonify(ok=False, error="Detector not installed."), 200
     try:
-        r = subprocess.run([sys.executable, str(helper), str(latest)],
+        r = subprocess.run(camera_mod.oom_first([sys.executable, str(helper), str(latest)]),
                            capture_output=True, timeout=60)
         out = r.stdout.decode(errors="replace").strip()
         return jsonify(json.loads(out) if out else
@@ -971,9 +971,10 @@ def api_preview():
         else:
             cmd = ["rpicam-still", "-n", "-o", str(tmp), "-t", "500",
                    "--width", str(pw), "--height", str(ph)]
-            r = subprocess.run(cmd, capture_output=True, timeout=20)
+            r = subprocess.run(camera_mod.oom_first(cmd), capture_output=True, timeout=20)
             if r.returncode != 0:
-                camera_mod._camera_fail(r.stderr.decode(errors="replace")[-150:] or "preview failed")
+                camera_mod._camera_fail(camera_mod.killed_msg(r, "the preview")
+                                        or r.stderr.decode(errors="replace")[-150:] or "preview failed")
                 return jsonify(ok=False,
                                error="camera error; check the log"), 200
         tmp.replace(camera_mod.PREVIEW_PATH)  # atomic, so a half-written frame is never served

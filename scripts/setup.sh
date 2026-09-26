@@ -350,7 +350,7 @@ $(strip_comments "$DEPLOY/boot-config.txt")
     /^# BEGIN growlight/ { skip = 1; next }
     /^# END growlight/   { skip = 0; next }
     skip { next }
-    /^[[:space:]]*(enable_uart=|dtparam=i2c_arm(_baudrate)?[=,]|dtoverlay=w1-gpio([,[:space:]]|$)|dtoverlay=pwm(-2chan)?([,[:space:]]|$))/ {
+    /^[[:space:]]*(enable_uart=|dtparam=i2c_arm(_baudrate)?[=,]|dtoverlay=w1-gpio([,[:space:]]|$)|dtoverlay=pwm(-2chan)?([,[:space:]]|$)|dtoverlay=vc4-kms-v3d([,[:space:]]|$))/ {
       print "#growlight# " $0; next
     }
     { print }
@@ -377,6 +377,19 @@ $(strip_comments "$DEPLOY/boot-config.txt")
     have_baud="$(od -An -tu4 --endian=big "$f" | tr -d ' ')"
     if [[ "$have_baud" == "$want_baud" ]]; then ok "I2C bus running at $have_baud Hz"
     else note "I2C bus running at $have_baud Hz, configured $want_baud Hz; reboot to apply"; fi
+  fi
+
+  # contiguous memory: cma-N in the block, CmaTotal in /proc/meminfo
+  local want_cma have_cma cmdline=/boot/firmware/cmdline.txt
+  [[ -f "$cmdline" ]] || cmdline=/boot/cmdline.txt
+  want_cma="$(grep -oE 'cma-[0-9]+' <<< "$BOOT_BLOCK" | head -1 | cut -d- -f2 || true)"
+  have_cma="$(awk '/^CmaTotal:/ {print int($2 / 1024)}' /proc/meminfo 2>/dev/null || true)"
+  if [[ -n "$want_cma" && -n "$have_cma" ]]; then
+    if [[ "$have_cma" == "$want_cma" ]]; then ok "CMA is $have_cma MB"
+    else note "CMA is $have_cma MB, configured $want_cma MB; reboot to apply"; fi
+  fi
+  if [[ -n "$want_cma" && -f "$cmdline" ]] && grep -qE '(^|[[:space:]])cma=' "$cmdline"; then
+    note "$cmdline sets cma=, which overrides the config.txt value; remove it there"
   fi
   return 0
 }

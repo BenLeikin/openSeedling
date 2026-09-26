@@ -104,6 +104,29 @@ def parse_roi(s):
     return x, y, w, h
 
 
+
+def oom_first(cmd):
+    """Run cmd as the kernel's first choice to kill when memory runs out.
+
+    The Pi has little memory the kernel can hand to drivers, and a big camera
+    capture or an image job can exhaust it. On 25 Sep the camera's buffer
+    request tipped the box over three times and the kernel killed the whole
+    controller (lights, pumps, dashboard) each time. A helper started through
+    this raises its own oom_score_adj to the maximum before exec, so the
+    helper dies instead, the job fails and is logged, and the controller keeps
+    running. Raising one's own score needs no privilege.
+    """
+    return (["sh", "-c", 'echo 1000 > /proc/self/oom_score_adj 2>/dev/null; exec "$@"',
+             "oom-first"] + [str(c) for c in cmd])
+
+
+def killed_msg(r, what):
+    """Name an out-of-memory kill instead of reporting "no output"."""
+    if r.returncode in (-9, 137):
+        return (f"{what} was killed by the kernel for running out of memory; "
+                "a smaller camera mode needs less (see Settings, Camera, Camera modes)")
+    return None
+
 _thumb_lock = threading.Lock()
 
 
@@ -157,8 +180,8 @@ def _make_thumb(photo_path, cfg, dst):
     vf = (crop_filter(roi) + "," if roi else "") + "scale=640:-2"
     try:
         r = subprocess.run(
-            ["ffmpeg", "-loglevel", "error", "-y", "-i", str(photo_path),
-             "-vf", vf, "-q:v", "7", "-f", "mjpeg", str(part)],
+            oom_first(["ffmpeg", "-loglevel", "error", "-y", "-i", str(photo_path),
+                       "-vf", vf, "-q:v", "7", "-f", "mjpeg", str(part)]),
             capture_output=True, timeout=120)
         if r.returncode == 0 and part.exists() and part.stat().st_size:
             os.replace(part, dst)
@@ -293,16 +316,24 @@ def _usb_capture(cfg, out_path, width, height, warmup=None):
     n = int(cfg.get("usb_warmup_frames", 4) if warmup is None else warmup)
     n = max(1, min(20, n))
     tmp = Path(str(out_path) + ".raw")
+    # Two buffers, not v4l2-ctl's default four: the driver allocates each at
+    # the camera's worst-case frame size (16 MB at 3264x2448) from memory the
+    # kernel cannot take from its contiguous pool, and four of those is what
+    # ran the Pi out of memory. Frames are kept one at a time anyway.
     cmd = ["v4l2-ctl", "-d", dev,
            "--set-fmt-video=width=%d,height=%d,pixelformat=MJPG" % (width, height),
-           "--stream-mmap", "--stream-count=%d" % n, "--stream-to=%s" % tmp]
+           "--stream-mmap=2", "--stream-count=%d" % n, "--stream-to=%s" % tmp]
     try:
-        r = subprocess.run(cmd, capture_output=True, timeout=60)
+        r = subprocess.run(oom_first(cmd), capture_output=True, timeout=60)
     except subprocess.TimeoutExpired:
         tmp.unlink(missing_ok=True)
         return False, "capture timed out"
     if r.returncode != 0 or not tmp.exists() or tmp.stat().st_size == 0:
         tmp.unlink(missing_ok=True)
+        oom = killed_msg(r, f"the {width}x{height} capture")
+        if oom:
+            log.warning(oom)
+            return False, oom
         return False, (r.stderr.decode(errors="replace")[-200:].strip()
                        or "v4l2-ctl returned no frames")
     # The stream is n JPEGs back to back; keep the last, which is the settled one.
@@ -392,9 +423,9 @@ def take_photo(cfg, now, manual=False):
         # so it can be changed or cleared later without losing any image.
         cmd = ["rpicam-still", "-n", "-o", str(fname), "-t", "2000",
                "--width", str(cw), "--height", str(ch)]
-        r = subprocess.run(cmd, capture_output=True, timeout=90)
+        r = subprocess.run(oom_first(cmd), capture_output=True, timeout=90)
         if r.returncode != 0:
-            err = r.stderr.decode(errors="replace")[-300:]
+            err = killed_msg(r, "rpicam-still") or r.stderr.decode(errors="replace")[-300:]
             log.error(f"capture failed: {err}")
             _camera_fail(err.strip().splitlines()[-1] if err.strip() else "capture failed")
         else:
@@ -434,9 +465,11 @@ def record_growth(path, cfg, now):
                # rotate it a second time
                "rotate": 0}
     try:
-        r = subprocess.run([sys.executable, str(GROWTH_SCRIPT), str(path),
-                            json.dumps(payload)],
+        r = subprocess.run(oom_first([sys.executable, str(GROWTH_SCRIPT), str(path),
+                                      json.dumps(payload)]),
                            capture_output=True, timeout=120)
+        if killed_msg(r, "canopy analysis"):
+            log.warning(killed_msg(r, "canopy analysis"))
         out = json.loads((r.stdout or b"{}").decode(errors="replace") or "{}")
     except Exception as e:
         log.error(f"growth analyze error: {e}")
@@ -550,7 +583,7 @@ def render_worker():
         # 1280-wide, ultrafast, single thread, no faststart here (the
         # +faststart second pass rewrites the whole file in memory and is
         # what tips the box over). We add faststart as a cheap remux after.
-        r = subprocess.run(
+        r = subprocess.run(oom_first(
             ["ffmpeg", "-loglevel", "error", "-y",
              "-framerate", "24", "-pattern_type", "glob",
              "-i", src_glob,
@@ -570,7 +603,7 @@ def render_worker():
              # (VLC's, browsers') render the video as black.
              "-colorspace", "smpte170m", "-color_primaries", "smpte170m",
              "-color_trc", "smpte170m",
-             str(tmp)],
+             str(tmp)]),
             capture_output=True, timeout=3600)
         # Faststart as a stream-copy remux: no re-encode, trivial memory.
         if r.returncode == 0 and tmp.exists():
@@ -579,8 +612,8 @@ def render_worker():
             # old file instead of a half-written one.
             part = VIDEO_PATH.with_name("timelapse.part.mp4")
             r2 = subprocess.run(
-                ["ffmpeg", "-loglevel", "error", "-y", "-i", str(tmp),
-                 "-c", "copy", "-movflags", "+faststart", str(part)],
+                oom_first(["ffmpeg", "-loglevel", "error", "-y", "-i", str(tmp),
+                           "-c", "copy", "-movflags", "+faststart", str(part)]),
                 capture_output=True, timeout=600)
             tmp.unlink(missing_ok=True)
             if r2.returncode == 0 and part.exists():
