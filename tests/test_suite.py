@@ -47,7 +47,7 @@ WORK = Path(tempfile.mkdtemp(prefix="openseedling-test-"))
 APP = WORK / "app"
 # growlight.py is the entry point; the app's code lives in these modules
 APP_MODULES = ("growlight.py", "config.py", "hardware.py", "light.py", "setups.py",
-               "water.py", "monitor.py", "camera.py", "status.py", "routes.py")
+               "water.py", "monitor.py", "heat.py", "camera.py", "status.py", "routes.py")
 
 
 def app_source():
@@ -203,6 +203,7 @@ import light as light_mod     # noqa: E402
 import setups as setups_mod   # noqa: E402
 import water              # noqa: E402
 import monitor            # noqa: E402
+import heat               # noqa: E402
 import camera as camera_mod   # noqa: E402
 import status as status_mod   # noqa: E402
 import routes             # noqa: E402
@@ -225,7 +226,7 @@ check(c.get("/api/status").status_code == 200, "app imports and /api/status answ
 # check passes without testing anything.
 _mods = {"config": config, "hardware": hardware, "light_mod": light_mod,
          "setups_mod": setups_mod, "water": water, "monitor": monitor,
-         "camera_mod": camera_mod, "status_mod": status_mod, "routes": routes}
+         "camera_mod": camera_mod, "status_mod": status_mod, "routes": routes, "heat": heat}
 _patched = set()
 for _n in ast.walk(ast.parse(Path(__file__).read_text())):
     if isinstance(_n, ast.Assign):
@@ -1498,6 +1499,142 @@ def _canopy_stale():
             config.state.update(saved_state)
         monitor._health_cache["ts"] = 0
 
+
+def _heat_mat():
+    """The smart plug as a heat mat thermostat on the soil temperature."""
+    import alerts
+    now = time.time()
+    base = dict(config.DEFAULTS, heat_mode="auto", heat_target_f=75, heat_max_f=95,
+                sample_interval_min=5)
+    c75 = (75 - 32) * 5 / 9
+    d = heat.decide
+    rows = [
+        (dict(base, heat_mode="off"), 15.0, 60, True, False),       # off is off
+        (base, c75 - 1.0, 60, False, True),                           # cold: on
+        (base, c75 - 0.2, 60, True, True),                            # inside the band: holds on
+        (base, c75 - 0.2, 60, False, False),                          # ...or holds off
+        (base, c75 + 0.1, 60, True, False),                           # at target: off
+        (base, 20.0, 3600, True, False),                              # stale reading: off
+        (base, None, None, True, False),                              # no reading: off
+        (dict(base, heat_mode="on"), 36.0, 60, True, False),          # past the cut-off, even held on
+        (dict(base, heat_mode="on"), None, None, False, True),        # held on without a probe
+    ]
+    bad = [i for i, (cfg_, t, age, on_now, want) in enumerate(rows)
+           if d(cfg_, t, age, on_now, now)[0] != want]
+    check(not bad, f"the thermostat's decisions: on below the band, off at target, holds inside, "
+          f"off on a stale or missing probe and past the cut-off (wrong rows: {bad})")
+    check(d(base, 20.0, 3600, True, now)[3] and d(dict(base, heat_mode="on"), 36.0, 60, True, now)[3]
+          and d(base, 20.0, 3600, True, now)[2] and not d(base, c75 - 1, 60, False, now)[3]
+          and d(dict(base, heat_mode="off"), 20.0, 60, True, now)[3]
+          and d(dict(base, heat_mode="on"), 20.0, 60, False, now)[3],
+          "safety cut-offs and the grower's On and Off switch at once; only thermostat cycling waits")
+
+    sent = []
+    reading = {"v": (c75 - 2, now)}
+    real_apply, real_rf = light_mod.kasa_apply, monitor.reading_filtered
+
+    def fake_apply(on, retries=1):
+        sent.append(bool(on))
+        light_mod.kasa_state.update(on=bool(on), ok=True, error="", fails=0)
+        return True
+    light_mod.kasa_apply = fake_apply
+    monitor.reading_filtered = lambda key, snap=None: reading["v"]
+    with config.settings_lock:
+        saved = {k: config.settings.get(k) for k in ("plug_use", "heat_mode", "heat_target_f",
+                                                      "heat_max_f", "kasa_host", "light_backend")}
+        config.settings.update(plug_use="light", heat_mode="auto", heat_target_f=75, heat_max_f=95,
+                               kasa_host="10.0.3.177", light_backend="dim")
+    heat.heat_state.update(on=None, since=0.0, sent=0.0, fault="", reason="not in use")
+    heat._prev_use = None
+    try:
+        heat.heat_pass(now)
+        check(sent == [], "with the plug given to the light, the thermostat never touches it")
+        with config.settings_lock:
+            config.settings["plug_use"] = "heat"
+        heat.heat_pass(now)                                   # cold: on
+        reading["v"] = (c75 + 0.5, now + 30)
+        heat.heat_pass(now + 30)                              # warm, but too soon to switch
+        held = heat.heat_state["on"]
+        heat.heat_pass(now + 30 + heat.MIN_SWITCH_S)          # now it may switch
+        check(sent[:1] == [True] and held is True and sent[-1] is False,
+              f"auto turns the mat on when cold and off at target, no faster than every "
+              f"{heat.MIN_SWITCH_S}s ({sent})")
+        reading["v"] = (c75 - 2, now + 400)
+        heat.heat_pass(now + 400 + heat.MIN_SWITCH_S)          # on again
+        reading["v"] = (36.0, now + 410)
+        n = len(sent)
+        heat.heat_pass(now + 410 + heat.MIN_SWITCH_S + 5)      # past the cut-off...
+        check(sent[n:] == [False] and heat.heat_state["fault"],
+              "past the cut-off the mat goes off at once and the fault is raised")
+        failing = {"n": 0}
+
+        def failing_apply(on, retries=1):
+            failing["n"] += 1
+            light_mod.kasa_state.update(ok=False, error="unreachable")
+            return False
+        light_mod.kasa_apply = failing_apply
+        was_on = heat.heat_state["on"]
+        reading["v"] = (c75 - 3, now + 3000)
+        heat.heat_pass(now + 3000)
+        check(failing["n"] == 1 and heat.heat_state["on"] == was_on
+              and "plug not responding" in heat.heat_state["reason"],
+              "when the plug does not answer, the mat is reported as it last was, not as asked")
+        light_mod.kasa_apply = fake_apply
+        sent.clear()
+        light_mod.set_brightness_raw(40)
+        check(sent == [], "with the plug given to the heat mat, the light's writes never switch it")
+        with config.settings_lock:
+            config.settings["plug_use"] = "light"
+        heat.heat_pass(now + 2000)
+        check(sent[:1] == [False] and heat.heat_state["on"] is None,
+              "handing the plug back to the light turns the mat off and leaves it to the light")
+        with config.settings_lock:
+            config.settings["plug_use"] = "heat"
+        sent.clear()
+        heat.off_now()
+        src = (APP / "hardware.py").read_text()
+        check(sent == [False] and "heat_mod.off_now()" in src,
+              "shutting down turns the heat mat off")
+        r1 = c.post("/api/settings", json={"light_backend": "kasa"}).get_json()
+        r2 = c.post("/api/settings", json={"heat_target_f": 80, "heat_max_f": 81}).get_json()
+        r3 = c.post("/api/settings", json={"heat_sensor": "temp:air"}).get_json()
+        check("light_backend" in r1.get("errors", {}) and "heat_max_f" in r2.get("errors", {})
+              and "heat_sensor" in r3.get("errors", {}),
+              "the plug cannot be the light and the heat mat at once; the cut-off must clear "
+              "the target by 3F; the probe must be a soil probe")
+        h1 = c.post("/api/heat", json={"mode": "on"}).get_json()
+        with config.settings_lock:
+            config.settings["plug_use"] = "light"
+        h2 = c.post("/api/heat", json={"mode": "auto"}).get_json()
+        st = c.get("/api/status").get_json().get("heat") or {}
+        check(h1["ok"] and not h2["ok"] and "use" in st and "mode" in st and "on" in st,
+              "the Heat mat buttons work only when the plug is the heat mat's; the status reports it")
+        acfg = dict(alerts.DEFAULTS, sustain_seconds=0)
+        alerts.reset()
+        fired = [a for a in alerts.check_all({"_heat_fault": "no recent soil temperature"}, acfg)
+                 if a[1] == "heat_fault"]
+        check(fired and fired[0][0] == "fire", "a held-off heat mat sends an alert")
+        alerts.reset()
+    finally:
+        light_mod.kasa_apply, monitor.reading_filtered = real_apply, real_rf
+        with config.settings_lock:
+            config.settings.update(saved)
+        heat.heat_state.update(on=None, since=0.0, sent=0.0, fault="", reason="not in use")
+        heat._prev_use = None
+    js = (APP / "static" / "app.js").read_text()
+    html = (APP / "templates" / "index.html").read_text()
+    check('id="heatrow"' in html and 'name="plug_use"' in html and 'name="heat_target_f"' in html
+          and "fetch('/api/heat'" in js and "renderHeat(j);" in js
+          and ".lcbtn:not(.fanbtn):not(.heatbtn)" in js and ".lcbtn:not(.fanbtn)')" not in js
+          and "body[k]=Math.round(tToF(parseFloat(f.elements[k].value))*10)/10;" in js,
+          "the Light card has Heat mat buttons, Settings has the plug use and thermostat, "
+          "temperatures are saved in F, and the light's buttons ignore the heat buttons")
+    ctx = ai_report.build_context({"by_setup": {"setups": []}, "units": {"temp": "F"},
+                                   "heat": {"use": True, "mode": "auto", "on": True,
+                                            "target_f": 75, "reason": "below target"}})
+    check("Heat mat under the trays: on now, thermostat holding the soil at 75F" in ctx,
+          "the AI report knows the heat mat's state")
+
 def run(name, fn):
     """A section that crashes counts as one failure; the rest still run."""
     section(name)
@@ -1532,6 +1669,7 @@ run('Unsaved settings', _unsaved_settings)
 run('Out of memory', _oom)
 run('Photo light', _photo_light)
 run('Canopy staleness', _canopy_stale)
+run('Heat mat', _heat_mat)
 run('Shutdown', _shutdown)
 
 # --------------------------------------------------------------------------

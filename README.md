@@ -120,6 +120,20 @@ the watering controls, and the daily AI plant-health report.*
   the morning its age counts from lights-on. Past three photo intervals of that
   it is stale.
 
+### Heat mat
+
+- The smart plug can run a heat mat instead of the light: Settings, Smart plug,
+  "Use the plug for", then Settings, Heat mat for the target and cut-off, and
+  Auto, On and Off on the Light card. With the plug given to the heat mat the
+  light code never touches it (before, every light write drove the plug off).
+- Auto is a thermostat on a soil probe: on 1F below the target, off at it, and
+  no faster than every 2 minutes. Your own On or Off acts at once.
+- Safety: at the cut-off the mat goes off in any mode. In Auto, no soil reading
+  for three sample intervals holds it off. Both raise an alert, and so does a
+  plug that stops answering. Stopping the service turns it off. A Pi that loses
+  power leaves the plug as it was, so a mat left on stays on: a plug-in
+  thermostat between the plug and the mat is a sensible backstop.
+
 ### Planting map
 
 - Two trays (count and size adjustable) with per-cell records: seed, equipment,
@@ -475,6 +489,10 @@ editable from the dashboard Settings panel; the rest are edited in the file.
 | `units` | `imperial` | Display only; storage is always Celsius / hPa and switching never converts data |
 | `capture_enabled` | false | Timelapse on/off |
 | `capture_interval_min` | 30 | Minutes between frames |
+| `plug_use` | `light` | What the smart plug switches: `light` (the smart plug light backend) or `heat` (the heat mat thermostat) |
+| `heat_mode` | `off` | Heat mat: `off`, `auto` (thermostat) or `on`; set with the Heat mat buttons on the Light card |
+| `heat_target_f` / `heat_max_f` | 75 / 95 | Soil temperature the mat holds (on 1F below, off at it) / cut-off that turns it off in any mode; stored in F, shown in the display units |
+| `heat_sensor` | `temp:soil` | Soil temperature probe the thermostat reads |
 | `capture_set_light` | false | Set the main light to `capture_brightness` for each photo and the focus sweep; off leaves the light as it is |
 | `capture_brightness` | 100 | Brightness held during each photo when `capture_set_light` is on |
 | `camera_backend` | `usb` | `usb` (v4l2) or `rpicam` |

@@ -146,7 +146,10 @@ def release_backend(old):
     """
     try:
         if old == "kasa":
-            kasa_apply(False)
+            with config.settings_lock:
+                plug_is_light = config.settings.get("plug_use", "light") == "light"
+            if plug_is_light:
+                kasa_apply(False)
         else:
             # The duty that means dark depends on the backend being ABANDONED,
             # not the new one: settings have already been updated by the time
@@ -313,7 +316,10 @@ def set_brightness_raw(percent):
             dim = percent if mode == "dim" else (l2_level if l2 == "dim" else 0.0)
             # the dim line: 0% duty is full brightness, so dark is 100
             hardware.pwm2.change_duty_cycle(100.0 - dim)
-    if KASA_HOST_ENV or cfg.get("kasa_host"):
+    # The plug is the light's only when Settings, Smart plug gives it to the
+    # light. Given to the heat mat, heat.py is its only writer: driving it
+    # off here with every light write would switch the mat off each 30 s.
+    if (KASA_HOST_ENV or cfg.get("kasa_host")) and cfg.get("plug_use", "light") == "light":
         set_plug(percent if mode == "kasa" else 0)
 
 

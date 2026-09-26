@@ -30,6 +30,7 @@ import light as light_mod
 import setups as setups_mod
 import water
 import monitor
+import heat as heat_mod
 import camera as camera_mod
 import status as status_mod
 
@@ -1367,6 +1368,24 @@ def api_fan():
     return jsonify(ok=True, mode=mode)
 
 
+@app.route("/api/heat", methods=["POST"])
+@require_auth
+def api_heat():
+    """Set the heat mat mode: auto (thermostat), on, or off."""
+    data = request.get_json(silent=True) or {}
+    mode = str(data.get("mode", "")).strip()
+    if mode not in ("auto", "on", "off"):
+        return jsonify(ok=False, error="mode must be auto, on or off"), 200
+    with config.settings_lock:
+        if config.settings.get("plug_use", "light") != "heat":
+            return jsonify(ok=False, error="the smart plug is not set to the heat mat "
+                           "(Settings, Smart plug)"), 200
+        config.settings["heat_mode"] = mode
+        config.save_config()
+    threading.Thread(target=heat_mod.heat_pass, daemon=True).start()   # act now
+    return jsonify(ok=True, mode=mode)
+
+
 @app.route("/photo/cropped.jpg")
 def cropped_image():
     """The latest photo cut to the view crop, cached per (photo, crop)."""
@@ -1552,6 +1571,23 @@ def update_settings():
                 if k in new:
                     new.pop(k)
                     errors[k] = "the DLI target low must be below the high"
+    # the plug does one job: it cannot be the light and the heat mat at once
+    with config.settings_lock:
+        use = new.get("plug_use", config.settings.get("plug_use", "light"))
+        backend = new.get("light_backend", config.settings.get("light_backend"))
+        tgt = new.get("heat_target_f", config.settings.get("heat_target_f", 75))
+        mx = new.get("heat_max_f", config.settings.get("heat_max_f", 95))
+    if use == "heat" and backend == "kasa":
+        for k in ("plug_use", "light_backend"):
+            if k in new:
+                new.pop(k)
+                errors[k] = ("the smart plug cannot be the light and the heat mat; "
+                             "pick another light backend or give the plug to the light")
+    if ("heat_target_f" in new or "heat_max_f" in new) and float(mx) < float(tgt) + 3:
+        for k in ("heat_target_f", "heat_max_f"):
+            if k in new:
+                new.pop(k)
+                errors[k] = "the heat mat cut-off must be at least 3F above its target"
     if new:
         if any(k.startswith("kasa_") for k in new):
             light_mod._kasa_dev = None      # reconnect with the new address or credentials

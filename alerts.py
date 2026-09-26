@@ -275,6 +275,18 @@ def check_all(snapshot, cfg, unit_temp="F"):
             out.append((act, "res_fault", "Reservoir sensors agree again",
                         f"Level reads {res}.", "good"))
 
+    if snapshot.get("_heat_fault"):
+        act = evaluate("heat_fault", True, now)
+        if act in ("fire", "remind"):
+            out.append((act, "heat_fault", "Heat mat held off",
+                        "The heat mat is off for safety: "
+                        + str(snapshot["_heat_fault"]) + ".", "error"))
+    else:
+        act = evaluate("heat_fault", False, now)
+        if act == "clear":
+            out.append((act, "heat_fault", "Heat mat back under control",
+                        "The soil temperature is reading and the plug is responding.", "good"))
+
     if snapshot.get("_plug_failed"):
         act = evaluate("plug_failed", True, now)
         if act in ("fire", "remind"):

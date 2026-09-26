@@ -320,6 +320,17 @@ def _build_grouped(d, bs):
         L.append(f"Barometric trend: {pt['words']} ({pt['change_3h']:+} hPa over 3h)"
                  + (f", {pt['change_24h']:+} hPa over 24h" if pt.get("change_24h") is not None else "")
                  + "  [trend deltas always in hPa]")
+    h = d.get("heat") or {}
+    if h.get("use"):
+        if h.get("mode") == "off":
+            L.append("Heat mat: off (switched off by the grower)")
+        else:
+            tgt = float(h.get("target_f", 75))
+            tgt_txt = f"{(tgt - 32) * 5 / 9:.1f}C" if U["temp"] == "C" else f"{tgt:g}F"
+            L.append(f"Heat mat under the trays: {'on' if h.get('on') else 'off'} now, "
+                     + ("thermostat holding the soil at " + tgt_txt if h.get("mode") == "auto"
+                        else "held on by the grower")
+                     + (f" ({h['reason']})" if h.get("reason") else ""))
     gm = d.get("germination") or {}
     if gm:
         L.append("Germination by variety: " + "; ".join(f"{k}: {v}" for k, v in gm.items()))

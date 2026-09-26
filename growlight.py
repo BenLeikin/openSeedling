@@ -33,6 +33,7 @@ import light as light_mod
 import setups as setups_mod    # noqa: F401
 import water
 import monitor
+import heat
 import camera as camera_mod
 import status as status_mod    # noqa: F401
 import routes
@@ -48,6 +49,7 @@ if __name__ == "__main__":
     threading.Thread(target=monitor.live_loop, daemon=True).start()
     threading.Thread(target=water.watering_loop, daemon=True).start()
     threading.Thread(target=monitor.report_loop, daemon=True).start()
+    threading.Thread(target=heat.heat_loop, daemon=True, name="heat").start()
     log.info(f"Dashboard at http://0.0.0.0:{config.HTTP_PORT}")
     # Waitress rather than Flask's development server: it is a real WSGI server,
     # it stops the "do not use in production" warning filling the journal, and

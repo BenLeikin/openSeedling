@@ -1209,3 +1209,4 @@ body.reselsewhere #resrow{display:none !important}
 .lbclose:hover,.lbclose:focus-visible{background:rgba(255,255,255,.3)}
 html.lbopen,html.lbopen body{overflow:hidden}
 #photo,#vframe{touch-action:manipulation;cursor:zoom-in}
+#heatinfo.warn{color:var(--warn)}

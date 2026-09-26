@@ -197,6 +197,7 @@ def cleanup(*_):
     # not leave a pump relying on gpiozero's atexit teardown and a gate pulldown.
     SHUTTING_DOWN.set()
     _all_off()
+    heat_mod.off_now()          # the smart plug, when it is the heat mat's
     status_mod._end_streams()
     # A pump thread or control pass already past its check could still write
     # once more. They poll every 0.1 s and now see the flag; wait for running
@@ -223,4 +224,5 @@ def cleanup(*_):
 # used inside functions, at call time, always as module.name.
 import light as light_mod
 import monitor
+import heat as heat_mod
 import status as status_mod

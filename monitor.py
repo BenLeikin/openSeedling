@@ -312,6 +312,7 @@ def gather_report_data():
         # every reading under the setup it is in; worked out from the setups
         # as they are now, so a new assignment is in the next report
         "by_setup": by_setup,
+        "heat": heat_mod.status(cfg),
     }
 
 
@@ -779,7 +780,16 @@ def run_alerts(readings):
         # third fixture: either way a dead plug means a light stuck on or off
         snap["_plug_failed"] = (light_mod.kasa_state["error"]
                                 if (light_mod.light_backend(cfg) == "kasa"
+                                    and cfg.get("plug_use", "light") == "light"
                                     and light_mod.kasa_state["fails"] >= 2) else "")
+        # the heat mat: held off by its own safety rules, or its plug failing
+        hs = heat_mod.status(cfg)
+        snap["_heat_fault"] = ""
+        if hs["use"] and hs["mode"] != "off":
+            if light_mod.kasa_state["fails"] >= 2:
+                snap["_heat_fault"] = "the plug is not responding: " + str(light_mod.kasa_state["error"])
+            elif hs["fault"]:
+                snap["_heat_fault"] = hs["fault"]
 
         # sensors that have gone quiet: keys seen recently but missing from
         # this read. Tracked in memory only (persisting it once made a removed
@@ -914,5 +924,6 @@ def _soil_f_lookup(snap, hours):
 # Imported last: these modules import this one, and their import-time
 # code runs only after everything above is defined. Their names are
 # used inside functions, at call time, always as module.name.
+import heat as heat_mod
 import camera as camera_mod
 import status as status_mod

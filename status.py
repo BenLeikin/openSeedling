@@ -18,6 +18,7 @@ import light as light_mod
 import setups as setups_mod
 import water
 import monitor
+import heat as heat_mod
 import camera as camera_mod
 
 def _units():
@@ -209,6 +210,7 @@ def status_payload(authed=None):
         capturing=camera_mod.capturing,
         # canopy readings are due only while photos are taken; null at night
         canopy_due_since=camera_mod.canopy_due_since(cfg),
+        heat=heat_mod.status(cfg),
         render=dict(camera_mod.render),
         video_time=(datetime.fromtimestamp(camera_mod.VIDEO_PATH.stat().st_mtime)
                     .isoformat() if camera_mod.VIDEO_PATH.exists() else None),

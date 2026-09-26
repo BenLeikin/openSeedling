@@ -98,6 +98,13 @@ DEFAULTS = {
     # main light is set to capture_brightness for the few seconds of each
     # photo (and the focus sweep), so every frame is lit the same.
     "capture_set_light": False,
+    # The smart plug does one job: "light" (the smart plug light backend) or
+    # "heat" (a heat mat thermostat on the soil temperature, see heat.py).
+    "plug_use": "light",
+    "heat_mode": "off",          # "off", "auto" (thermostat) or "on"
+    "heat_target_f": 75,         # soil temperature the mat holds (on 1F below)
+    "heat_max_f": 95,            # cut-off: the mat goes off at this, any mode
+    "heat_sensor": "temp:soil",  # which soil temperature probe it reads
     "capture_brightness": 100,  # light level held during each photo
     "roi": "",                  # view crop as "x,y,w,h" fractions of the stored
                                 # frame, blank = full frame. Applied when photos
@@ -383,6 +390,13 @@ def _v_usb_device(v):
     return v
 
 
+def _v_heat_sensor(v):
+    v = str(v or "").strip()
+    if not re.fullmatch(r"temp:soil(_[0-9A-Za-z]+)?", v):
+        raise ValueError("pick a soil temperature probe")
+    return v
+
+
 def _v_setups(v):
     """A list of grow setups; see setups(). An empty list means one default."""
     if not isinstance(v, list):
@@ -483,6 +497,11 @@ SETTINGS_VALIDATORS = {
     "live_interval_s": _v_int(0, 120),
     "capture_interval_min": _v_int(5, 720, clamp=False),
     "capture_set_light": _v_bool,
+    "plug_use": _v_choice("light", "heat"),
+    "heat_mode": _v_choice("off", "auto", "on"),
+    "heat_target_f": _v_float(40, 105, clamp=False),
+    "heat_max_f": _v_float(50, 120, clamp=False),
+    "heat_sensor": _v_heat_sensor,
     "capture_brightness": _v_int(1, 100, clamp=False),
     "roi": _v_roi,
     "alert_sustain_min": _v_int(1, 120),

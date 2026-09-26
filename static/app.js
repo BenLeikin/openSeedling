@@ -243,7 +243,7 @@ let pendingMode=null;   // mode the user just picked, held until status agrees
 function showLightMode(mode, bright, fromStatus){
   mode = mode || 'auto';
   lightMode = mode;
-  document.querySelectorAll('.lcbtn:not(.fanbtn)').forEach(b=>
+  document.querySelectorAll('.lcbtn:not(.fanbtn):not(.heatbtn)').forEach(b=>
     b.classList.toggle('on', b.dataset.mode===mode));
   const info=document.getElementById('lightinfo');
   if(info){
@@ -929,6 +929,25 @@ function fillForm(cfg){
      if(f.elements[k]&&!formHolds(k,cfg))
        f.elements[k].value=cfg[k]||'';
    showScheduleMode(sm?sm.value:'solar');}
+  {// heat mat: temperatures are stored in F and shown in the display units
+   const pu=f.elements['plug_use'];
+   if(pu&&!formHolds('plug_use',cfg))pu.value=cfg.plug_use||'light';
+   for(const k of ['heat_target_f','heat_max_f']){
+     const el=f.elements[k];
+     if(el&&k in cfg&&!formHolds(k,cfg))el.value=Math.round(tFromF(+cfg[k])*10)/10;
+   }
+   document.querySelectorAll('.tunit').forEach(e=>e.innerHTML=tUnit());
+   const hs=f.elements['heat_sensor'];
+   if(hs){
+     const keys=new Set(['temp:soil',cfg.heat_sensor||'temp:soil',
+       ...Object.keys(sensorData||{}).filter(k=>/^temp:soil(_\w+)?$/.test(k))]);
+     const have=[...hs.options].map(o=>o.value).join('|');
+     const want=[...keys].sort().join('|');
+     if(have!==want&&!formHolds('heat_sensor',cfg)){
+       hs.innerHTML=[...keys].sort().map(k=>`<option value="${esc(k)}">${esc(sensorMeta(k,0).label||k)}</option>`).join('');
+     }
+     if(!formHolds('heat_sensor',cfg))hs.value=cfg.heat_sensor||'temp:soil';
+   }}
   {const cb=f.elements['camera_backend'];
    if(cb&&!formHolds('camera_backend',cfg))cb.value=cfg.camera_backend||'rpicam';
    // only show the UVC controls when a USB camera is selected
@@ -2961,6 +2980,7 @@ function applyStatus(j){
     renderSweep(j);
     renderFocus(j);
     renderFan(j);
+    renderHeat(j);
     renderDayProgress(j);
     renderLightPlan(j);
     if(Date.now()-lastHostLoad>60000){lastHostLoad=Date.now();loadHost();}
@@ -3005,6 +3025,11 @@ document.getElementById('cfgform').addEventListener('submit',async ev=>{
     body.live_interval_s=parseInt(f.elements['live_interval_s'].value||0,10);
   if(f.elements['schedule_mode'])body.schedule_mode=f.elements['schedule_mode'].value;
   if(f.elements['light_backend'])body.light_backend=f.elements['light_backend'].value;
+  if(f.elements['plug_use'])body.plug_use=f.elements['plug_use'].value;
+  for(const k of ['heat_target_f','heat_max_f'])
+    if(f.elements[k]&&f.elements[k].value!=='')
+      body[k]=Math.round(tToF(parseFloat(f.elements[k].value))*10)/10;   // store F
+  if(f.elements['heat_sensor'])body.heat_sensor=f.elements['heat_sensor'].value;
   for(const k of ['fixed_on','fixed_off','duration_end'])
     if(f.elements[k])body[k]=f.elements[k].value;
   if(f.elements['duration_hours'])
@@ -3960,6 +3985,37 @@ function renderFan(j){
     if(lbl)lbl.textContent=(f.mode==='on')?'speed':'auto speed';
   }
 }
+function renderHeat(j){
+  const row=document.getElementById('heatrow');
+  if(!row)return;
+  const h=j.heat;
+  if(!h||!h.use){row.style.display='none';return;}
+  row.style.display='';
+  document.querySelectorAll('.heatbtn').forEach(b=>
+    b.classList.toggle('on', b.dataset.mode===h.mode));
+  const info=document.getElementById('heatinfo');
+  if(!info)return;
+  const t=h.temp_c!=null?tDisp(h.temp_c).toFixed(1)+tUnit():null;
+  let txt=h.on==null?'state unknown':(h.on?'on':'off');
+  if(t)txt+=` \u00b7 soil ${t}`;
+  if(h.mode==='auto')txt+=`, target ${Math.round(tFromF(+h.target_f)*10)/10}${tUnit()}`;
+  if(h.reason&&h.reason!=='off')txt+=` \u00b7 ${h.reason}`;
+  if(h.plug_ok===false&&h.plug_error)txt+=` \u00b7 plug: ${h.plug_error}`;
+  info.textContent=txt;
+  info.classList.toggle('warn', !!h.fault||h.plug_ok===false);
+}
+async function setHeat(mode){
+  const info=document.getElementById('heatinfo');
+  if(info)info.textContent='\u2026';
+  try{
+    const r=await fetch('/api/heat',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({mode})});
+    const j=await r.json().catch(()=>({}));
+    if(r.status===401&&info){info.textContent='log in first';return;}
+    if(!j.ok&&info)info.textContent=j.error||'failed';
+  }catch(e){if(info)info.textContent='request failed';}
+  setTimeout(refresh,1500);            // the plug takes a moment to answer
+}
 function pushFanSpeed(v){
   fanDragPending=v;
   if(fanDragTimer)return;
@@ -4102,6 +4158,8 @@ function initLight(){
    if(fb)fb.addEventListener('click',startFocusSweep);}
   document.querySelectorAll('.fanbtn').forEach(b=>
     b.addEventListener('click',()=>setFan(b.dataset.mode)));
+  document.querySelectorAll('.heatbtn').forEach(b=>
+    b.addEventListener('click',()=>setHeat(b.dataset.mode)));
   {const fr=document.getElementById('fanrange'), fv=document.getElementById('fanval');
    if(fr){
      const start=()=>{fanDragging=true;};
@@ -4119,7 +4177,7 @@ function initLight(){
      fr.addEventListener('change',end);
      fr.addEventListener('blur',end);
    }}
-  document.querySelectorAll('.lcbtn:not(.fanbtn)').forEach(b=>
+  document.querySelectorAll('.lcbtn:not(.fanbtn):not(.heatbtn)').forEach(b=>
     b.addEventListener('click',()=>setLight(b.dataset.mode)));
   const rng=document.getElementById('lcrange');
   const val=document.getElementById('lcval');
