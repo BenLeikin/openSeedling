@@ -20,8 +20,24 @@ import light as light_mod
 import monitor
 
 LOOP_S = 30                 # how often the thermostat decides
-HYSTERESIS_F = 1.0          # on below target - this, off at the target
-MIN_SWITCH_S = 120          # plug relay wear: no faster than this, except for safety
+
+# Auto is time-proportional control, not on/off. Each WINDOW_S the mat gets a
+# duty (0 to 1) and is on for that share of the window, once, so the soil sees
+# the average power instead of full-on/full-off swings.
+#
+# Why (fitted to Ben's 25-26 Sep data, a two-node mat/soil model, 0.19C rms):
+# the soil sits at about air + 6.4C with the mat on full, so near an 86F
+# target the mat needs 85-100% power. On/off switched it fully off at the
+# target, the soil fell ~1.5C in 30 min toward the air (6C below), then took
+# 1-2 h to climb back on the small margin left: 2-4F swings, averaging ~1F
+# low. Simulated over the same air, this controller holds about 0.9F peak to
+# peak, centred on the target, with ~45 plug switches a day (at most 192).
+WINDOW_S = 900              # one on-pulse per 15 min
+MIN_PULSE_S = 60            # skip on or off pulses shorter than this (relay wear)
+KP_PER_C = 0.6              # duty per degree C below target
+TI_S = 3600                 # integral time: a steady 1C error adds 0.6 duty an hour
+MAT_RISE_C = 6.4            # soil rise over air at full power; the feed-forward's guess,
+                            # the integral trims whatever it gets wrong
 REASSERT_S = 600            # re-send the state now and then (the Kasa app can flip it)
 STALE_SAMPLES = 3           # a reading older than this many sample intervals is gone
 
@@ -30,7 +46,11 @@ heat_state = {"on": None,          # what we last commanded (None: never)
               "temp_c": None,       # the reading the last decision used
               "since": 0.0,         # when the plug last changed
               "sent": 0.0,          # when we last sent a command
-              "fault": ""}          # why the mat is being held off, for alerts
+              "fault": "",          # why the mat is being held off, for alerts
+              "duty": None,         # Auto's share of the current window (0 to 1)
+              "integral": 0.0,      # the PI controller's integral term
+              "window": None,       # start of the current window (epoch s)
+              "on_until": 0.0}      # the mat is on until this time in the window
 _lock = threading.Lock()
 _pass_lock = threading.Lock()     # the loop and a button press never decide at once
 _prev_use = None
@@ -44,34 +64,62 @@ def f_to_c(f):
     return (float(f) - 32.0) * 5.0 / 9.0
 
 
-def decide(cfg, temp_c, age_s, on_now, now):
-    """The thermostat as a pure function: (want_on, reason, fault, urgent).
+def duty_for(cfg, temp_c, air_c, st, window_s=WINDOW_S):
+    """PI with an air-temperature feed-forward: the share of the next window
+    the mat is on. Updates st["integral"] (not while pinned at 0 or 1 in the
+    direction of the error, so it cannot wind up overnight when the mat is
+    flat out and still short)."""
+    target_c = f_to_c(cfg.get("heat_target_f", 75))
+    err = target_c - temp_c
+    ff = (target_c - air_c) / MAT_RISE_C if air_c is not None else 0.7
+    integ = st.get("integral", 0.0)
+    raw = ff + KP_PER_C * err + integ
+    if 0.0 < raw < 1.0 or (raw >= 1.0 and err < 0) or (raw <= 0.0 and err > 0):
+        integ += KP_PER_C * err * window_s / TI_S
+    integ = max(-1.0, min(1.0, integ))
+    st["integral"] = integ
+    return max(0.0, min(1.0, ff + KP_PER_C * err + integ))
 
-    urgent means switch now even inside MIN_SWITCH_S: a safety cut-off, or the
-    grower's own On or Off. Only the thermostat's own cycling waits.
+
+def decide(cfg, temp_c, age_s, on_now, now, air_c=None, st=None):
+    """The thermostat: (want_on, reason, fault, urgent).
+
+    urgent means switch now: a safety cut-off, or the grower's own On or Off.
+    Auto switches only at the planned points of its window. st carries Auto's
+    state between passes (integral, window, duty); heat_state when omitted.
     """
+    st = heat_state if st is None else st
     mode = cfg.get("heat_mode", "off")
     if mode == "off":
+        st.update(duty=None, window=None)
         return False, "off", "", True
     stale_s = STALE_SAMPLES * max(1, int(cfg.get("sample_interval_min", 5))) * 60
     have = temp_c is not None and age_s is not None and age_s <= stale_s
     max_c = f_to_c(cfg.get("heat_max_f", 95))
     if have and temp_c >= max_c:
+        st.update(duty=None, window=None)
         return (False, f"soil at the {cfg.get('heat_max_f', 95)}F cut-off",
                 "soil temperature reached the heat mat cut-off", True)
     if mode == "on":
+        st.update(duty=None, window=None)
         return True, ("held on" if have else "held on, no soil reading: cut-off inactive"), "", True
     # auto
     if not have:
+        st.update(duty=None, window=None)
         return (False, "no recent soil temperature",
                 "no recent soil temperature, so the heat mat is held off", True)
-    target_c = f_to_c(cfg.get("heat_target_f", 75))
-    band_c = HYSTERESIS_F * 5.0 / 9.0
-    if temp_c < target_c - band_c:
-        return True, "below target", "", False
-    if temp_c >= target_c:
-        return False, "at target", "", False
-    return bool(on_now), "holding", "", False
+    win = st.get("window")
+    if win is None or now >= win + WINDOW_S or now < win:
+        duty = duty_for(cfg, temp_c, air_c, st)
+        on_s = duty * WINDOW_S
+        if on_s < MIN_PULSE_S:
+            on_s = 0.0
+        elif WINDOW_S - on_s < MIN_PULSE_S:
+            on_s = float(WINDOW_S)
+        st.update(window=now, duty=on_s / WINDOW_S, on_until=now + on_s)
+    want = now < st["on_until"]
+    pct = round(st["duty"] * 100)
+    return want, f"{pct}% power", "", False
 
 
 def _send(want):
@@ -108,21 +156,28 @@ def _heat_pass(now=None):
         temp_c, ts = monitor.reading_filtered(key)
         age = None if ts is None else now - ts
         with _lock:
-            on_now, since, sent = heat_state["on"], heat_state["since"], heat_state["sent"]
-        want, reason, fault, urgent = decide(cfg, temp_c, age, on_now, now)
+            on_now, sent = heat_state["on"], heat_state["sent"]
+        air_c, air_ts = monitor.reading_filtered("temp:air")
+        if air_ts is None or now - air_ts > 3600:
+            air_c = None                            # feed-forward falls back to a guess
+        with _lock:
+            want, reason, fault, urgent = decide(cfg, temp_c, age, on_now, now, air_c)
         if hardware.SHUTTING_DOWN.is_set():
             want, reason = False, "shutting down"
         change = want != on_now
-        if change and not urgent and on_now is not None and now - since < MIN_SWITCH_S:
-            want, change = on_now, False            # too soon; the next pass decides
-            reason += " (waiting to switch)"
         ok = True
         if change or now - sent >= REASSERT_S or not light_mod.kasa_state.get("ok"):
             ok = _send(want)
             if ok and change:
-                db.log_event("heat", f"heat mat {'on' if want else 'off'}: {reason}"
-                             + (f", soil {temp_c:.1f}C" if temp_c is not None else ""))
-                log.info(f"heat mat {'on' if want else 'off'} ({reason})")
+                # Auto pulses the mat dozens of times a day; those go to the
+                # debug log only. Mode changes and safety cut-offs are events.
+                line = (f"heat mat {'on' if want else 'off'}: {reason}"
+                        + (f", soil {temp_c:.1f}C" if temp_c is not None else ""))
+                if urgent:
+                    db.log_event("heat", line)
+                    log.info(line)
+                else:
+                    log.debug(line)
         with _lock:
             if ok:
                 if change:
@@ -160,5 +215,6 @@ def status(cfg):
     return {"use": in_use(cfg), "mode": cfg.get("heat_mode", "off"),
             "on": st["on"], "reason": st["reason"], "fault": st["fault"],
             "temp_c": st["temp_c"], "target_f": cfg.get("heat_target_f", 75),
+            "duty": st["duty"], "window_s": WINDOW_S,
             "max_f": cfg.get("heat_max_f", 95), "sensor": cfg.get("heat_sensor", "temp:soil"),
             "plug_ok": light_mod.kasa_state.get("ok"), "plug_error": light_mod.kasa_state.get("error", "")}

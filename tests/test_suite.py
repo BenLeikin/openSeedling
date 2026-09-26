@@ -17,6 +17,7 @@ Exit status is the number of failed checks (0 = all passed).
 """
 
 import ast
+import math
 import os
 import re
 import shutil
@@ -1507,13 +1508,12 @@ def _heat_mat():
     base = dict(config.DEFAULTS, heat_mode="auto", heat_target_f=75, heat_max_f=95,
                 sample_interval_min=5)
     c75 = (75 - 32) * 5 / 9
-    d = heat.decide
+    def d(cfg_, t, age, on_now, when, air=18.0, st=None):
+        return heat.decide(cfg_, t, age, on_now, when, air, {} if st is None else st)
     rows = [
         (dict(base, heat_mode="off"), 15.0, 60, True, False),       # off is off
-        (base, c75 - 1.0, 60, False, True),                           # cold: on
-        (base, c75 - 0.2, 60, True, True),                            # inside the band: holds on
-        (base, c75 - 0.2, 60, False, False),                          # ...or holds off
-        (base, c75 + 0.1, 60, True, False),                           # at target: off
+        (base, c75 - 3.0, 60, False, True),                           # well below: on
+        (base, c75 + 1.5, 60, True, False),                           # well above: off
         (base, 20.0, 3600, True, False),                              # stale reading: off
         (base, None, None, True, False),                              # no reading: off
         (dict(base, heat_mode="on"), 36.0, 60, True, False),          # past the cut-off, even held on
@@ -1521,13 +1521,71 @@ def _heat_mat():
     ]
     bad = [i for i, (cfg_, t, age, on_now, want) in enumerate(rows)
            if d(cfg_, t, age, on_now, now)[0] != want]
-    check(not bad, f"the thermostat's decisions: on below the band, off at target, holds inside, "
-          f"off on a stale or missing probe and past the cut-off (wrong rows: {bad})")
+    check(not bad, f"the thermostat's decisions: on well below, off well above, off on a stale "
+          f"or missing probe and past the cut-off, On and Off obeyed (wrong rows: {bad})")
     check(d(base, 20.0, 3600, True, now)[3] and d(dict(base, heat_mode="on"), 36.0, 60, True, now)[3]
           and d(base, 20.0, 3600, True, now)[2] and not d(base, c75 - 1, 60, False, now)[3]
           and d(dict(base, heat_mode="off"), 20.0, 60, True, now)[3]
           and d(dict(base, heat_mode="on"), 20.0, 60, False, now)[3],
-          "safety cut-offs and the grower's On and Off switch at once; only thermostat cycling waits")
+          "safety cut-offs and the grower's On and Off switch at once; Auto keeps to its cycle")
+    # Auto: one pulse per window, its length set by the duty
+    st = {}
+    near = [d(base, c75 - 0.2, 60, None, now + k, c75 - 3.0, st)[0] for k in range(0, heat.WINDOW_S, 30)]
+    on_s = 30 * sum(near)
+    first_off = near.index(False) if False in near else len(near)
+    check(0.3 < st["duty"] < 1.0 and all(near[:first_off]) and not any(near[first_off:])
+          and abs(on_s - st["duty"] * heat.WINDOW_S) <= 30,
+          f"Auto near the target runs one pulse of part of the {heat.WINDOW_S // 60}-min window, "
+          f"then rests (duty {st['duty']:.2f}, on {on_s}s)")
+    st = {}
+    for k in range(24):                                   # six hours flat out and still short
+        d(base, c75 - 3, 60, None, now + k * heat.WINDOW_S, 5.0, st)
+    check(st["duty"] == 1.0 and st["integral"] <= heat.KP_PER_C * 3 * heat.WINDOW_S / heat.TI_S + 1e-9,
+          f"the integral does not wind up while the mat is flat out (integral {st['integral']:.3f})")
+    st = {}
+    tiny = [d(base, c75 + 0.35, 60, None, now + k, c75 - 0.2, st)[0] for k in range(0, heat.WINDOW_S, 30)]
+    check(not any(tiny) and st["duty"] == 0.0,
+          "a pulse shorter than a minute is skipped rather than clicking the relay")
+
+    # A simulation of Ben's rig (two-node mat/soil model fitted to his 25-26 Sep
+    # data, 0.19C rms), with a room cooling and warming: Auto must hold the
+    # soil much tighter than on/off did, centred on the target.
+    def simulate(ctrl, hours=24.0):
+        q, k1, k2, k3, k4 = 16.43, 0.67, 1.15, 1.28, 0.754        # per hour
+        tgt = f_to_c = (86 - 32) * 5 / 9
+        dt, x, m, u = 15.0, tgt - 0.5, tgt + 2.0, False
+        meas, seen, hot = x, [], []
+        stc = {}
+        for i in range(int(hours * 3600 / dt)):
+            t = i * dt
+            air = 24.8 + 1.2 * math.sin(2 * math.pi * t / 86400.0)   # 23.6-26.0C
+            if i % 20 == 0:                                            # a reading every 5 min
+                meas = round(x / 0.0625) * 0.0625
+            u = ctrl(meas, air, u, t, stc)
+            h = dt / 3600
+            dm = q * u - k1 * (m - x) - k3 * (m - air)
+            dx = k2 * (m - x) - k4 * (x - air)
+            m += h * dm
+            x += h * dx
+            if t > 4 * 3600:
+                seen.append(x)
+        return min(seen), max(seen), sum(seen) / len(seen)
+    cfg86 = dict(base, heat_target_f=86, heat_max_f=95)
+    t86 = (86 - 32) * 5 / 9
+
+    def old_onoff(meas, air, u, t, stc):                  # what Auto did before
+        if meas < t86 - 1.0 * 5 / 9:
+            return True
+        return False if meas >= t86 else u
+
+    def auto(meas, air, u, t, stc):
+        return heat.decide(cfg86, meas, 60, u, t, air, stc)[0]
+    lo0, hi0, mean0 = simulate(old_onoff)
+    lo1, hi1, mean1 = simulate(auto)
+    check((hi1 - lo1) * 1.8 < 1.3 and abs(mean1 - t86) < 0.15 and (hi1 - lo1) < (hi0 - lo0) / 1.8,
+          f"on the fitted rig model Auto holds {(hi1 - lo1) * 1.8:.1f}F peak to peak around the "
+          f"target (mean {(mean1 - t86) * 1.8:+.2f}F); on/off swung {(hi0 - lo0) * 1.8:.1f}F "
+          f"(mean {(mean0 - t86) * 1.8:+.2f}F)")
 
     sent = []
     reading = {"v": (c75 - 2, now)}
@@ -1538,32 +1596,38 @@ def _heat_mat():
         light_mod.kasa_state.update(on=bool(on), ok=True, error="", fails=0)
         return True
     light_mod.kasa_apply = fake_apply
-    monitor.reading_filtered = lambda key, snap=None: reading["v"]
+    monitor.reading_filtered = (lambda key, snap=None:
+                                (18.0, reading["v"][1]) if key == "temp:air" else reading["v"])
     with config.settings_lock:
         saved = {k: config.settings.get(k) for k in ("plug_use", "heat_mode", "heat_target_f",
                                                       "heat_max_f", "kasa_host", "light_backend")}
         config.settings.update(plug_use="light", heat_mode="auto", heat_target_f=75, heat_max_f=95,
                                kasa_host="10.0.3.177", light_backend="dim")
-    heat.heat_state.update(on=None, since=0.0, sent=0.0, fault="", reason="not in use")
+    heat.heat_state.update(on=None, since=0.0, sent=0.0, fault="", reason="not in use",
+                           duty=None, integral=0.0, window=None, on_until=0.0)
     heat._prev_use = None
     try:
         heat.heat_pass(now)
         check(sent == [], "with the plug given to the light, the thermostat never touches it")
         with config.settings_lock:
             config.settings["plug_use"] = "heat"
-        heat.heat_pass(now)                                   # cold: on
-        reading["v"] = (c75 + 0.5, now + 30)
-        heat.heat_pass(now + 30)                              # warm, but too soon to switch
+        heat.heat_pass(now)                                   # cold: a full-power window
+        reading["v"] = (c75 + 1.5, now + 30)
+        heat.heat_pass(now + 30)                              # warm now, but the window stands
         held = heat.heat_state["on"]
-        heat.heat_pass(now + 30 + heat.MIN_SWITCH_S)          # now it may switch
+        reading["v"] = (c75 + 1.5, now + heat.WINDOW_S)
+        heat.heat_pass(now + heat.WINDOW_S + 1)               # next window: no power
         check(sent[:1] == [True] and held is True and sent[-1] is False,
-              f"auto turns the mat on when cold and off at target, no faster than every "
-              f"{heat.MIN_SWITCH_S}s ({sent})")
-        reading["v"] = (c75 - 2, now + 400)
-        heat.heat_pass(now + 400 + heat.MIN_SWITCH_S)          # on again
-        reading["v"] = (36.0, now + 410)
+              f"Auto sets the power once per {heat.WINDOW_S // 60}-min window: on while cold, "
+              f"off from the next window once warm ({sent})")
+        ev_before = len(db.recent_events(500))
+        reading["v"] = (c75 - 2, now + 2 * heat.WINDOW_S)
+        heat.heat_pass(now + 2 * heat.WINDOW_S + 1)           # on again
+        check(len(db.recent_events(500)) == ev_before,
+              "Auto's pulses are not logged as events (dozens a day); safety and mode changes are")
+        reading["v"] = (36.0, now + 2 * heat.WINDOW_S + 10)
         n = len(sent)
-        heat.heat_pass(now + 410 + heat.MIN_SWITCH_S + 5)      # past the cut-off...
+        heat.heat_pass(now + 2 * heat.WINDOW_S + 15)          # past the cut-off...
         check(sent[n:] == [False] and heat.heat_state["fault"],
               "past the cut-off the mat goes off at once and the fault is raised")
         failing = {"n": 0}
@@ -1627,7 +1691,8 @@ def _heat_mat():
         light_mod.kasa_apply, monitor.reading_filtered = real_apply, real_rf
         with config.settings_lock:
             config.settings.update(saved)
-        heat.heat_state.update(on=None, since=0.0, sent=0.0, fault="", reason="not in use")
+        heat.heat_state.update(on=None, since=0.0, sent=0.0, fault="", reason="not in use",
+                               duty=None, integral=0.0, window=None, on_until=0.0)
         heat._prev_use = None
     js = (APP / "static" / "app.js").read_text()
     html = (APP / "templates" / "index.html").read_text()

@@ -126,8 +126,13 @@ the watering controls, and the daily AI plant-health report.*
   "Use the plug for", then Settings, Heat mat for the target and cut-off, and
   Auto, On and Off on the Light card. With the plug given to the heat mat the
   light code never touches it (before, every light write drove the plug off).
-- Auto is a thermostat on a soil probe: on 1F below the target, off at it, and
-  no faster than every 2 minutes. Your own On or Off acts at once.
+- Auto is time-proportional control on a soil probe: every 15 minutes it sets
+  a power share (PI on the soil error plus a feed-forward from the air
+  temperature) and runs the mat for that share of the window, one pulse per
+  window, pulses under a minute skipped. Fitted to this rig's data (soil sits
+  at about air + 6.4C with the mat on full), it holds about 0.9F peak to peak
+  in simulation where on/off swung 2-4F. Your own On or Off acts at once.
+  Pulses are logged at debug level, not as events.
 - Belongs to one setup, like the fan: tick Heat mat under that setup's
   "Here" in Settings, Setups, and its controls show on that setup's tab and in
   that setup's block of the AI report.

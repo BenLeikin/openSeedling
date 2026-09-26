@@ -4019,7 +4019,8 @@ function renderHeat(j){
   const tgt=`${Math.round(tFromF(+h.target_f)*10)/10}${tUnit()}`;
   let t=`<b>${state}</b> \u00b7 ${soil}`;
   if(h.fault)t+=` \u00b7 held off: ${esc(h.fault)}`;
-  else if(h.mode==='auto')t+=h.on?` \u00b7 heating to ${tgt}`:` \u00b7 target ${tgt}`;
+  else if(h.mode==='auto')t+=` \u00b7 target ${tgt}`
+    +(h.duty!=null?` \u00b7 ${Math.round(h.duty*100)}% power`:'');
   else if(h.mode==='on')t+=' \u00b7 held on';
   else t+=' \u00b7 switched off';
   if(plugBad)t+=' \u00b7 plug not responding';
