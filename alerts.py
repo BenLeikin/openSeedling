@@ -275,6 +275,18 @@ def check_all(snapshot, cfg, unit_temp="F"):
             out.append((act, "res_fault", "Reservoir sensors agree again",
                         f"Level reads {res}.", "good"))
 
+    if snapshot.get("_disk_low"):
+        act = evaluate("disk_low", True, now)
+        if act in ("fire", "remind"):
+            out.append((act, "disk_low", "SD card nearly full",
+                        f"{snapshot['_disk_low']}. Archive or delete old photos "
+                        "(Camera, Start new timelapse) before it fills: a full "
+                        "card stops the database and settings writes.", "error"))
+    else:
+        act = evaluate("disk_low", False, now)
+        if act == "clear":
+            out.append((act, "disk_low", "SD card space recovered", "Free space is back above the alert level.", "good"))
+
     if snapshot.get("_heat_fault"):
         act = evaluate("heat_fault", True, now)
         if act in ("fire", "remind"):

@@ -130,9 +130,9 @@ def run_pump(tray, seconds, reason="manual", force=False):
     elapsed = 0.0
     try:
         hardware._pumps[tray].on()
-        t0 = time.time()
+        t0 = time.monotonic()          # a clock step (NTP at boot) must not stretch or cut a run
         hardware.SHUTTING_DOWN.wait(secs)          # a shutdown ends the run early
-        elapsed = time.time() - t0
+        elapsed = time.monotonic() - t0
     finally:
         hardware._pumps[tray].off()
         with hardware.pump_lock:
@@ -189,9 +189,9 @@ def run_pump_until_full(tray, reason="fill", force=False):
     CONFIRM_NEEDED = 4                        # ~0.4s steady, rejects slosh/bobble
     try:
         hardware._pumps[tray].on()
-        t0 = time.time()
+        t0 = time.monotonic()          # a clock step (NTP at boot) must not stretch or cut a run
         while True:
-            elapsed = time.time() - t0
+            elapsed = time.monotonic() - t0
             if elapsed >= run_cap:
                 break                        # cap hit, float never stayed full
             if hardware.SHUTTING_DOWN.is_set():

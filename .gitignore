@@ -18,3 +18,8 @@ preview.tmp.jpg
 
 # archived timelapse runs
 timelapse_archive/
+
+# config.json's backup (holds the password hash) and half-written temp files
+config.json.bak
+*.tmp
+*.part

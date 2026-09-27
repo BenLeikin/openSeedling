@@ -33,6 +33,48 @@ EXG_MIN = 15
 ANALYSIS_W = 1000   # longest image side scaled to this before counting
 
 
+def jpeg_size(path):
+    """(width, height) from a JPEG's frame header, without decoding it."""
+    with open(path, "rb") as f:
+        data = f.read(262144)
+    i = 2
+    while i < len(data) - 9:
+        if data[i] != 0xFF:
+            i += 1
+            continue
+        m = data[i + 1]
+        if m in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
+            h = int.from_bytes(data[i + 5:i + 7], "big")
+            w = int.from_bytes(data[i + 7:i + 9], "big")
+            return (w, h) if w and h else None
+        if m in (0xD8, 0x01, 0xFF) or 0xD0 <= m <= 0xD7:
+            i += 1 if m == 0xFF else 2
+            continue
+        i += 2 + int.from_bytes(data[i + 2:i + 4], "big")
+    return None
+
+
+def imread_min(cv2, path, min_side):
+    """Decode a JPEG at the smallest scale (1/8, 1/4, 1/2 or full) whose
+    longest side is still at least min_side. libjpeg decodes those scales
+    directly, so an 8-megapixel photo needed at 1000 px costs 6 MB of pixels
+    instead of 24, on a 512 MB board that ran out of memory on 26 Sep."""
+    try:
+        size = jpeg_size(path)
+    except Exception:
+        size = None
+    if size:
+        longest = max(size)
+        for f, flag in ((8, cv2.IMREAD_REDUCED_COLOR_8), (4, cv2.IMREAD_REDUCED_COLOR_4),
+                        (2, cv2.IMREAD_REDUCED_COLOR_2)):
+            if longest / f >= min_side:
+                img = cv2.imread(str(path), flag)
+                if img is not None:
+                    return img
+                break
+    return cv2.imread(str(path))
+
+
 def _bil(C, u, v):
     """Bilinear interpolation of the four corners; mirrors bil() in app.js."""
     tx = (1 - u) * C[0][0] + u * C[1][0]
@@ -83,7 +125,7 @@ def analyze(path, grid, rectify_first=True, rotate=0):
     except Exception:
         return {"ok": False, "error": "OpenCV not installed on the Pi."}
 
-    img = cv2.imread(path)
+    img = imread_min(cv2, path, ANALYSIS_W)
     if img is None:
         return {"ok": False, "error": "Could not read the photo."}
 

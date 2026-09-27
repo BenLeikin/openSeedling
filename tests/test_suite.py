@@ -17,6 +17,7 @@ Exit status is the number of failed checks (0 = all passed).
 """
 
 import ast
+import json
 import math
 import os
 import re
@@ -1856,6 +1857,152 @@ def _charts():
           and "svg.cmini .cnight" in css,
           "6-hour and 3-day ranges, and a key for the lights-off shading")
 
+
+def _review_fixes():
+    """Fixes from the 27 Sep code review."""
+    # 1. config.json: atomic writes, a backup, and no silent fall back to defaults
+    tmpd = WORK / "cfgtest"
+    tmpd.mkdir(exist_ok=True)
+    f = tmpd / "x.json"
+    config.atomic_write_text(f, '{"a": 1}')
+    check(json.loads(f.read_text()) == {"a": 1} and not (tmpd / "x.json.tmp").exists(),
+          "settings files are written whole (temp file, fsync, rename)")
+    src = (APP / "config.py").read_text()
+    block = src[src.index("if CONFIG_PATH.exists():"):src.index("def save_config():")]
+
+    def load(main, bak):
+        cp, cb = tmpd / "config.json", tmpd / "config.json.bak"
+        for pth, txt in ((cp, main), (cb, bak)):
+            if txt is None:
+                pth.unlink(missing_ok=True)
+            else:
+                pth.write_text(txt)
+        ns = {"CONFIG_PATH": cp, "CONFIG_BAK": cb, "settings": {}, "_file_keys": set(),
+              "log": types.SimpleNamespace(error=lambda *a: None, warning=lambda *a: None),
+              "_load_json": config._load_json, "config_broken": ""}
+        exec(block, ns)
+        return ns["settings"], ns["config_broken"]
+    good, _ = load('{"password_hash": "x", "light_on": "07:00"}', None)
+    fell_back, broken1 = load('{"password_hash": "x", "light_on"', '{"password_hash": "y"}')
+    none, broken2 = load("", "{not json")
+    check(good.get("password_hash") == "x" and fell_back.get("password_hash") == "y" and not broken1
+          and none == {} and broken2,
+          "a truncated config.json falls back to config.json.bak; with neither readable the "
+          "app says so instead of quietly running on defaults")
+    was = config.config_broken
+    try:
+        config.config_broken = "config.json could not be read (test)"
+        cfg_before = (APP / "config.json").read_text() if (APP / "config.json").exists() else None
+        with config.settings_lock:
+            config.save_config()
+        cfg_after = (APP / "config.json").read_text() if (APP / "config.json").exists() else None
+        r = c.post("/api/settings", json={"light_on": "08:00"})
+    finally:
+        config.config_broken = was
+    check(cfg_before == cfg_after and r.status_code == 503,
+          "while the settings are unreadable nothing is saved over them and changes are refused "
+          "(the defaults have no password)")
+    # 2. pump time limits on a clock that cannot jump
+    floats = sensors._floats()
+    if "1" not in floats:                          # the watering checks removed it
+        sensors._float_init = False
+        sensors._float_devs.clear()
+        floats = sensors._floats()
+    for st in hardware.pump_state.values():
+        st.update(running=False, today_seconds=0, day=config._today_str())
+    with config.settings_lock:
+        saved_cap = config.settings.get("fill_max_seconds")
+        config.settings["fill_max_seconds"] = 1
+    floats["1"].is_pressed = True                  # never full: the cap must stop it
+    real_res, real_time = water.reservoir_state, time.time
+    water.reservoir_state = lambda: "ok"
+    start = real_time()
+    jumped = {"n": 0}
+
+    def stepped_clock():                           # NTP steps the clock back an hour
+        jumped["n"] += 1
+        return real_time() - (3600 if jumped["n"] > 2 else 0)
+    out = {}
+    time.time = stepped_clock
+    try:
+        th = threading.Thread(target=lambda: out.update(r=water.run_pump_until_full("1", "auto")))
+        th.start()
+        th.join(6)
+    finally:
+        time.time = real_time
+        water.reservoir_state = real_res
+        with config.settings_lock:
+            config.settings["fill_max_seconds"] = saved_cap
+    took = real_time() - start
+    check(not th.is_alive() and took < 3 and not hardware._pumps["1"].value,
+          f"a fill's time cap holds even if the wall clock steps back an hour ({took:.1f}s)")
+    # 3. a full SD card: photos give way, and it is alerted
+    shots = []
+    real_free, real_tp = camera_mod.disk_free_gb, camera_mod.take_photo
+    camera_mod.disk_free_gb = lambda path=None: 0.4
+    camera_mod.take_photo = lambda cfg_, now_: shots.append(now_) or None
+    with config.settings_lock:
+        saved_cam = {k: config.settings.get(k) for k in ("camera_enabled", "capture_enabled")}
+        config.settings.update(camera_enabled=True, capture_enabled=True)
+    real_win = camera_mod.capture_window
+    tzz = ZoneInfo(config.settings["timezone"])
+    camera_mod.capture_window = lambda cfg_: (datetime.now(tzz) - timedelta(hours=1),
+                                              datetime.now(tzz) + timedelta(hours=1))
+    try:
+        ls = camera_mod._capture_tick(None)
+    finally:
+        camera_mod.disk_free_gb, camera_mod.take_photo = real_free, real_tp
+        camera_mod.capture_window = real_win
+        with config.settings_lock:
+            config.settings.update(saved_cam)
+    import alerts
+    alerts.reset()
+    fired = [a for a in alerts.check_all({"_disk_low": "0.4 GB free on the SD card"},
+                                         dict(alerts.DEFAULTS, sustain_seconds=0)) if a[1] == "disk_low"]
+    alerts.reset()
+    check(shots == [] and ls is not None and fired and fired[0][0] == "fire",
+          "with under 1 GB free photos are skipped (the database and settings keep working), "
+          "and an alert goes out below 3 GB")
+    loop = re.search(r"def capture_loop\(\):[\s\S]*?\n\n\n", (APP / "camera.py").read_text())
+    check(loop and "last_shot = _capture_tick(last_shot)" in loop.group(0)
+          and 'log.exception("capture loop error")' in loop.group(0),
+          "one failed capture tick is logged and the timelapse carries on (the thread used to die)")
+    # 4. a photo is the last whole frame, written whole
+    frame = lambda n: b"\xff\xd8" + bytes([n]) * 50 + b"\xff\xd9"
+    stream = frame(1) + frame(2) + b"\xff\xd8" + b"\x03" * 30   # last frame cut short
+    dev = WORK / "video9"
+    dev.write_bytes(b"")
+    real_run = camera_mod.subprocess.run
+
+    def fake_v4l2(a, **kw):
+        Path([x for x in a if str(x).startswith("--stream-to=")][0].split("=", 1)[1]).write_bytes(stream)
+        return types.SimpleNamespace(returncode=0, stderr=b"", stdout=b"")
+    camera_mod.subprocess.run = fake_v4l2
+    real_ctl = camera_mod._usb_apply_controls
+    camera_mod._usb_apply_controls = lambda cfg_, dev_: None
+    outp = WORK / "shot.jpg"
+    try:
+        ok, err = camera_mod._usb_capture({"usb_device": str(dev)}, outp, 640, 480)
+    finally:
+        camera_mod.subprocess.run = real_run
+        camera_mod._usb_apply_controls = real_ctl
+    check(ok and outp.read_bytes() == frame(2) and not (WORK / "shot.jpg.part").exists(),
+          "a capture keeps the last complete frame, never a truncated one, and writes it whole")
+    # 5. big photos decoded at a reduced scale where full size is not needed
+    try:
+        import cv2
+        import numpy as np
+    except Exception:
+        skip("reduced-scale decode (OpenCV not installed here)")
+        return
+    big = WORK / "big.jpg"
+    cv2.imwrite(str(big), np.zeros((2448, 3264, 3), np.uint8))
+    import growth
+    check(growth.jpeg_size(big) == (3264, 2448)
+          and growth.imread_min(cv2, big, 1000).shape[:2] == (1224, 1632)
+          and growth.imread_min(cv2, big, 3000).shape[:2] == (2448, 3264),
+          "an 8-megapixel photo needed at 1000 px is decoded at half size (a quarter of the memory)")
+
 def run(name, fn):
     """A section that crashes counts as one failure; the rest still run."""
     section(name)
@@ -1893,6 +2040,7 @@ run('Canopy staleness', _canopy_stale)
 run('Heat mat', _heat_mat)
 run('Shared sensors and the heat mat setup', _shared_sensors)
 run('Charts', _charts)
+run('Review fixes', _review_fixes)
 run('Shutdown', _shutdown)
 
 # --------------------------------------------------------------------------

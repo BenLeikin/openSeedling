@@ -455,7 +455,7 @@ def run_report(reason="daily"):
                                     model=cfg.get("ai_model"))
         result["reason"] = reason
         try:
-            AI_REPORT_PATH.write_text(json.dumps(result, indent=2))
+            config.atomic_write_text(AI_REPORT_PATH, json.dumps(result, indent=2))
         except Exception as e:
             log.error(f"report save error: {e}")
         if result.get("ok") and cfg.get("ai_notify", True):
@@ -786,6 +786,10 @@ def run_alerts(readings):
         # was; the sustain window absorbs a wifi blip, repeated failures do not
         # the plug is worth alerting on whether it is the main light or the
         # third fixture: either way a dead plug means a light stuck on or off
+        free = camera_mod.disk_free_gb()
+        snap["_disk_low"] = (f"{free:.1f} GB free on the SD card"
+                             + (" (photos have stopped)" if free < camera_mod.MIN_FREE_GB else "")
+                             if free < camera_mod.LOW_FREE_GB else "")
         snap["_plug_failed"] = (light_mod.kasa_state["error"]
                                 if (light_mod.light_backend(cfg) == "kasa"
                                     and cfg.get("plug_use", "light") == "light"

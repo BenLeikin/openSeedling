@@ -247,6 +247,20 @@ the wedge is where the total should be at each hour of the photoperiod.
   setup claims is listed as shared. The grouping is worked out from Settings,
   Setups each time a report runs, so a change applies to the next report.
 
+### Safeguards against a bad day
+
+- `config.json` is written atomically (temp file, fsync, rename) and the
+  previous good copy is kept as `config.json.bak`. If `config.json` cannot be
+  read at start the backup is used; if neither can, the app runs on defaults
+  but saves nothing and refuses every change until the file is restored (the
+  defaults have no password).
+- Pump time caps run on the monotonic clock, so an NTP step at boot cannot
+  stretch or cut a fill.
+- Below 3 GB free on the SD card an alert goes out; below 1 GB photos are
+  skipped so the database and settings keep working.
+- A capture keeps the last complete frame of the burst and writes it whole;
+  one failed capture no longer stops the timelapse.
+
 ### Device and platform
 
 - Pi health tiles: CPU temp, load, memory, disk, uptime, power/throttling

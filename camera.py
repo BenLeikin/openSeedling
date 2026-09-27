@@ -161,7 +161,8 @@ def _make_thumb(photo_path, cfg, dst):
     if cfg.get("timelapse_flatten", True) and corners and len(corners) == 4:
         try:
             import cv2
-            img = cv2.imread(str(photo_path))
+            # a 640 px thumbnail does not need all 8 megapixels decoded
+            img = growth_mod.imread_min(cv2, photo_path, 1280)
             if img is not None:
                 warped = growth_mod.rectify(img, corners,
                                             cols=int(grid.get("cols", 4)),
@@ -347,7 +348,20 @@ def _usb_capture(cfg, out_path, width, height, warmup=None):
         if not starts:
             tmp.unlink(missing_ok=True)
             return False, "no JPEG frame in the stream"
-        Path(out_path).write_bytes(data[starts[-1]:])
+        # the last frame that is whole (ends in the end-of-image marker): a
+        # stream cut short leaves a truncated last frame, which became a
+        # broken photo ("Premature end of JPEG file")
+        frame = None
+        for a, b in zip(reversed(starts), [len(data)] + list(reversed(starts))[:-1]):
+            chunk = data[a:b].rstrip(b"\x00")
+            if chunk.endswith(b"\xff\xd9"):
+                frame = chunk
+                break
+        if frame is None:
+            return False, "no complete JPEG frame in the stream"
+        part = Path(str(out_path) + ".part")
+        part.write_bytes(frame)
+        os.replace(part, out_path)
     finally:
         tmp.unlink(missing_ok=True)
     return True, None
@@ -527,32 +541,66 @@ def canopy_due_since(cfg, now=None):
 def capture_loop():
     last_shot = None
     while True:
-        # opportunistic thumbnail backfill, at most one per tick
-        # Not while a capture is running, nor for a file under 10 s old: that
-        # photo may still be being written or rotated, and take_photo makes
-        # its own thumbnail once it is done.
-        missing = None if capturing else next(
-            (p for p in sorted(TIMELAPSE_DIR.glob("*.jpg"))
-             if not (THUMB_DIR / p.name).exists()
-             and time.time() - p.stat().st_mtime > 10), None)
-        if missing:
-            make_thumb(missing)
-        with config.settings_lock:
-            cfg = dict(config.settings)
-        if cfg.get("camera_enabled") and cfg["capture_enabled"]:
-            tz = ZoneInfo(cfg["timezone"])
-            now = datetime.now(tz)
-            on_time, off_time = capture_window(cfg)
-            in_day = on_time is not None and on_time <= now <= off_time
-            due = (last_shot is None or
-                   now - last_shot >= timedelta(minutes=cfg["capture_interval_min"]))
-            if in_day and due:
-                last_shot = now
-                with capture_lock:
-                    path = take_photo(cfg, now)
-                if path:
-                    record_growth(path, cfg, now)
+        try:
+            last_shot = _capture_tick(last_shot)
+        except Exception:
+            # One bad tick (a full disk, an odd file) must not end the
+            # timelapse for good: the thread dying used to leave photos
+            # stopped with the dashboard up and nothing in the journal
+            # after the traceback. Log it and carry on.
+            log.exception("capture loop error")
         time.sleep(15)
+
+
+def _capture_tick(last_shot):
+    """One pass of the capture loop; returns the new last_shot."""
+    # opportunistic thumbnail backfill, at most one per tick
+    # Not while a capture is running, nor for a file under 10 s old: that
+    # photo may still be being written or rotated, and take_photo makes
+    # its own thumbnail once it is done.
+    missing = None if capturing else next(
+        (p for p in sorted(TIMELAPSE_DIR.glob("*.jpg"))
+         if not (THUMB_DIR / p.name).exists()
+         and time.time() - p.stat().st_mtime > 10), None)
+    if missing:
+        make_thumb(missing)
+    with config.settings_lock:
+        cfg = dict(config.settings)
+    if cfg.get("camera_enabled") and cfg["capture_enabled"]:
+        tz = ZoneInfo(cfg["timezone"])
+        now = datetime.now(tz)
+        on_time, off_time = capture_window(cfg)
+        in_day = on_time is not None and on_time <= now <= off_time
+        due = (last_shot is None or
+               now - last_shot >= timedelta(minutes=cfg["capture_interval_min"]))
+        if in_day and due and disk_free_gb() < MIN_FREE_GB:
+            # A full SD card stops the database and settings writes too,
+            # so photos are what give way. Logged once an hour; the alert
+            # (monitor) says the same thing louder.
+            last_shot = now
+            if time.time() - _disk_warned[0] > 3600:
+                _disk_warned[0] = time.time()
+                log.warning(f"photo skipped: only {disk_free_gb():.1f} GB free "
+                            f"(photos stop below {MIN_FREE_GB} GB)")
+        elif in_day and due:
+            last_shot = now
+            with capture_lock:
+                path = take_photo(cfg, now)
+            if path:
+                record_growth(path, cfg, now)
+    return last_shot
+
+
+MIN_FREE_GB = 1.0          # stop taking photos below this much free space
+LOW_FREE_GB = 3.0          # alert below this
+_disk_warned = [0.0]
+
+
+def disk_free_gb(path=None):
+    try:
+        return shutil.disk_usage(path or TIMELAPSE_DIR).free / 1e9
+    except Exception:
+        return 1e9          # unknown: do not block photos on a failed check
 
 
 # ----------------------------- video render -----------------------------

@@ -2,6 +2,7 @@
 validators, and the shared runtime state and locks."""
 
 import json
+import os
 import re
 import threading
 from datetime import datetime
@@ -198,17 +199,59 @@ TIMEZONES     = sorted(available_timezones())
 
 settings = dict(DEFAULTS)
 _file_keys = set()
+CONFIG_BAK = CONFIG_PATH.with_name("config.json.bak")
+# Set when config.json exists but neither it nor its backup could be read.
+# The app then runs on defaults to keep the lights and loops going, but it
+# must not save (that would overwrite the real settings with defaults) and
+# must not accept changes (the defaults have no password, so the dashboard
+# would be open to anyone who can reach it). routes.require_auth checks it.
+config_broken = ""
+
+
+def atomic_write_text(path, text):
+    """Write a file so it is either the old contents or the new, never half:
+    a power cut or a full disk mid-write used to be able to leave config.json
+    truncated, and a truncated config.json meant defaults on the next start."""
+    path = Path(path)
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def _load_json(path):
+    saved = json.loads(Path(path).read_text())
+    if not isinstance(saved, dict):
+        raise ValueError("not a JSON object")
+    return saved
+
+
 if CONFIG_PATH.exists():
-    try:
-        _saved = json.loads(CONFIG_PATH.read_text())
+    _saved, _why = None, ""
+    for _p in (CONFIG_PATH, CONFIG_BAK):
+        try:
+            _saved = _load_json(_p)
+            if _p is CONFIG_BAK:
+                log.error(f"config.json unreadable ({_why}); loaded config.json.bak instead")
+            break
+        except FileNotFoundError:
+            continue
+        except Exception as e:
+            _why = _why or str(e)
+    if _saved is None:
+        config_broken = (f"config.json could not be read ({_why}) and there is no readable "
+                         "backup; running on defaults with changes refused. Restore it "
+                         "(~/growlight-backups/ keeps copies) and restart.")
+        log.error(config_broken)
+    else:
         # keys starting with "_" are runtime state that older builds persisted
         # by accident (e.g. _seen_sensors); loading them back made a removed
         # sensor alert forever
         _saved = {k: v for k, v in _saved.items() if not k.startswith("_")}
         _file_keys = set(_saved)
         settings.update(_saved)
-    except Exception as e:
-        log.warning(f"config.json unreadable ({e}), using defaults")
 
 
 def save_config():
@@ -216,9 +259,19 @@ def save_config():
 
     The single place config is written, so the no-runtime-keys rule cannot be
     forgotten at one of a dozen call sites: anything starting with "_" is
-    in-memory state and never lands on disk."""
+    in-memory state and never lands on disk. Written atomically, and the
+    previous good file is kept as config.json.bak."""
+    if config_broken:
+        log.error("not saving settings: config.json was unreadable at start")
+        return
     data = {k: v for k, v in settings.items() if not k.startswith("_")}
-    CONFIG_PATH.write_text(json.dumps(data, indent=2))
+    if CONFIG_PATH.exists():
+        try:
+            _load_json(CONFIG_PATH)                 # only a good file becomes the backup
+            atomic_write_text(CONFIG_BAK, CONFIG_PATH.read_text())
+        except Exception:
+            pass
+    atomic_write_text(CONFIG_PATH, json.dumps(data, indent=2))
 
 # One-time migration: trays were first laid out 4 wide x 3 deep (A1..D3); the
 # physical trays are 3 wide x 4 deep (A1..C4). Transpose saved cells so each

@@ -48,7 +48,7 @@ def _load_secret():
         pass
     s = secrets.token_hex(32)
     try:
-        SECRET_PATH.write_text(s)
+        config.atomic_write_text(SECRET_PATH, s)
         SECRET_PATH.chmod(0o600)
         log.info(f"new session secret written to {SECRET_PATH}")
     except Exception:
@@ -106,6 +106,9 @@ def require_auth(fn):
     def wrapper(*a, **k):
         if request.method != "GET" and not request.is_json:
             return jsonify(error="Content-Type must be application/json"), 415
+        if request.method != "GET" and config.config_broken:
+            # running on defaults: no password, and nothing it saves would stick
+            return jsonify(error=config.config_broken), 503
         if not is_authed():
             return jsonify(error="login required"), 401
         return fn(*a, **k)

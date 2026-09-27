@@ -52,7 +52,12 @@ def _image_b64(path, crop=None):
     file bytes if OpenCV isn't available."""
     try:
         import cv2
-        img = cv2.imread(str(path))
+        try:
+            import growth
+            need = MAX_IMG_W / max(0.05, min(crop[2], crop[3])) if crop else MAX_IMG_W
+            img = growth.imread_min(cv2, path, need)
+        except Exception:
+            img = cv2.imread(str(path))
         if img is not None and crop:
             ih, iw = img.shape[:2]
             x, y, w, h = crop
