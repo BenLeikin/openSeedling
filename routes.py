@@ -1626,6 +1626,11 @@ def update_settings():
             # thumbnails are built once per photo; without this the scrubber
             # would keep showing the old geometry
             camera_mod.rebuild_thumbs_async()
+        if ("video_fps" in new and camera_mod.VIDEO_PATH.exists()
+                and db.kv_get("video_fps_rendered") != float(new["video_fps"])):
+            # the video file only changes when it is rendered; do it now
+            # rather than leave the download at the old speed
+            camera_mod.start_render()
         if now_backend != was:
             # dark the abandoned output before the loop starts driving the new one
             light_mod.release_backend(was)

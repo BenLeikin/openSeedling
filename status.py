@@ -212,6 +212,7 @@ def status_payload(authed=None):
         canopy_due_since=camera_mod.canopy_due_since(cfg),
         heat=heat_mod.status(cfg),
         render=dict(camera_mod.render),
+        video_fps=db.kv_get("video_fps_rendered"),
         video_time=(datetime.fromtimestamp(camera_mod.VIDEO_PATH.stat().st_mtime)
                     .isoformat() if camera_mod.VIDEO_PATH.exists() else None),
         light_backend=light_mod.light_backend(cfg),

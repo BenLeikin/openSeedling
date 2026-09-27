@@ -668,8 +668,7 @@ def render_worker():
         # 1280-wide, ultrafast, single thread, no faststart here (the
         # +faststart second pass rewrites the whole file in memory and is
         # what tips the box over). We add faststart as a cheap remux after.
-        # Speed follows timelapse_speed_pct: 24 frames/s at 100%
-        fps = max(0.5, 24 * int(cfg_r.get("timelapse_speed_pct", 33)) / 100)
+        fps = max(1.0, float(cfg_r.get("video_fps", 8)))
         r = subprocess.run(oom_first(
             ["ffmpeg", "-loglevel", "error", "-y",
              "-framerate", f"{fps:g}", "-pattern_type", "glob",
@@ -713,7 +712,11 @@ def render_worker():
             mb = VIDEO_PATH.stat().st_size / 1e6
             with render_lock:
                 render.update(state="done", elapsed=round(dt, 1),
-                              msg=f"{len(frames)} frames, {mb:.1f} MB, {dt:.0f}s")
+                              msg=f"{len(frames)} frames at {fps:g} fps, {mb:.1f} MB, {dt:.0f}s")
+            try:
+                db.kv_set("video_fps_rendered", fps)
+            except Exception:
+                pass
         else:
             err = r.stderr.decode(errors="replace")[-200:]
             with render_lock:

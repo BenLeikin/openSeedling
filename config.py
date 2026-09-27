@@ -95,9 +95,10 @@ DEFAULTS = {
                                #   a working camera is connected.
     "capture_enabled": False,
     "capture_interval_min": 30,
-    # Timelapse speed as a percentage of the original pace (player 8 frames/s,
-    # rendered video 24 frames/s). Ben asked for a third of that.
-    "timelapse_speed_pct": 33,
+    # Timelapse speeds, set separately: the dashboard player steps through
+    # thumbnails, the downloaded video is rendered. Frames per second.
+    "player_fps": 4,
+    "video_fps": 8,
     # Photos are taken under whatever the light is doing. With this on, the
     # main light is set to capture_brightness for the few seconds of each
     # photo (and the focus sweep), so every frame is lit the same.
@@ -253,6 +254,17 @@ if CONFIG_PATH.exists():
         _file_keys = set(_saved)
         settings.update(_saved)
 
+
+# Update 24 had one speed for both, as a percentage (100 = player 8 frames/s,
+# video 24). Carry the video's over; the player gets its own default (Ben
+# found the shared 33% too slow on the page).
+if "timelapse_speed_pct" in settings:
+    _pct = settings.pop("timelapse_speed_pct")
+    if "video_fps" not in _file_keys:
+        try:
+            settings["video_fps"] = round(24 * float(_pct) / 100, 2)
+        except (TypeError, ValueError):
+            pass
 
 def save_config():
     """Persist settings to config.json. Caller must hold settings_lock.
@@ -558,7 +570,8 @@ SETTINGS_VALIDATORS = {
     "cam_rotate": _v_choice(0, 90, 180, 270),
     "live_interval_s": _v_int(0, 120),
     "capture_interval_min": _v_int(5, 720, clamp=False),
-    "timelapse_speed_pct": _v_int(5, 200, clamp=False),
+    "player_fps": _v_float(0.5, 30, clamp=False),
+    "video_fps": _v_float(1, 60, clamp=False),
     "capture_set_light": _v_bool,
     "plug_use": _v_choice("light", "heat"),
     "heat_mode": _v_choice("off", "auto", "on"),

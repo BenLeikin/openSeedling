@@ -921,7 +921,7 @@ function fillForm(cfg){
   const f=document.getElementById('cfgform');
   for(const k of ['latitude','longitude','timezone','max_bright','ramp_min',
                   'sunrise_offset_min','sunset_offset_min',
-                  'capture_interval_min','capture_brightness','roi','timelapse_speed_pct',
+                  'capture_interval_min','capture_brightness','roi','player_fps','video_fps',
                   'lux_to_ppfd_k','canopy_factor','duration_hours','cam_rotate','usb_device',
                   'usb_width','usb_height','usb_exposure_time_absolute','usb_gain',
                   'usb_focus_absolute','usb_white_balance_temperature','humidity_low','humidity_high','fan_humidity_on','fan_min_speed','alert_sustain_min','alert_cooldown_hours',
@@ -1096,10 +1096,10 @@ function togglePlay(){
   ptimer=setInterval(()=>{
     if(fidx>=frames.length-1){stopPlay();return;}
     fidx++;showFrame();
-  },Math.round(125*100/Math.max(5,playSpeed)));
+  },Math.round(1000/Math.max(0.5,playerFps)));
 }
 var thumbsV=0;          // bumped by the server when thumbnails are rebuilt
-var playSpeed=33;       // timelapse_speed_pct: 100 = 8 frames a second
+var playerFps=4;        // player_fps: frames a second in the dashboard player
 async function loadFrames(){
   if(window._camOn===false)return;
   try{
@@ -1172,8 +1172,9 @@ function renderVideoState(j){
         ': '+st.msg;
     } else if(j.video_time){
       const when=new Date(j.video_time);
-      info.textContent='Video from '+when.toLocaleString()+
-        (st.state==='done'?' \u00b7 '+st.msg:'');
+      info.textContent='Video from '+when.toLocaleString()
+        +(j.video_fps?` \u00b7 ${j.video_fps} fps`:'')
+        +(st.state==='done'?' \u00b7 '+st.msg:'');
     } else {info.textContent='No video rendered yet';}
   }
   dl.style.display=(!running && j.video_time)?'':'none';
@@ -1426,7 +1427,7 @@ function renderSensors(j){
   if(j.settings){
     sampleMin=+j.settings.sample_interval_min||5;
     capMin=+j.settings.capture_interval_min||30;
-    playSpeed=+j.settings.timelapse_speed_pct||33;
+    playerFps=+j.settings.player_fps||4;
     capOn=!!j.settings.capture_enabled;
   }
   if('canopy_due_since' in j)canopyDue=j.canopy_due_since;
@@ -3124,7 +3125,7 @@ document.getElementById('cfgform').addEventListener('submit',async ev=>{
   if(setupDirty&&setupDraft)body.setups=setupDraft;
   for(const k of ['latitude','longitude','max_bright','ramp_min',
                   'sunrise_offset_min','sunset_offset_min',
-                  'capture_interval_min','capture_brightness','timelapse_speed_pct'])
+                  'capture_interval_min','capture_brightness','player_fps','video_fps'])
     body[k]=parseFloat(f.elements[k].value);
   body.timezone=f.elements['timezone'].value.trim();
   body.roi=f.elements['roi'].value.trim();

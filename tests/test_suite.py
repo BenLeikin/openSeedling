@@ -754,11 +754,35 @@ def _timelapse_sharp():
     vf = enc[enc.index("-vf") + 1] if "-vf" in enc else ""
     fr = enc[enc.index("-framerate") + 1] if "-framerate" in enc else ""
     js_ = (APP / "static" / "app.js").read_text()
-    check(config.DEFAULTS.get("timelapse_speed_pct") == 33 and fr == "7.92"
-          and "},Math.round(125*100/Math.max(5,playSpeed)));" in js_
-          and "playSpeed=+j.settings.timelapse_speed_pct||33;" in js_,
-          f"the timelapse runs at a third of its old pace by default: video {fr} frames/s "
-          f"(was 24), player every 379 ms (was 125)")
+    check(config.DEFAULTS.get("video_fps") == 8 and config.DEFAULTS.get("player_fps") == 4
+          and fr == "8" and "},Math.round(1000/Math.max(0.5,playerFps)));" in js_
+          and "playerFps=+j.settings.player_fps||4;" in js_ and "timelapse_speed_pct" not in js_,
+          f"the player and the video have their own speeds: video {fr} frames/s, player 4")
+    src_c = (APP / "config.py").read_text()
+    mig = src_c[src_c.index('if "timelapse_speed_pct" in settings:'):src_c.index("def save_config():")]
+    ns = {"settings": {"timelapse_speed_pct": 33}, "_file_keys": {"timelapse_speed_pct"}}
+    exec(mig, ns)
+    check(ns["settings"] == {"video_fps": 7.92},
+          "update 24's shared percentage becomes the video speed (33% of 24 = 7.92 frames/s)")
+    started = []
+    real_sr = camera_mod.start_render
+    camera_mod.start_render = lambda: started.append(1) or True
+    had_video = camera_mod.VIDEO_PATH.exists()
+    if not had_video:
+        camera_mod.VIDEO_PATH.write_bytes(b"x")
+    try:
+        db.kv_set("video_fps_rendered", 24.0)
+        r1 = c.post("/api/settings", json={"video_fps": 8}).get_json()
+        db.kv_set("video_fps_rendered", 8.0)
+        r2 = c.post("/api/settings", json={"video_fps": 8, "player_fps": 5}).get_json()
+        st_ = c.get("/api/status").get_json()
+    finally:
+        camera_mod.start_render = real_sr
+        if not had_video:
+            camera_mod.VIDEO_PATH.unlink(missing_ok=True)
+    check(r1["ok"] and r2["ok"] and started == [1] and st_.get("video_fps") == 8.0,
+          "a new video speed re-renders the video (it used to wait for a manual Render); an "
+          "unchanged one does not; the status says what speed the video has")
     check(enc and "flags=lanczos" in vf and enc[enc.index("-crf") + 1] == "20"
           and enc[enc.index("-preset") + 1] == "ultrafast" and enc[enc.index("-threads") + 1] == "1",
           f"the video uses a lanczos downscale at crf 20, still ultrafast and one thread ({vf})")
