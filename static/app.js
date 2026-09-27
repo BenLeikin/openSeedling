@@ -1619,7 +1619,25 @@ function renderChartGrid(){
   // 1:1 in its own pixels; drawn at a stale size and stretched to fit
   // (preserveAspectRatio none), its text came out squashed or stretched.
   if(chartRO){chartRO.disconnect();grid.querySelectorAll('svg.cmini').forEach(s=>chartRO.observe(s));}
+  layoutChartRows();
+  if(rowRO){rowRO.disconnect();rowRO.observe(grid);}
 }
+// Every row of charts fills the width, the charts in a row the same size,
+// and rows balanced: 4 charts that fit 3 across go 2 + 2, not 3 + 1.
+// The column count per section comes from the width available and the
+// smallest readable chart (340 px for Soil, 260 px for the rest).
+function layoutChartRows(){
+  document.querySelectorAll('#chartgrid .cgrid').forEach(g=>{
+    const cards=[...g.children].filter(c=>c.classList.contains('ccard')&&!c.classList.contains('expanded'));
+    const n=cards.length; if(!n)return;
+    const W=g.clientWidth, gap=10;
+    const minW=g.closest('.csection.primary')?340:260;
+    const cmax=Math.max(1,Math.floor((W+gap)/(minW+gap)));
+    const rows=Math.ceil(n/cmax), cols=Math.ceil(n/rows);
+    g.style.setProperty('--cols',cols);
+  });
+}
+var rowRO=('ResizeObserver' in window)?new ResizeObserver(()=>requestAnimationFrame(layoutChartRows)):null;
 var chartRO=('ResizeObserver' in window)?new ResizeObserver(entries=>{
   for(const e of entries){
     const svg=e.target, vb=(svg.getAttribute('viewBox')||'').split(' ');
@@ -1653,7 +1671,7 @@ function timeTicks(x0,x1,sx,top,bot,W,FS,big){
     const x=sx(t);
     const lab=hrs>=24?new Date(t*1000).toLocaleDateString([],{month:'numeric',day:'numeric'})
       :new Date(t*1000).toLocaleTimeString([],{hour:'numeric'}).replace(':00','');
-    out+=`<line x1="${x.toFixed(1)}" y1="${top}" x2="${x.toFixed(1)}" y2="${bot}" class="cgrid cvgrid"/>`;
+    out+=`<line x1="${x.toFixed(1)}" y1="${top}" x2="${x.toFixed(1)}" y2="${bot}" class="cgl cvgrid"/>`;
     const w=lab.length*FS*0.6;
     if(x-w/2>lastRight+6&&x-w/2>0&&x+w/2<W){
       out+=`<text x="${x.toFixed(1)}" y="${bot+FS+3}" class="cxax" font-size="${FS}" text-anchor="middle">${lab}</text>`;
@@ -1733,7 +1751,7 @@ function drawMini(key){
   {const yt=niceTicks(y0,y1,big?5:3);
    const ydec=Math.max(0,Math.min(3,-Math.floor(Math.log10(yt.step)+1e-9)));
    for(const v of yt.ticks){const yy=sy(v).toFixed(1);
-     h+=`<line x1="${P}" y1="${yy}" x2="${W-P}" y2="${yy}" class="cgrid"/>`
+     h+=`<line x1="${P}" y1="${yy}" x2="${W-P}" y2="${yy}" class="cgl"/>`
        // label above its line, or below it when the line is at the very top
        +`<text x="${P+2}" y="${(sy(v)-3<FS?sy(v)+FS:sy(v)-3).toFixed(1)}" class="cyax" font-size="${FS}">${v.toFixed(ydec)}</text>`;}}
   // time gridlines at round hours or days
@@ -2861,6 +2879,7 @@ function initSensors(){
       const card=document.getElementById('cc-'+b.dataset.key);
       if(!card)return;
       const nowBig=card.classList.toggle('expanded');
+      layoutChartRows();                 // an expanded chart takes its own row
       if(nowBig)expandedCharts.add(card.id); else expandedCharts.delete(card.id);
       b.textContent=nowBig?'\u2921':'\u2922';
       b.title=nowBig?'Shrink this chart':'Expand this chart';

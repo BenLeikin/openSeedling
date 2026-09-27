@@ -1845,6 +1845,13 @@ def _charts():
           and "Math.round(r.width)||320" not in body,
           "a chart is drawn at its real on-screen size and redrawn when that changes, never "
           "at a fallback size stretched to fit (which squashed the text)")
+    lay = re.search(r"function layoutChartRows\(\)\{[\s\S]*?\n\}", js)
+    check(lay and "const rows=Math.ceil(n/cmax), cols=Math.ceil(n/rows);" in lay.group(0)
+          and "#chartgrid .cgrid{display:flex;flex-wrap:wrap;gap:10px}" in css
+          and "var(--cols,3)" in css and "rowRO.observe(grid)" in js
+          and 'class="cgl"' in js and "svg.cmini .cgl{" in css,
+          "chart rows fill the width with equal-size charts, balanced (4 across 3 slots go 2+2), "
+          "recomputed on resize; the SVG gridline class no longer collides with the grid container")
     check('data-h="6"' in html and 'data-h="72"' in html and "nightkey" in html
           and "svg.cmini .cnight" in css,
           "6-hour and 3-day ranges, and a key for the lights-off shading")
