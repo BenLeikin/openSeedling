@@ -620,9 +620,11 @@ def render_worker():
         # 1280-wide, ultrafast, single thread, no faststart here (the
         # +faststart second pass rewrites the whole file in memory and is
         # what tips the box over). We add faststart as a cheap remux after.
+        # Speed follows timelapse_speed_pct: 24 frames/s at 100%
+        fps = max(0.5, 24 * int(cfg_r.get("timelapse_speed_pct", 33)) / 100)
         r = subprocess.run(oom_first(
             ["ffmpeg", "-loglevel", "error", "-y",
-             "-framerate", "24", "-pattern_type", "glob",
+             "-framerate", f"{fps:g}", "-pattern_type", "glob",
              "-i", src_glob,
              # JPEG stills are full-range (yuvj420p/pc); browsers render that as
              # black. Remap to limited-range yuv420p and tag it. Height is forced

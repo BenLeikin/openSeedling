@@ -94,6 +94,9 @@ DEFAULTS = {
                                #   a working camera is connected.
     "capture_enabled": False,
     "capture_interval_min": 30,
+    # Timelapse speed as a percentage of the original pace (player 8 frames/s,
+    # rendered video 24 frames/s). Ben asked for a third of that.
+    "timelapse_speed_pct": 33,
     # Photos are taken under whatever the light is doing. With this on, the
     # main light is set to capture_brightness for the few seconds of each
     # photo (and the focus sweep), so every frame is lit the same.
@@ -502,6 +505,7 @@ SETTINGS_VALIDATORS = {
     "cam_rotate": _v_choice(0, 90, 180, 270),
     "live_interval_s": _v_int(0, 120),
     "capture_interval_min": _v_int(5, 720, clamp=False),
+    "timelapse_speed_pct": _v_int(5, 200, clamp=False),
     "capture_set_light": _v_bool,
     "plug_use": _v_choice("light", "heat"),
     "heat_mode": _v_choice("off", "auto", "on"),

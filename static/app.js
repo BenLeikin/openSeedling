@@ -921,7 +921,7 @@ function fillForm(cfg){
   const f=document.getElementById('cfgform');
   for(const k of ['latitude','longitude','timezone','max_bright','ramp_min',
                   'sunrise_offset_min','sunset_offset_min',
-                  'capture_interval_min','capture_brightness','roi',
+                  'capture_interval_min','capture_brightness','roi','timelapse_speed_pct',
                   'lux_to_ppfd_k','canopy_factor','duration_hours','cam_rotate','usb_device',
                   'usb_width','usb_height','usb_exposure_time_absolute','usb_gain',
                   'usb_focus_absolute','usb_white_balance_temperature','humidity_low','humidity_high','fan_humidity_on','fan_min_speed','alert_sustain_min','alert_cooldown_hours',
@@ -1096,9 +1096,10 @@ function togglePlay(){
   ptimer=setInterval(()=>{
     if(fidx>=frames.length-1){stopPlay();return;}
     fidx++;showFrame();
-  },125);
+  },Math.round(125*100/Math.max(5,playSpeed)));
 }
 var thumbsV=0;          // bumped by the server when thumbnails are rebuilt
+var playSpeed=33;       // timelapse_speed_pct: 100 = 8 frames a second
 async function loadFrames(){
   if(window._camOn===false)return;
   try{
@@ -1425,6 +1426,7 @@ function renderSensors(j){
   if(j.settings){
     sampleMin=+j.settings.sample_interval_min||5;
     capMin=+j.settings.capture_interval_min||30;
+    playSpeed=+j.settings.timelapse_speed_pct||33;
     capOn=!!j.settings.capture_enabled;
   }
   if('canopy_due_since' in j)canopyDue=j.canopy_due_since;
@@ -3020,7 +3022,7 @@ document.getElementById('cfgform').addEventListener('submit',async ev=>{
   if(setupDirty&&setupDraft)body.setups=setupDraft;
   for(const k of ['latitude','longitude','max_bright','ramp_min',
                   'sunrise_offset_min','sunset_offset_min',
-                  'capture_interval_min','capture_brightness'])
+                  'capture_interval_min','capture_brightness','timelapse_speed_pct'])
     body[k]=parseFloat(f.elements[k].value);
   body.timezone=f.elements['timezone'].value.trim();
   body.roi=f.elements['roi'].value.trim();

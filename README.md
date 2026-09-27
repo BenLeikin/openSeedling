@@ -502,6 +502,7 @@ editable from the dashboard Settings panel; the rest are edited in the file.
 | `units` | `imperial` | Display only; storage is always Celsius / hPa and switching never converts data |
 | `capture_enabled` | false | Timelapse on/off |
 | `capture_interval_min` | 30 | Minutes between frames |
+| `timelapse_speed_pct` | 33 | Timelapse pace as a percentage of 8 frames/s in the dashboard player and 24 frames/s in the rendered video; the video changes on the next Render |
 | `plug_use` | `light` | What the smart plug switches: `light` (the smart plug light backend) or `heat` (the heat mat thermostat) |
 | `heat_mode` | `off` | Heat mat: `off`, `auto` (thermostat) or `on`; set with the Heat mat buttons on the Light card |
 | `heat_target_f` / `heat_max_f` | 75 / 95 | Soil temperature the mat holds (on 1F below, off at it) / cut-off that turns it off in any mode; stored in F, shown in the display units |

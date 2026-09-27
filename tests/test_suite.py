@@ -751,6 +751,13 @@ def _timelapse_sharp():
             camera_mod.render.update(state="idle", msg="", frames=0)
     enc = next((a for a in seen if "libx264" in a), [])
     vf = enc[enc.index("-vf") + 1] if "-vf" in enc else ""
+    fr = enc[enc.index("-framerate") + 1] if "-framerate" in enc else ""
+    js_ = (APP / "static" / "app.js").read_text()
+    check(config.DEFAULTS.get("timelapse_speed_pct") == 33 and fr == "7.92"
+          and "},Math.round(125*100/Math.max(5,playSpeed)));" in js_
+          and "playSpeed=+j.settings.timelapse_speed_pct||33;" in js_,
+          f"the timelapse runs at a third of its old pace by default: video {fr} frames/s "
+          f"(was 24), player every 379 ms (was 125)")
     check(enc and "flags=lanczos" in vf and enc[enc.index("-crf") + 1] == "20"
           and enc[enc.index("-preset") + 1] == "ultrafast" and enc[enc.index("-threads") + 1] == "1",
           f"the video uses a lanczos downscale at crf 20, still ultrafast and one thread ({vf})")
