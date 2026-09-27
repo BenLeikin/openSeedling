@@ -1840,6 +1840,11 @@ def _charts():
     check(mv and "for(const k of Object.keys(chartPlots))" in mv.group(0)
           and "showCross(k, best.t, k===key);" in mv.group(0) and "function showCross(k, t, own)" in js,
           "hovering one chart shows the same moment on every chart")
+    check("chartRO.observe(s)" in js and "new ResizeObserver(" in js
+          and "if(r.width<10||r.height<10)return;" in body
+          and "Math.round(r.width)||320" not in body,
+          "a chart is drawn at its real on-screen size and redrawn when that changes, never "
+          "at a fallback size stretched to fit (which squashed the text)")
     check('data-h="6"' in html and 'data-h="72"' in html and "nightkey" in html
           and "svg.cmini .cnight" in css,
           "6-hour and 3-day ranges, and a key for the lights-off shading")

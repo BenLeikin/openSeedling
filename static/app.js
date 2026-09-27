@@ -1614,7 +1614,21 @@ function renderChartGrid(){
   }
   chartPlots={};
   for(const k of keys)drawMini(k);
+  // Redraw a chart whenever its box changes size: when it first becomes
+  // visible, on a window resize, or when the layout settles. The SVG is drawn
+  // 1:1 in its own pixels; drawn at a stale size and stretched to fit
+  // (preserveAspectRatio none), its text came out squashed or stretched.
+  if(chartRO){chartRO.disconnect();grid.querySelectorAll('svg.cmini').forEach(s=>chartRO.observe(s));}
 }
+var chartRO=('ResizeObserver' in window)?new ResizeObserver(entries=>{
+  for(const e of entries){
+    const svg=e.target, vb=(svg.getAttribute('viewBox')||'').split(' ');
+    const w=Math.round(e.contentRect.width), h=Math.round(e.contentRect.height);
+    if(w<10||h<10||(Math.abs(+vb[2]-w)<=1&&Math.abs(+vb[3]-h)<=1))continue;
+    const key=Object.keys(seriesData).find(k=>'cv-'+cssId(k)===svg.id);
+    if(key)requestAnimationFrame(()=>drawMini(key));
+  }
+}):null;
 function cssId(k){return k.replace(/[^a-zA-Z0-9]/g,'_');}
 // round-number ticks between a and b, about n of them
 function niceTicks(a,b,n){
@@ -1676,8 +1690,9 @@ function drawMini(key){
   // pixel, so text renders at its natural shape at any card width. A fixed
   // viewBox stretched to fit would smear the labels (badly so on a phone).
   const r=svg.getBoundingClientRect();
-  const W=Math.max(200,Math.round(r.width)||320);
-  const H=Math.max(80,Math.round(r.height)||(big?300:110));
+  if(r.width<10||r.height<10)return;        // not laid out yet: the resize observer draws it
+  const W=Math.max(200,Math.round(r.width));
+  const H=Math.max(80,Math.round(r.height));
   const P=big?12:6, B=big?24:16;
   svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
   const FS=big?12:10, FS2=big?13:11;   // now honest px sizes

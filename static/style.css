@@ -647,11 +647,11 @@ body.nocam .amedia{display:none}
 
 /* ---- bigger charts, expandable ---- */
 .cgrid{grid-template-columns:repeat(auto-fill,minmax(280px,1fr))}
-svg.cmini{height:120px}
+svg.cmini{height:140px}
 .csection.primary .cgrid{grid-template-columns:repeat(auto-fill,minmax(340px,1fr))}
-.csection.primary svg.cmini{height:160px}
+.csection.primary svg.cmini{height:180px}
 .csection:not(.primary) .cgrid{grid-template-columns:repeat(auto-fill,minmax(260px,1fr))}
-.csection:not(.primary) svg.cmini{height:120px}
+.csection:not(.primary) svg.cmini{height:140px}
 
 .cexpand{margin:0 0 0 6px;padding:1px 5px;font-size:12px;line-height:1;
   background:transparent;color:var(--leaf);border:1px solid var(--line);
