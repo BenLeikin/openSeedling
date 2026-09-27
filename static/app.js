@@ -1511,7 +1511,7 @@ function renderSensors(j){
 const CHART_SECTIONS=[
   // ordered by how often they drive a decision, not by sensor type
   {id:'soil',   title:'Soil',
-   match:k=>k.startsWith('temp:soil')||k.startsWith('probe:')},
+   match:k=>k.startsWith('temp:soil')||k.startsWith('probe:')||k.startsWith('heat:')},
   {id:'env',    title:'Environment',
    match:k=>k==='temp:air'||k==='humidity'||k==='lux'||k.startsWith('lux:')||k==='ppfd'||k==='pressure'},
   {id:'growth', title:'Canopy',           match:k=>k.startsWith('canopy:')},
@@ -1533,7 +1533,7 @@ function chartHeadUnit(key){
 
 function chartUnitFor(s){
   if(s.startsWith('temp:'))return tUnit();
-  if(s.startsWith('humidity')||s.startsWith('canopy:'))return '%';
+  if(s.startsWith('humidity')||s.startsWith('canopy:')||s.startsWith('heat:'))return '%';
   if(s.startsWith('probe:')){const t=s.slice(6);
     return (probeCal[t]&&probeCal[t].wet!=null)||probeDefaultCal?'%':'V';}
   if(s.startsWith('lux'))return 'lx';
@@ -1616,6 +1616,56 @@ function renderChartGrid(){
   for(const k of keys)drawMini(k);
 }
 function cssId(k){return k.replace(/[^a-zA-Z0-9]/g,'_');}
+// round-number ticks between a and b, about n of them
+function niceTicks(a,b,n){
+  const span=Math.max(1e-9,b-a), raw=span/Math.max(1,n);
+  const mag=Math.pow(10,Math.floor(Math.log10(raw))), f=raw/mag;
+  const step=(f<1.5?1:f<3?2:f<7?5:10)*mag;
+  const ticks=[];
+  for(let v=Math.ceil(a/step)*step; v<=b+step*1e-6; v+=step)ticks.push(+v.toPrecision(12));
+  return {ticks,step};
+}
+// time ticks at round local hours (or midnights for long ranges), with labels
+// that never collide
+function timeTicks(x0,x1,sx,top,bot,W,FS,big){
+  const span=(x1-x0)/3600;
+  const hrs=span<=8?1:span<=30?(big?2:3):span<=80?12:span<=200?24:span<=400?48:120;
+  let out='', lastRight=-1e9;
+  const d=new Date(x0*1000); d.setMinutes(0,0,0);
+  if(hrs>=24)d.setHours(0);
+  else d.setHours(Math.ceil(d.getHours()/hrs)*hrs);
+  while(d.getTime()/1000<x0)d.setTime(d.getTime()+hrs*3600000);
+  for(let t=d.getTime()/1000; t<=x1; ){
+    const x=sx(t);
+    const lab=hrs>=24?new Date(t*1000).toLocaleDateString([],{month:'numeric',day:'numeric'})
+      :new Date(t*1000).toLocaleTimeString([],{hour:'numeric'}).replace(':00','');
+    out+=`<line x1="${x.toFixed(1)}" y1="${top}" x2="${x.toFixed(1)}" y2="${bot}" class="cgrid cvgrid"/>`;
+    const w=lab.length*FS*0.6;
+    if(x-w/2>lastRight+6&&x-w/2>0&&x+w/2<W){
+      out+=`<text x="${x.toFixed(1)}" y="${bot+FS+3}" class="cxax" font-size="${FS}" text-anchor="middle">${lab}</text>`;
+      lastRight=x+w/2;
+    }
+    const nd=new Date(t*1000); nd.setHours(nd.getHours()+hrs); t=nd.getTime()/1000;
+  }
+  return out;
+}
+// shaded lights-off hours, from today's schedule repeated over the window
+function nightBands(x0,x1,sx,top,bot){
+  if(!S||!S.on||!S.off||(x1-x0)>8*86400)return '';
+  const minOf=ms=>{const d=new Date(ms);return d.getHours()*60+d.getMinutes();};
+  const onM=minOf(+S.on), offM=minOf(+S.off);
+  if(onM===offM)return '';
+  let out='';
+  const d=new Date(x0*1000); d.setHours(0,0,0,0); d.setDate(d.getDate()-1);
+  for(;d.getTime()/1000<x1;d.setDate(d.getDate()+1)){
+    const day=d.getTime()/1000;
+    let a=day+offM*60, b=day+onM*60;
+    if(b<=a)b+=86400;                    // off in the evening, on next morning
+    a=Math.max(a,x0); b=Math.min(b,x1);
+    if(b>a)out+=`<rect x="${sx(a).toFixed(1)}" y="${top}" width="${(sx(b)-sx(a)).toFixed(1)}" height="${bot-top}" class="cnight"/>`;
+  }
+  return out;
+}
 function drawMini(key){
   const svg=document.getElementById('cv-'+cssId(key));
   const stat=document.getElementById('cs-'+cssId(key));
@@ -1662,8 +1712,17 @@ function drawMini(key){
   const sx=t=>P+(t-x0)/((x1-x0)||1)*(W-2*P);
   const sy=v=>H-B-(v-y0)/((y1-y0)||1)*(H-B-P);
   let h='';
-  for(let i=0;i<=2;i++){const yy=P+(H-B-P)*i/2;
-    h+=`<line x1="${P}" y1="${yy}" x2="${W-P}" y2="${yy}" stroke="#e6f0de" stroke-width="1"/>`;}
+  // lights-off hours, shaded, so day/night patterns explain themselves
+  h+=nightBands(x0,x1,sx,P,H-B);
+  // value gridlines at round numbers, labelled on the left
+  {const yt=niceTicks(y0,y1,big?5:3);
+   const ydec=Math.max(0,Math.min(3,-Math.floor(Math.log10(yt.step)+1e-9)));
+   for(const v of yt.ticks){const yy=sy(v).toFixed(1);
+     h+=`<line x1="${P}" y1="${yy}" x2="${W-P}" y2="${yy}" class="cgrid"/>`
+       // label above its line, or below it when the line is at the very top
+       +`<text x="${P+2}" y="${(sy(v)-3<FS?sy(v)+FS:sy(v)-3).toFixed(1)}" class="cyax" font-size="${FS}">${v.toFixed(ydec)}</text>`;}}
+  // time gridlines at round hours or days
+  h+=timeTicks(x0,x1,sx,P,H-B,W,FS,big);
   // Split the series where sampling stopped. Drawing one unbroken line across
   // an outage claims readings that were never taken; each run of real data is
   // solid, and the interval between runs is a faint dashed bridge so the shape
@@ -1682,7 +1741,11 @@ function drawMini(key){
   }
   runs.push(run);
   const pt=d=>`${sx(d[0]).toFixed(1)},${sy(d[1]).toFixed(1)}`;
-  for(const r of runs){
+  // the heat mat's power holds for a whole window: draw it as steps, not slopes
+  const stepped=key.startsWith('heat:');
+  const stepPts=r=>{const o=[];r.forEach((d,i)=>{if(i)o.push([d[0],r[i-1][1]]);o.push(d);});return o;};
+  for(const r0 of runs){
+    const r=stepped?stepPts(r0):r0;
     if(r.length<2){
       // a lone sample between two outages still deserves to be visible
       if(r.length===1)
@@ -1757,8 +1820,7 @@ function drawMini(key){
   const fmtT=t=>{const d=new Date(t*1000);
     return chartHours<=24?d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})
                          :d.toLocaleDateString([],{month:'numeric',day:'numeric'});};
-  h+=`<text x="${P}" y="${H-6}" font-size="${FS}" fill="#7a8a72">${fmtT(x0)}</text>`;
-  h+=`<text x="${W-P}" y="${H-6}" font-size="${FS}" fill="#7a8a72" text-anchor="end">${fmtT(x1)}</text>`;
+  void fmtT;
   h+=`<line class="hvl" y1="${P}" y2="${H-B}" stroke="#4a7c59" stroke-width="1"
         stroke-dasharray="3 3" style="display:none"/>`;
   h+=`<circle class="hdot" r="${big?4.5:3}" fill="#2e7d32" stroke="#fff" stroke-width="1.2" style="display:none"/>`;
@@ -1781,6 +1843,7 @@ function drawMini(key){
   chartPlots[key]={unit,dec,W,H,P,B,big,
     alt: key==='lux' ? ppfdFromLux : null,
     pts:data.map(d=>({x:sx(d[0]),y:sy(d[1]),v:d[1],t:d[0]})),
+    gap:gapLimit,
     fmt:t=>new Date(t*1000).toLocaleString([],{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})};
 }
 function chartMove(e){
@@ -1796,36 +1859,41 @@ function chartMove(e){
   let best=null,bd=1e9;
   for(const pt of plot.pts){const d=Math.abs(pt.x-loc.x);if(d<bd){bd=d;best=pt;}}
   if(!best)return;
-  const vl=svg.querySelector('.hvl'),dot=svg.querySelector('.hdot');
-  const lbl=svg.querySelector('.hlbl');
+  // every chart follows the same moment, so soil, air, light and the heat
+  // mat's power can be read against each other
+  for(const k of Object.keys(chartPlots))
+    showCross(k, best.t, k===key);
   const tip=document.getElementById('charttip');
-  if(vl){vl.setAttribute('x1',best.x);vl.setAttribute('x2',best.x);vl.style.display='';}
-  if(dot){dot.setAttribute('cx',best.x);dot.setAttribute('cy',best.y);dot.style.display='';}
-  // value rides on the crosshair itself, so it reads without a floating tooltip
-  if(lbl){
-    const txt=lbl.querySelector('text'), rect=lbl.querySelector('rect');
-    let s1=`${best.v.toFixed(plot.dec)}${plot.unit}`;
-    if(plot.alt){                       // lux: name the PPFD equivalent too
-      const p=plot.alt(best.v);
-      if(p!=null)s1+=` / ${Math.round(p)} \u00b5mol`;
-    }
-    const s2=plot.fmt(best.t);
-    const label=plot.big?`${s1}  \u00b7  ${s2}`:s1;
-    txt.textContent=label;
-    const cw=label.length*(plot.big?7.6:5.6)+10, ch=plot.big?22:16;
-    // keep the box inside the plot area at either edge
-    let bx=best.x+8;
-    if(bx+cw>plot.W-plot.P)bx=best.x-cw-8;
-    const by=Math.max(plot.P, Math.min(plot.H-plot.B-ch, best.y-ch/2));
-    rect.setAttribute('x',bx); rect.setAttribute('y',by);
-    rect.setAttribute('width',cw); rect.setAttribute('height',ch);
-    txt.setAttribute('x',bx+5); txt.setAttribute('y',by+ch-(plot.big?7:5));
-    lbl.style.display='';
-  }
   if(tip&&!plot.big){
     tip.textContent=plot.fmt(best.t);
     tip.style.display='';tip.style.left=(e.clientX+12)+'px';tip.style.top=(e.clientY-32)+'px';
   }else if(tip){tip.style.display='none';}
+}
+function showCross(k, t, own){
+  const plot=chartPlots[k], svg=document.getElementById('cv-'+cssId(k));
+  if(!plot||!svg)return;
+  const vl=svg.querySelector('.hvl'),dot=svg.querySelector('.hdot'),lbl=svg.querySelector('.hlbl');
+  // nearest point in time; nothing if the series has no reading near then
+  let lo=0,hi=plot.pts.length-1;
+  while(hi-lo>1){const m=(lo+hi)>>1;if(plot.pts[m].t<t)lo=m;else hi=m;}
+  const best=Math.abs(plot.pts[lo].t-t)<=Math.abs(plot.pts[hi].t-t)?plot.pts[lo]:plot.pts[hi];
+  const near=Math.abs(best.t-t)<=Math.max(plot.gap||0,600);
+  for(const el of [vl,dot,lbl])if(el)el.style.display=near?'':'none';
+  if(!near)return;
+  vl.setAttribute('x1',best.x);vl.setAttribute('x2',best.x);
+  dot.setAttribute('cx',best.x);dot.setAttribute('cy',best.y);
+  const txt=lbl.querySelector('text'), rect=lbl.querySelector('rect');
+  let s1=`${best.v.toFixed(plot.dec)}${plot.unit}`;
+  if(plot.alt){const p=plot.alt(best.v);if(p!=null)s1+=` / ${Math.round(p)} \u00b5mol`;}
+  const label=(own&&plot.big)?`${s1}  \u00b7  ${plot.fmt(best.t)}`:s1;
+  txt.textContent=label;
+  const cw=label.length*(plot.big?7.6:5.6)+10, ch=plot.big?22:16;
+  let bx=best.x+8;
+  if(bx+cw>plot.W-plot.P)bx=best.x-cw-8;
+  const by=Math.max(plot.P, Math.min(plot.H-plot.B-ch, best.y-ch/2));
+  rect.setAttribute('x',bx); rect.setAttribute('y',by);
+  rect.setAttribute('width',cw); rect.setAttribute('height',ch);
+  txt.setAttribute('x',bx+5); txt.setAttribute('y',by+ch-(plot.big?7:5));
 }
 function chartLeave(){
   document.querySelectorAll('svg.cmini .hvl, svg.cmini .hdot, svg.cmini .hlbl')

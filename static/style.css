@@ -1227,3 +1227,12 @@ html.lbopen,html.lbopen body{overflow:hidden}
 #photo,#vframe{touch-action:manipulation;cursor:zoom-in}
 #cfgform [aria-invalid="true"]{outline:2px solid var(--bad);outline-offset:1px}
 body.heatelsewhere #heatrow{display:none !important}
+/* chart axes: faint gridlines at round values and times, labelled; shaded nights */
+svg.cmini .cgrid{stroke:var(--line);stroke-width:1;vector-effect:non-scaling-stroke}
+svg.cmini .cvgrid{stroke-dasharray:2 4;opacity:.7}
+svg.cmini .cyax,svg.cmini .cxax{fill:var(--muted)}
+/* a halo in the card colour keeps value labels readable where the line crosses them */
+svg.cmini .cyax{paint-order:stroke;stroke:var(--surface-2);stroke-width:3px;stroke-linejoin:round}
+svg.cmini .cnight{fill:var(--fir);opacity:.07}
+.chartkey{font-size:12px;color:var(--muted);display:inline-flex;align-items:center;gap:5px}
+.nightkey{display:inline-block;width:14px;height:10px;border-radius:2px;background:var(--fir);opacity:.18}

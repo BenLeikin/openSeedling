@@ -1817,6 +1817,33 @@ def _shared_sensors():
           "the Setups editor offers only sensors that need placing, has a Heat mat box, and the "
           "heat mat controls show on their setup's tab")
 
+
+def _charts():
+    """The chart grid: labelled axes, lights-off shading, one crosshair across
+    every chart, and the heat mat's power where it belongs."""
+    js = (APP / "static" / "app.js").read_text()
+    html = (APP / "templates" / "index.html").read_text()
+    css = (APP / "static" / "style.css").read_text()
+    dm = re.search(r"function drawMini\(key\)\{[\s\S]*?\n\}\nfunction chartMove", js)
+    body = dm.group(0) if dm else ""
+    check("h+=nightBands(x0,x1,sx,P,H-B);" in body and "niceTicks(y0,y1,big?5:3)" in body
+          and "h+=timeTicks(x0,x1,sx,P,H-B,W,FS,big);" in body and 'class="cyax"' in body
+          and 'stroke="#e6f0de"' not in body,
+          "every chart has value labels at round numbers, time labels at round hours, and "
+          "themed gridlines instead of bright white ones")
+    check("match:k=>k.startsWith('temp:soil')||k.startsWith('probe:')||k.startsWith('heat:')" in js
+          and "s.startsWith('canopy:')||s.startsWith('heat:'))return '%';" in js
+          and "const stepped=key.startsWith('heat:');" in body,
+          "Heat mat power sits with Soil, in percent on a 0-100 scale, drawn as steps (one "
+          "level per 15-minute window)")
+    mv = re.search(r"function chartMove\(e\)\{[\s\S]*?\n\}", js)
+    check(mv and "for(const k of Object.keys(chartPlots))" in mv.group(0)
+          and "showCross(k, best.t, k===key);" in mv.group(0) and "function showCross(k, t, own)" in js,
+          "hovering one chart shows the same moment on every chart")
+    check('data-h="6"' in html and 'data-h="72"' in html and "nightkey" in html
+          and "svg.cmini .cnight" in css,
+          "6-hour and 3-day ranges, and a key for the lights-off shading")
+
 def run(name, fn):
     """A section that crashes counts as one failure; the rest still run."""
     section(name)
@@ -1853,6 +1880,7 @@ run('Photo light', _photo_light)
 run('Canopy staleness', _canopy_stale)
 run('Heat mat', _heat_mat)
 run('Shared sensors and the heat mat setup', _shared_sensors)
+run('Charts', _charts)
 run('Shutdown', _shutdown)
 
 # --------------------------------------------------------------------------

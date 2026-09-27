@@ -47,8 +47,10 @@ the watering controls, and the daily AI plant-health report.*
 - Logs air temp / humidity / pressure, soil temp, lux, and per-tray soil
   moisture to SQLite (WAL), with raw samples rolled up to hourly past 30 days.
 - A chart grid with every sensor at once, grouped Soil / Environment / Canopy;
-  24 h default with 7 d and 30 d ranges, per-chart expand, and a hover/tap
-  crosshair with the value on the line.
+  24 h default with 6 h, 3 d, 7 d and 30 d ranges, per-chart expand, value
+  labels at round numbers, time labels at round hours (or dates), lights-off
+  hours shaded, and one hover/tap crosshair that shows the same moment on every
+  chart. Heat mat power sits with Soil, 0-100%, drawn as one step per window.
 - Target bands on soil temperature and humidity; barometric tendency with a
   plain-language reading and trend line.
 - Staleness marking: chips dim and charts get a badge when a reading is older
