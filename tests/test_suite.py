@@ -2027,6 +2027,28 @@ def _review_fixes():
           and growth.imread_min(cv2, big, 3000).shape[:2] == (2448, 3264),
           "an 8-megapixel photo needed at 1000 px is decoded at half size (a quarter of the memory)")
 
+
+def _form_validity():
+    """27 Sep: Save did nothing. The migrated video speed 7.92 broke the field's
+    step="1", and the browser silently refused to submit while that field sat
+    in a closed section."""
+    html = (APP / "templates" / "index.html").read_text()
+    check(re.search(r'<form id="cfgform"[^>]*\bnovalidate\b', html) is not None,
+          "the settings form leaves validation to the server, so a hidden field can never "
+          "silently block Save")
+    bad = []
+    for m in re.finditer(r'<input name="(\w+)" type="number"([^>]*)>', html):
+        name, attrs = m.group(1), m.group(2)
+        st = re.search(r'step="([^"]+)"', attrs)
+        if name not in config.DEFAULTS or not st or st.group(1) == "any":
+            continue
+        step = float(st.group(1))
+        v = config.DEFAULTS[name]
+        if isinstance(v, (int, float)) and abs(v / step - round(v / step)) > 1e-9:
+            bad.append(f"{name}={v} step {step}")
+    check(not bad and 'name="video_fps" type="number" min="1" max="60" step="any"' in html,
+          f"every default fits its field's step, and the speeds take decimals ({bad or 'ok'})")
+
 def run(name, fn):
     """A section that crashes counts as one failure; the rest still run."""
     section(name)
@@ -2065,6 +2087,7 @@ run('Heat mat', _heat_mat)
 run('Shared sensors and the heat mat setup', _shared_sensors)
 run('Charts', _charts)
 run('Review fixes', _review_fixes)
+run('Settings form validity', _form_validity)
 run('Shutdown', _shutdown)
 
 # --------------------------------------------------------------------------

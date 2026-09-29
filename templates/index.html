@@ -282,7 +282,11 @@
 
 <details class="card aset editonly">
   <summary><h2>&#127807; Settings</h2></summary>
-  <form id="cfgform">
+  <!-- novalidate: the browser's own checks silently blocked Save when a field
+       it disliked sat in a closed section (update 29's 7.92 video speed vs
+       step 1). The server validates every field and the page names the bad
+       one and opens its section. -->
+  <form id="cfgform" novalidate>
 
     <details class="fgroup">
       <summary><h3>Alerts</h3></summary>
@@ -405,9 +409,9 @@
         <div class="checkrow"><input type="checkbox" name="capture_enabled" id="capen">
           <label for="capen">Timelapse capture</label></div>
         <div><label>Photo interval (min) <input name="capture_interval_min" type="number" min="5" max="720" required></label></div>
-        <div><label>Player speed (frames/s) <input name="player_fps" type="number" min="0.5" max="30" step="0.5" required></label>
+        <div><label>Player speed (frames/s) <input name="player_fps" type="number" min="0.5" max="30" step="any" required></label>
           <span class="fhint">The Grow player on this page.</span></div>
-        <div><label>Video speed (frames/s) <input name="video_fps" type="number" min="1" max="60" step="1" required></label>
+        <div><label>Video speed (frames/s) <input name="video_fps" type="number" min="1" max="60" step="any" required></label>
           <span class="fhint">The downloaded video. Changing it re-renders the video.</span></div>
         <div class="checkrow"><input type="checkbox" name="capture_set_light" id="capsetlight">
           <label for="capsetlight">Set the light for each photo</label></div>
