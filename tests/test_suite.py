@@ -2049,6 +2049,22 @@ def _form_validity():
     check(not bad and 'name="video_fps" type="number" min="1" max="60" step="any"' in html,
           f"every default fits its field's step, and the speeds take decimals ({bad or 'ok'})")
 
+
+def _phone_layout():
+    """29 Sep, on Ben's phone: the planting map's five columns widened the page
+    past the screen, so the browser zoomed the whole dashboard out."""
+    js = (APP / "static" / "app.js").read_text()
+    css = (APP / "static" / "style.css").read_text()
+    check('<div class="tscroll"><div class="tgrid" style="--tcols:${cols}">' in js
+          and "h+='</div></div></div>';" in js
+          and ".tscroll{overflow-x:auto" in css
+          and "grid-template-columns:repeat(var(--tcols,4),minmax(132px,1fr))" in css
+          and ".tdlbl{width:" not in css,
+          "on a phone a tray scrolls sideways inside its card at a readable cell width, and the "
+          "page stays the width of the screen")
+    check("filter(v=>v&&(v.seed||v.equipment||v.planted||v.sprouted||v.archived)).length" in js,
+          "a cleared cell no longer counts as filled in the tray's count")
+
 def run(name, fn):
     """A section that crashes counts as one failure; the rest still run."""
     section(name)
@@ -2088,6 +2104,7 @@ run('Shared sensors and the heat mat setup', _shared_sensors)
 run('Charts', _charts)
 run('Review fixes', _review_fixes)
 run('Settings form validity', _form_validity)
+run('Phone layout', _phone_layout)
 run('Shutdown', _shutdown)
 
 # --------------------------------------------------------------------------

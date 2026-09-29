@@ -360,7 +360,9 @@ svg.cmini{width:100%;height:96px;display:block;cursor:crosshair}
 .tray-head{display:flex;align-items:center;gap:8px;margin-bottom:6px}
 .tray-head b{font-size:14px;color:var(--leaf)}
 .tray-head .tsum{font-size:12px;color:var(--leaf);font-weight:400}
-.tgrid{display:grid;gap:6px}
+.tgrid{display:grid;gap:6px;grid-template-columns:repeat(var(--tcols,4),minmax(0,1fr))}
+.tscroll{max-width:100%}
+.tcell{min-width:0}
 .tcell{background:var(--surface-2);border:1px solid var(--line);border-radius:8px;
   padding:6px 7px;display:flex;flex-direction:column;gap:4px;min-height:78px}
 .tcell.filled{background:var(--surface-2);border-color:var(--line-2)}
@@ -687,7 +689,7 @@ svg.cmini{height:140px}
 .tcell input.tsprdate{color:var(--good);border-color:#a8d08a;background:var(--input-bg)}
 .tdrow{display:flex;align-items:center;gap:5px;margin:0}
 .tdlbl{font-size:9px;font-weight:700;color:var(--leaf);text-transform:uppercase;
-  letter-spacing:.05em;width:30px;flex:none}
+  letter-spacing:.05em;flex:none}
 .tdlbl.up{color:var(--good)}
 .tdrow .tdate{flex:1;min-width:0}
 
@@ -767,7 +769,7 @@ body.readonly .tcell textarea{background:var(--surface-2);border-color:transpare
   .tcell input.tseed{font-size:11px}
   .tcell input.tdate{font-size:10px}
   .tdrow{gap:3px}
-  .tdlbl{width:22px;font-size:8px}
+  .tdlbl{font-size:8px}
   .tstat{font-size:9px;line-height:1.25}
   /* icon-only actions: "Un-sprout" cannot fit a third of a phone screen */
   .blong{display:none}
@@ -783,7 +785,6 @@ body.readonly .tcell textarea{background:var(--surface-2);border-color:transpare
 @media (max-width:420px){
   .tcell input,.tcell textarea{font-size:10px}
   .tcell input.tdate{font-size:9px}
-  .tdlbl{width:18px}
 }
 #rectwrap{margin-top:10px}
 #rectimg{width:100%;border-radius:10px;border:1.5px solid var(--line);display:block}
@@ -1241,3 +1242,10 @@ svg.cmini .cnight{fill:var(--fir);opacity:.07}
 #chartgrid .cgrid{display:flex;flex-wrap:wrap;gap:10px}
 #chartgrid .cgrid>.ccard{flex:1 1 calc((100% - (var(--cols,3) - 1) * 10px) / var(--cols,3));min-width:0;box-sizing:border-box}
 #chartgrid .cgrid>.ccard.expanded{flex-basis:100%}
+/* Phones: a tray keeps its real column count and scrolls sideways inside
+   its card, instead of pushing the page wider than the screen (which made the
+   browser zoom the whole dashboard out) */
+@media (max-width:700px){
+  .tscroll{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 -2px;padding:0 2px 6px}
+  .tscroll .tgrid{grid-template-columns:repeat(var(--tcols,4),minmax(132px,1fr))}
+}

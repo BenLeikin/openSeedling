@@ -2174,12 +2174,16 @@ function renderTrays(j){
   for(const id of Object.keys(trays).sort().filter(trayInSetup)){
     const tr=trays[id]||{}, cells=tr.cells||{};
     const rows=tr.rows||3, cols=tr.cols||4;
-    const filled=Object.keys(cells).length;
+    // a cell counts when it holds something, not merely when it has a record
+    // (a cleared cell keeps an empty one: "20 of 20" with A4 empty)
+    const filled=Object.values(cells).filter(v=>v&&(v.seed||v.equipment||v.planted||v.sprouted||v.archived)).length;
     h+=`<div class="tray"><div class="tray-head">`
       +`<b>${esc(tr.label||('Tray '+id))}</b>`
       +`<span class="tsum">${filled} of ${rows*cols} cells filled</span>`
       +`</div>`
-      +`<div class="tgrid" style="grid-template-columns:repeat(${cols},1fr)">`;
+      // the grid scrolls sideways inside its card on a phone instead of
+      // widening the whole page (5 columns of cells need ~600 px)
+      +`<div class="tscroll"><div class="tgrid" style="--tcols:${cols}">`;
     for(let r=1;r<=rows;r++){
       for(let c=0;c<cols;c++){
         const cid=colL(c)+r, v=cells[cid]||{};
@@ -2245,7 +2249,7 @@ function renderTrays(j){
             </div>`;
       }
     }
-    h+='</div></div>';
+    h+='</div></div></div>';               // .tgrid, .tscroll, .tray
   }
   wrap.innerHTML=h;
   {const filled=Object.values(trays).reduce((n,t)=>n+Object.keys(t.cells||{}).length,0);
