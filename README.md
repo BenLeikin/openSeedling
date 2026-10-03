@@ -247,6 +247,26 @@ the wedge is where the total should be at each hour of the photoperiod.
   setup claims is listed as shared. The grouping is worked out from Settings,
   Setups each time a report runs, so a change applies to the next report.
 
+### Touchscreen on the Pi's own HDMI (optional)
+
+A small HDMI touchscreen on the stand can show the full dashboard without a
+second computer:
+
+    bash scripts/kiosk.sh install --rotate 90     # portrait; 0, 90, 180 or 270
+    bash scripts/kiosk.sh touch-rotate 90         # only if taps land in the wrong place
+    bash scripts/kiosk.sh status                  # running? memory used?
+    bash scripts/kiosk.sh remove                  # back to headless
+
+It runs cog (a WebKit browser) inside cage (a one-window Wayland compositor),
+no desktop, under a hard memory ceiling (`MemoryMax=210M`) and first in line
+for the out-of-memory killer, so the screen may blank and restart under
+pressure but cannot take the controller down. The screen counts as signed in
+(`GROWLIGHT_TRUST_LOCALHOST=1` in `.env`, set by the script): only a process
+on the Pi itself connects from 127.0.0.1; the public site still needs the
+password. On a Zero the touch panel's USB needs a hub on the single port the
+camera uses: a powered USB 2.0 high-speed hub, checked with `lsusb -t`
+(the camera must show `480M`).
+
 ### Safeguards against a bad day
 
 - `config.json` is written atomically (temp file, fsync, rename) and the

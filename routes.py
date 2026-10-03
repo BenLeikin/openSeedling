@@ -91,7 +91,12 @@ def auth_enabled():
 
 def is_authed():
     # If no password is configured, the dashboard is open (legacy behaviour).
-    return (not auth_enabled()) or bool(session.get("authed"))
+    if not auth_enabled() or session.get("authed"):
+        return True
+    # The touchscreen on this Pi (scripts/kiosk.sh) connects from 127.0.0.1.
+    return bool(config.TRUST_LOCALHOST and has_request_context()
+                and request.remote_addr in ("127.0.0.1", "::1")
+                and not request.headers.get("X-Forwarded-For"))
 
 
 def require_auth(fn):

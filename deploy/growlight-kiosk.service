@@ -1,0 +1,40 @@
+# The touchscreen: the dashboard full screen on the Pi's own HDMI display.
+# Installed by scripts/kiosk.sh (not by setup.sh: it is opt-in).
+#
+# cage is a one-window Wayland compositor and cog a WebKit browser without a
+# desktop around it: the lightest full browser that runs the real dashboard.
+# The memory limits are the point of this unit. The controller runs in 512 MB
+# next to the camera and image jobs, so the screen gets a hard ceiling for the
+# whole session (compositor, browser and WebKit's helper processes) and is the
+# first thing the kernel kills if memory still runs out. The worst case is the
+# screen blanking and coming back, never the controller going down.
+
+[Unit]
+Description=openSeedling touchscreen (cage + cog)
+After=systemd-user-sessions.service growlight.service
+Wants=growlight.service
+Conflicts=getty@tty1.service
+After=getty@tty1.service
+
+[Service]
+User=@RUN_USER@
+PAMName=cage
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+StandardInput=tty-fail
+UtmpIdentifier=tty1
+UtmpMode=user
+Environment=XDG_SESSION_TYPE=wayland
+Environment=KIOSK_ROTATE=@ROTATE@
+Environment=KIOSK_URL=http://127.0.0.1:5000/
+ExecStart=/usr/bin/cage -s -- @APP_DIR@/scripts/kiosk-session.sh
+Restart=always
+RestartSec=5
+MemoryHigh=170M
+MemoryMax=210M
+OOMScoreAdjust=1000
+
+[Install]
+WantedBy=multi-user.target

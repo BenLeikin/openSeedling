@@ -2065,6 +2065,44 @@ def _phone_layout():
     check("filter(v=>v&&(v.seed||v.equipment||v.planted||v.sprouted||v.archived)).length" in js,
           "a cleared cell no longer counts as filled in the tray's count")
 
+
+def _kiosk():
+    """The touchscreen on the Pi's own HDMI: a light browser under a memory
+    ceiling, signed in because it connects from the Pi itself."""
+    unit = (APP / "deploy" / "growlight-kiosk.service").read_text()
+    sh = (APP / "scripts" / "kiosk.sh").read_text()
+    sess = (APP / "scripts" / "kiosk-session.sh").read_text()
+    ok_sh = all(subprocess.run(["bash", "-n", str(APP / "scripts" / f)]).returncode == 0
+                for f in ("kiosk.sh", "kiosk-session.sh"))
+    check(ok_sh and "MemoryMax=210M" in unit and "OOMScoreAdjust=1000" in unit
+          and "Conflicts=getty@tty1.service" in unit and "exec cog" in sess
+          and 'wlr-randr --output "$out" --transform "$KIOSK_ROTATE"' in sess
+          and "install_kiosk" in sh and "remove_kiosk" in sh and "touch_rotate" in sh,
+          "the kiosk installs as an opt-in service with a hard memory ceiling, first in line "
+          "for the OOM killer, portrait rotation, and a clean remove")
+    with config.settings_lock:
+        had_pw = config.settings.get("password_hash")
+        config.settings["password_hash"] = "pbkdf2:sha256:1$x$y"
+    was = config.TRUST_LOCALHOST
+    try:
+        c2 = routes.app.test_client()
+        config.TRUST_LOCALHOST = False
+        off = c2.post("/api/fan", json={"mode": "auto"}).status_code
+        config.TRUST_LOCALHOST = True
+        local = c2.post("/api/fan", json={"mode": "auto"}).status_code
+        proxied = c2.post("/api/fan", json={"mode": "auto"},
+                          headers={"X-Forwarded-For": "203.0.113.9"}).status_code
+        remote = c2.post("/api/fan", json={"mode": "auto"},
+                         environ_base={"REMOTE_ADDR": "10.0.0.69"}).status_code
+    finally:
+        config.TRUST_LOCALHOST = was
+        with config.settings_lock:
+            config.settings["password_hash"] = had_pw
+    check(off == 401 and local == 200 and proxied == 401 and remote == 401,
+          f"with the kiosk on, the Pi's own screen may change things without signing in; "
+          f"anything through a proxy or from another machine still needs the password "
+          f"(off {off}, local {local}, proxied {proxied}, remote {remote})")
+
 def run(name, fn):
     """A section that crashes counts as one failure; the rest still run."""
     section(name)
@@ -2105,6 +2143,7 @@ run('Charts', _charts)
 run('Review fixes', _review_fixes)
 run('Settings form validity', _form_validity)
 run('Phone layout', _phone_layout)
+run('Touchscreen kiosk', _kiosk)
 run('Shutdown', _shutdown)
 
 # --------------------------------------------------------------------------

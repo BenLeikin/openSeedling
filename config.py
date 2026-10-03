@@ -195,6 +195,13 @@ DEFAULTS = {
     },
 }
 HTTP_PORT     = 5000
+
+# Set by scripts/kiosk.sh for the touchscreen on this Pi's own HDMI port:
+# requests from 127.0.0.1 count as signed in, so the screen can change
+# settings without a login. Only a process on the Pi itself can connect from
+# 127.0.0.1 (the app reads the TCP peer, never X-Forwarded-For), so the public
+# site is unaffected. Do not set it if a reverse proxy runs on this Pi.
+TRUST_LOCALHOST = os.environ.get("GROWLIGHT_TRUST_LOCALHOST", "") == "1"
 CONFIG_PATH   = Path(__file__).with_name("config.json")
 TIMEZONES     = sorted(available_timezones())
 
