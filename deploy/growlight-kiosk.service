@@ -28,7 +28,7 @@ UtmpIdentifier=tty1
 UtmpMode=user
 Environment=XDG_SESSION_TYPE=wayland
 Environment=KIOSK_ROTATE=@ROTATE@
-Environment=KIOSK_URL=http://127.0.0.1:5000/
+Environment=KIOSK_URL=http://127.0.0.1:5000/screen
 ExecStart=/usr/bin/cage -s -- @APP_DIR@/scripts/kiosk-session.sh
 Restart=always
 RestartSec=5

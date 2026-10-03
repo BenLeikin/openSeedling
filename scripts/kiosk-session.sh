@@ -11,7 +11,7 @@ fi
 # loading the page before it answers would leave an error page on screen.
 i=0
 while [ $i -lt 120 ]; do
-    python3 -c "import urllib.request,sys; urllib.request.urlopen(sys.argv[1] + 'api/status', timeout=3)" \
+    python3 -c "import urllib.request,urllib.parse,sys; urllib.request.urlopen(urllib.parse.urljoin(sys.argv[1], '/api/status'), timeout=3)" \
         "$KIOSK_URL" 2>/dev/null && break
     i=$((i + 1))
     sleep 1

@@ -1249,3 +1249,6 @@ svg.cmini .cnight{fill:var(--fir);opacity:.07}
   .tscroll{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 -2px;padding:0 2px 6px}
   .tscroll .tgrid{grid-template-columns:repeat(var(--tcols,4),minmax(132px,1fr))}
 }
+.kioskback{position:fixed;left:12px;bottom:12px;z-index:50;padding:12px 18px;border-radius:12px;
+  background:var(--glass);color:var(--fir);border:1px solid var(--line-2);font-weight:700;text-decoration:none;
+  box-shadow:0 4px 14px rgba(0,0,0,.35)}

@@ -257,6 +257,14 @@ second computer:
     bash scripts/kiosk.sh status                  # running? memory used?
     bash scripts/kiosk.sh remove                  # back to headless
 
+It opens `/screen`, a one-page summary built for the 600 x 1024 portrait panel
+with no scrolling: an attention line, soil and air, the heat mat (Auto / On /
+Off, power), each setup's light (Auto / On / Off, today's light against its
+target) with its trays' moisture, the fan, the reservoir, and the soil
+temperature over the heat mat's power for the last 24 hours. "Full dashboard"
+opens the normal page with a button back, and it returns to the summary by
+itself after three minutes untouched.
+
 It runs cog (a WebKit browser) inside cage (a one-window Wayland compositor),
 no desktop, under a hard memory ceiling (`MemoryMax=210M`) and first in line
 for the out-of-memory killer, so the screen may blank and restart under

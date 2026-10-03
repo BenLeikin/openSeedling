@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>openSeedling · screen</title>
+<link rel="stylesheet" href="/static/screen.css?v={{ v }}">
+</head>
+<body>
+<!-- The touchscreen's summary: everything at a glance on one 600 x 1024
+     portrait screen, no scrolling. scripts/kiosk.sh points the kiosk here.
+     Reads /api/status; the controls post to the same endpoints the
+     dashboard uses, so the server's checks apply. -->
+<header>
+  <div class="brand">openSeedling</div>
+  <div class="hright"><span id="live" class="pill">connecting</span><span id="clock"></span></div>
+</header>
+<div id="attn" class="attn"></div>
+<section class="row two">
+  <div class="tile" id="t-soil"><div class="lbl">Soil</div><div class="big" id="soil">--</div><div class="sub" id="soilsub"></div></div>
+  <div class="tile" id="t-air"><div class="lbl">Air</div><div class="big" id="air">--</div><div class="sub" id="airsub"></div></div>
+</section>
+<section class="tile wide" id="t-heat">
+  <div class="tline"><div><div class="lbl">Heat mat</div><div class="state" id="heat">--</div></div>
+    <div class="seg" data-ctl="heat"><button data-v="auto">Auto</button><button data-v="on">On</button><button data-v="off">Off</button></div></div>
+  <div class="bar"><i id="heatbar"></i></div>
+</section>
+<div id="setups"></div>
+<section class="row two">
+  <div class="tile" id="t-fan"><div class="lbl">Fan</div><div class="state" id="fan">--</div>
+    <div class="seg small" data-ctl="fan"><button data-v="auto">Auto</button><button data-v="on">On</button><button data-v="off">Off</button></div></div>
+  <div class="tile" id="t-res"><div class="lbl">Reservoir</div><div class="state" id="res">--</div><div class="sub" id="ressub"></div></div>
+</section>
+<section class="tile wide" id="t-trend">
+  <div class="tline"><div class="lbl">Soil, last 24 h</div><div class="sub" id="trendsub"></div></div>
+  <svg id="trend" role="img" aria-label="Soil temperature and heat mat power, last 24 hours"></svg>
+</section>
+<footer>
+  <span id="msg"></span>
+  <a class="btn" href="/?kiosk=1">Full dashboard</a>
+</footer>
+<script src="/static/screen.js?v={{ v }}"></script>
+</body>
+</html>

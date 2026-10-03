@@ -2080,6 +2080,18 @@ def _kiosk():
           and "install_kiosk" in sh and "remove_kiosk" in sh and "touch_rotate" in sh,
           "the kiosk installs as an opt-in service with a hard memory ceiling, first in line "
           "for the OOM killer, portrait rotation, and a clean remove")
+    r = c.get("/screen")
+    page = r.get_data(as_text=True)
+    sjs = (APP / "static" / "screen.js").read_text()
+    ajs = (APP / "static" / "app.js").read_text()
+    check(r.status_code == 200 and "/static/screen.js" in page and 'id="setups"' in page
+          and "KIOSK_URL=http://127.0.0.1:5000/screen" in unit
+          and "post('/api/heat', {mode: v})" in sjs and "post('/api/light', {mode: v})" in sjs
+          and "post('/api/settings', {light2_override: v})" in sjs and "post('/api/fan', {mode: v})" in sjs
+          and "setInterval(refresh, 10000)" in sjs and "/api/series?sensor=" in sjs
+          and "location.href='/screen'" in ajs and "kioskback" in ajs,
+          "the touchscreen opens a one-page summary (/screen) with the light, heat mat and fan "
+          "controls; the full dashboard is one tap away and returns to the summary on its own")
     with config.settings_lock:
         had_pw = config.settings.get("password_hash")
         config.settings["password_hash"] = "pbkdf2:sha256:1$x$y"

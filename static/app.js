@@ -1100,6 +1100,19 @@ function togglePlay(){
 }
 var thumbsV=0;          // bumped by the server when thumbnails are rebuilt
 var playerFps=4;        // player_fps: frames a second in the dashboard player
+// Opened from the touchscreen's summary (/?kiosk=1): a button back, and back on
+// its own after three minutes untouched, so the screen never stays scrolled
+// halfway down the dashboard.
+(function kioskReturn(){
+  if(!/[?&]kiosk=1\b/.test(location.search))return;
+  const go=()=>{location.href='/screen';};
+  const b=document.createElement('a');
+  b.href='/screen'; b.className='kioskback'; b.textContent='\u2190 Summary';
+  document.addEventListener('DOMContentLoaded',()=>document.body.appendChild(b));
+  let t=setTimeout(go,180000);
+  ['pointerdown','touchstart','keydown','scroll'].forEach(ev=>
+    addEventListener(ev,()=>{clearTimeout(t);t=setTimeout(go,180000);},{passive:true}));
+})();
 async function loadFrames(){
   if(window._camOn===false)return;
   try{

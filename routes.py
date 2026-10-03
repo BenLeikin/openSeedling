@@ -311,6 +311,12 @@ def index():
     return render_template("index.html", tzs=config.TIMEZONES, v=_asset_ver())
 
 
+@app.route("/screen")
+def screen():
+    """The touchscreen's one-page summary (scripts/kiosk.sh shows it)."""
+    return render_template("screen.html", v=_asset_ver())
+
+
 @app.route("/favicon.ico")
 def favicon():
     # browsers request this at the site root regardless of the <link> tags
