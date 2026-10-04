@@ -210,7 +210,7 @@ addEventListener('resize', drawTrend);
 
 async function refresh() {
   try {
-    const r = await fetch('/api/status', {cache: 'no-store'});
+    const r = await fetch('/api/status?lite=1', {cache: 'no-store'});
     if (!r.ok) throw new Error('HTTP ' + r.status);
     S = await r.json();
     lastOk = Date.now(); failing = false;

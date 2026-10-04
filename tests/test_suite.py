@@ -208,6 +208,9 @@ import monitor            # noqa: E402
 import heat               # noqa: E402
 import camera as camera_mod   # noqa: E402
 import status as status_mod   # noqa: E402
+# Tests change settings directly and read the status straight back; the shared
+# poll build (reused up to 5 s between changes) is checked on its own.
+status_mod.POLL_REUSE_S = 0.0
 import routes             # noqa: E402
 import db                 # noqa: E402
 import sensors            # noqa: E402
@@ -1762,7 +1765,7 @@ def _heat_mat():
     mon = (APP / "monitor.py").read_text()
     check("if(key==='heat:duty')" in js and "if(key.startsWith('heat:'))return false;" in js
           and "if(k.startsWith('heat:')){const hs=setupsList.find(s=>s.heat);" in js
-          and '"dry:", "growth", "moisture:", "heat:"' in mon and '"canopy:", "heat:")' in mon,
+          and '"dry:", "growth", "moisture:", "heat:"' in mon and '"canopy:", "heat:"' in mon,
           "the power level is charted as Heat mat power on the heat mat's tab, never marked stale, "
           "and kept out of sensor health and stuck-sensor checks")
     css = (APP / "static" / "style.css").read_text()
@@ -2176,6 +2179,112 @@ def _settings_layout():
           f"settings are in eight sections with subheadings, every field still present "
           f"({len(names)} fields), sensor smoothing now under Watering")
 
+
+def _optimizations():
+    """3 Oct: OpenCV out of the controller, memory charted, the polled status
+    shared, a lite status for the touchscreen."""
+    # 1. no OpenCV in the controller after every image path has been used
+    import sys as _sys
+    for path in ("/rectified.jpg", "/photo/cropped.jpg"):
+        c.get(path)
+    names = sorted(_sys.modules)
+    loaded = [m for m in ("cv2", "numpy") if m in _sys.modules]
+    srcs = {f: (APP / f).read_text() for f in ("camera.py", "routes.py", "ai_report.py", "monitor.py",
+                                                "status.py", "light.py", "water.py", "heat.py")}
+    no_import = [f for f, t in srcs.items() if "import cv2" in t or "import numpy" in t]
+    check(not no_import and "def imgtool(args, timeout=120):" in srcs["camera.py"]
+          and (APP / "imgtool.py").exists(),
+          f"no controller module imports OpenCV or NumPy; image work runs in imgtool.py "
+          f"(importers: {no_import or 'none'}; already loaded here by the test harness: {loaded})")
+    try:
+        import cv2
+        import numpy as np
+    except Exception:
+        skip("imgtool round trip (OpenCV not installed here)")
+        cv2 = None
+    if cv2 is not None:
+        src = WORK / "it.jpg"
+        img = np.zeros((600, 800, 3), np.uint8)
+        img[:, 400:] = (0, 200, 0)
+        cv2.imwrite(str(src), img)
+        r1 = camera_mod.imgtool(["crop", src, "-", "[0.5, 0, 0.5, 1]", "--q", 90])
+        dec = cv2.imdecode(np.frombuffer(r1.stdout, np.uint8), cv2.IMREAD_COLOR) if r1.stdout else None
+        r2 = camera_mod.imgtool(["rectify", src, WORK / "it_r.jpg",
+                                 "[[0.1,0.1],[0.9,0.1],[0.9,0.9],[0.1,0.9]]", 4, 3, "--max-w", 200])
+        rr = cv2.imread(str(WORK / "it_r.jpg"))
+        r3 = camera_mod.imgtool(["sharpness", src])
+        r4 = camera_mod.imgtool(["rotate", src, 90])
+        rot = cv2.imread(str(src))
+        check(r1.returncode == 0 and dec is not None and dec.shape[:2] == (600, 400)
+              and int(dec[:, :, 1].mean()) > 150
+              and r2.returncode == 0 and rr is not None and max(rr.shape[:2]) == 200
+              and r3.returncode == 0 and float(r3.stdout) >= 0
+              and r4.returncode == 0 and rot.shape[:2] == (800, 600),
+              "imgtool crops, flattens and resizes, scores sharpness and rotates in place")
+    # 2. memory readings
+    mem = monitor.memory_readings()
+    js = (APP / "static" / "app.js").read_text()
+    check({"sys:mem_free", "sys:app_mem"} <= set(mem) and all(v > 0 for v in mem.values())
+          and "{id:'device', title:'Device',           match:k=>k.startsWith('sys:')}" in js
+          and "if(s.startsWith('sys:'))return 'MB';" in js,
+          f"memory is logged each sample and charted under Device ({mem})")
+    # 4. the polled status is built once between changes, and a change is seen at once
+    calls = []
+    real = status_mod.status_payload
+    status_mod.status_payload = lambda authed=None: calls.append(1) or real(authed)
+    status_mod.POLL_REUSE_S = 5.0
+    try:
+        status_mod._poll_cache.clear()
+        for _ in range(3):
+            c.get("/api/status")
+        built_before = len(calls)
+        c.post("/api/fan", json={"mode": "auto"})
+        c.get("/api/status")
+        built_after = len(calls)
+    finally:
+        status_mod.status_payload = real
+        status_mod.POLL_REUSE_S = 0.0
+    check(built_before == 1 and built_after == 2,
+          f"three polls between changes build the status once; a change rebuilds it "
+          f"({built_before} then {built_after})")
+    # 5. the touchscreen's lite status
+    full = c.get("/api/status").get_data()
+    litej = c.get("/api/status?lite=1").get_json()
+    lit = c.get("/api/status?lite=1").get_data()
+    sjs = (APP / "static" / "screen.js").read_text()
+    # 6. the system log is capped
+    sh = (APP / "scripts" / "setup.sh").read_text()
+    jc = (APP / "deploy" / "journald.conf").read_text()
+    check("step_journal" in sh and "SystemMaxUse=50M" in jc and "SystemKeepFree=1G" in jc
+          and subprocess.run(["bash", "-n", str(APP / "scripts" / "setup.sh")]).returncode == 0,
+          "setup.sh caps the system log (50 MB, never within 1 GB of full)")
+    # 7. archived runs make room, oldest first, never the current run
+    arch = WORK / "archive_test"
+    shutil.rmtree(arch, ignore_errors=True)
+    for name in ("20260801_090000", "20260901_090000", "20260920_090000"):
+        (arch / name).mkdir(parents=True)
+        (arch / name / "a.jpg").write_bytes(b"x" * 1000)
+    free = {"gb": 2.0}
+    real_arch = camera_mod.ARCHIVE_DIR
+    camera_mod.ARCHIVE_DIR = arch
+    try:
+        first = camera_mod.prune_archives(lambda: free["gb"] + 1.0 * len(
+            [p for p in ("20260801_090000", "20260901_090000") if not (arch / p).exists()]))
+        left = sorted(p.name for p in arch.iterdir())
+        free["gb"] = 5.0
+        none = camera_mod.prune_archives(lambda: free["gb"])
+    finally:
+        camera_mod.ARCHIVE_DIR = real_arch
+    check(first == ["20260801_090000", "20260901_090000"] and left == ["20260920_090000"]
+          and none == [],
+          f"below 3 GB free the oldest archived runs go first until 4 GB is free, the newest "
+          f"kept; plenty of space removes nothing (removed {first}, left {left})")
+    check(len(lit) < len(full) and "quality" not in litej
+          and "curve" not in (litej.get("day_light") or {})
+          and set(litej["settings"]) == {"units", "probe_cal", "trays"}
+          and "fetch('/api/status?lite=1'" in sjs,
+          f"the touchscreen fetches a lite status ({len(lit)} bytes against {len(full)})")
+
 def run(name, fn):
     """A section that crashes counts as one failure; the rest still run."""
     section(name)
@@ -2219,6 +2328,7 @@ run('Phone layout', _phone_layout)
 run('Touchscreen kiosk', _kiosk)
 run('USB link', _usb_link)
 run('Settings layout', _settings_layout)
+run('Optimizations', _optimizations)
 run('Shutdown', _shutdown)
 
 # --------------------------------------------------------------------------

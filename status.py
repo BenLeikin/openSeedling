@@ -95,6 +95,49 @@ def _status_event(authed):
         return text
 
 
+_poll_cache = {}                   # authed -> (seq, monotonic time, payload dict)
+POLL_REUSE_S = 5.0
+
+
+def shared_payload(authed):
+    """status_payload for the polled endpoint, built at most once per change
+    (and at most every POLL_REUSE_S) per signed-in state. The stream already
+    shares one build per change; the polled endpoint did not, and the
+    touchscreen polls it every 10 s on top of every open tab."""
+    authed = bool(authed)
+    with _status_build_lock:
+        seq, now = _pub_seq[0], time.monotonic()
+        hit = _poll_cache.get(authed)
+        if hit and hit[0] == seq and now - hit[1] < POLL_REUSE_S:
+            return hit[2]
+        p = status_payload(authed)
+        if p.get("error") != "warming up":
+            _poll_cache[authed] = (seq, now, p)
+        return p
+
+
+def lite(payload):
+    """The touchscreen summary's cut of the status: no light-curve points, no
+    quality detail, and only the settings it reads (about a fifth of the size
+    on a box with a planted tray map)."""
+    if payload.get("error"):
+        return payload
+    out = dict(payload)
+    for k in ("quality", "light_plan", "light2_cal"):
+        out.pop(k, None)
+    if isinstance(out.get("day_light"), dict):
+        out["day_light"] = {k: v for k, v in out["day_light"].items() if k != "curve"}
+    out["setups"] = [dict(su, day={k: v for k, v in (su.get("day") or {}).items() if k != "curve"})
+                     for su in (out.get("setups") or [])]
+    cfg = out.get("settings") or {}
+    out["settings"] = {
+        "units": cfg.get("units"),
+        "probe_cal": cfg.get("probe_cal"),
+        "trays": {t: {"label": (v or {}).get("label")} for t, v in (cfg.get("trays") or {}).items()},
+    }
+    return out
+
+
 def _end_streams():
     """Shutdown: release every stream at once. Each one holds a server thread,
     and the server gives threads 5 s to finish before it exits anyway."""

@@ -289,6 +289,26 @@ metrics), **Climate** (heat mat, fan, target bands), **Watering** (auto-watering
 and sensor smoothing), **Camera**, **Setups**, **Trays**, **Alerts**, and
 **System** (location, smart plug, display, backup).
 
+### Memory and storage
+
+- The controller never imports OpenCV (about 40 MB that is never given back).
+  Every warp, crop, rotation, resize and sharpness score runs in `imgtool.py`,
+  a short-lived helper launched like the other image jobs, first in line for
+  the kernel's out-of-memory killer and freed when it exits. Measured on a
+  test box: the controller grew from 39 to 119 MB after a round of image work
+  before, and stays at 40 MB now.
+- Memory is logged every sample and charted under Device: free memory, swap
+  in use, the controller, and the touchscreen session.
+- The polled status is built once per change and shared; every API change
+  announces a new status, so open tabs and the touchscreen update at once.
+  The touchscreen asks for a lite status (`/api/status?lite=1`).
+- `setup.sh` caps the system journal (`deploy/journald.conf`: 50 MB, never
+  within 1 GB of full, one month).
+- Below 3 GB free, archived timelapse runs (`timelapse_archive/`) are removed
+  oldest first until 4 GB is free; the newest archive is kept unless free
+  space drops under 1 GB, and the current run is never touched. Each removal
+  is logged as an event.
+
 ### Safeguards against a bad day
 
 - `config.json` is written atomically (temp file, fsync, rename) and the

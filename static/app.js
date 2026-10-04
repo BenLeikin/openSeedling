@@ -484,6 +484,7 @@ function inSetup(k){
   if(!cs||setupsList.length<2)return true;
   // the heat mat's power level shows on the heat mat's setup (all tabs if none)
   if(k.startsWith('heat:')){const hs=setupsList.find(s=>s.heat);return !hs||hs.id===cs.id;}
+  if(k.startsWith('sys:'))return true;                 // the Pi's own memory, every tab
   // a tray's own sensors (probe, canopy, float) come with the tray
   const m=/^(probe|canopy|float):(.+)$/.exec(k);
   if(m&&cs.trays&&cs.trays.length&&cs.trays.includes(m[2]))return true;
@@ -1370,6 +1371,10 @@ function sensorMeta(key, val){
                   title:val.toFixed(3)+'V'+(m.approx?' - estimated, not yet calibrated':'')};
     return {group:'Soil', label:nm, value:val.toFixed(3), unit:'V', suffix:warn};
   }
+  const SYSL={'sys:mem_free':'Memory free','sys:app_mem':'Controller memory',
+              'sys:screen_mem':'Screen memory','sys:swap':'Swap in use'};
+  if(SYSL[key])return {group:'Device', label:SYSL[key], value:Math.round(val), unit:'MB',
+                       title:'sampled every few minutes; free is what the kernel can still give out'};
   if(key==='heat:duty')  return {group:'Soil', label:'Heat mat power', value:Math.round(val), unit:'%',
                                   title:'the share of each 15-minute cycle the heat mat ran'};
   return {group:'Other', label:key, value:String(val), unit:''};
@@ -1529,6 +1534,7 @@ const CHART_SECTIONS=[
   {id:'env',    title:'Environment',
    match:k=>k==='temp:air'||k==='humidity'||k==='lux'||k.startsWith('lux:')||k==='ppfd'||k==='pressure'},
   {id:'growth', title:'Canopy',           match:k=>k.startsWith('canopy:')},
+  {id:'device', title:'Device',           match:k=>k.startsWith('sys:')},
   {id:'other',  title:'Other',            match:k=>true},
 ];
 let seriesData={}, chartPlots={}, soilTempHigh=85, soilTempLow=80;
@@ -1548,6 +1554,7 @@ function chartHeadUnit(key){
 function chartUnitFor(s){
   if(s.startsWith('temp:'))return tUnit();
   if(s.startsWith('humidity')||s.startsWith('canopy:')||s.startsWith('heat:'))return '%';
+  if(s.startsWith('sys:'))return 'MB';
   if(s.startsWith('probe:')){const t=s.slice(6);
     return (probeCal[t]&&probeCal[t].wet!=null)||probeDefaultCal?'%':'V';}
   if(s.startsWith('lux'))return 'lx';

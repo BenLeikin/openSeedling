@@ -293,9 +293,10 @@ def check_all(snapshot, cfg, unit_temp="F"):
         act = evaluate("disk_low", True, now)
         if act in ("fire", "remind"):
             out.append((act, "disk_low", "SD card nearly full",
-                        f"{snapshot['_disk_low']}. Archive or delete old photos "
-                        "(Camera, Start new timelapse) before it fills: a full "
-                        "card stops the database and settings writes.", "error"))
+                        f"{snapshot['_disk_low']}. Archived timelapse runs are being "
+                        "removed, oldest first (the current run is never touched); "
+                        "if none are left, start a new timelapse or free space by "
+                        "hand. A full card stops the database and settings writes.", "error"))
     else:
         act = evaluate("disk_low", False, now)
         if act == "clear":

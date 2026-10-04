@@ -311,6 +311,16 @@ def index():
     return render_template("index.html", tzs=config.TIMEZONES, v=_asset_ver())
 
 
+@app.after_request
+def _changed(resp):
+    """Any change through the API announces a new status: open tabs and the
+    touchscreen update at once, and the shared status build is not reused
+    across the change (status.shared_payload keys its cache on this)."""
+    if request.method in ("POST", "PUT", "DELETE") and resp.status_code < 500:
+        status_mod.publish("change")
+    return resp
+
+
 @app.route("/screen")
 def screen():
     """The touchscreen's one-page summary (scripts/kiosk.sh shows it)."""
@@ -1093,9 +1103,11 @@ def api_stream():
 
 @app.route("/api/status")
 def status():
-    payload = status_mod.status_payload()
+    payload = status_mod.shared_payload(is_authed())
     if payload.get("error") == "warming up":
         return jsonify(payload), 503
+    if request.args.get("lite"):
+        payload = status_mod.lite(payload)       # the touchscreen summary
     return jsonify(payload)
 
 
@@ -1415,15 +1427,10 @@ def cropped_image():
             return Response(camera_mod._crop_cache["bytes"], mimetype="image/jpeg",
                             headers={"Cache-Control": "no-store"})
     try:
-        import cv2
-        img = cv2.imread(str(latest))
-        if img is None:
-            return ("could not read the photo", 500)
-        ok, buf = cv2.imencode(".jpg", camera_mod.crop_array(img, roi),
-                               [cv2.IMWRITE_JPEG_QUALITY, 88])
-        if not ok:
-            return ("encode failed", 500)
-        data = buf.tobytes()
+        r = camera_mod.imgtool(["crop", latest, "-", json.dumps(list(roi)), "--q", 88])
+        if r.returncode != 0 or not r.stdout:
+            return (f"crop failed: {camera_mod._imgtool_err(r)}", 500)
+        data = r.stdout
         with camera_mod._rect_lock:
             camera_mod._crop_cache.update(key=key, bytes=data)
         return Response(data, mimetype="image/jpeg",
@@ -1456,17 +1463,12 @@ def rectified_image():
             return Response(camera_mod._rect_cache["bytes"], mimetype="image/jpeg",
                             headers={"Cache-Control": "no-store"})
     try:
-        import cv2
-        img = cv2.imread(str(latest))   # photos are stored already rotated
-        if img is None:
-            return ("could not read the photo", 500)
-        out = growth_mod.rectify(img, corners,
-                                 cols=int(grid.get("cols", 4)),
-                                 rows=int(grid.get("rows", 4)))
-        ok, buf = cv2.imencode(".jpg", out, [cv2.IMWRITE_JPEG_QUALITY, 85])
-        if not ok:
-            return ("encode failed", 500)
-        data = buf.tobytes()
+        # photos are stored already rotated
+        r = camera_mod.imgtool(["rectify", latest, "-", json.dumps(corners),
+                                int(grid.get("cols", 4)), int(grid.get("rows", 4)), "--q", 85])
+        if r.returncode != 0 or not r.stdout:
+            return (f"rectify failed: {camera_mod._imgtool_err(r)}", 500)
+        data = r.stdout
         with camera_mod._rect_lock:
             camera_mod._rect_cache.update(key=key, bytes=data)
         return Response(data, mimetype="image/jpeg",

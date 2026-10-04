@@ -60,6 +60,7 @@ render_lock = threading.Lock()
 VIDEO_PATH = TIMELAPSE_DIR / "timelapse.mp4"
 ARCHIVE_DIR = Path(__file__).with_name("timelapse_archive")
 GROWTH_SCRIPT = Path(__file__).with_name("growth.py")
+IMGTOOL = Path(__file__).with_name("imgtool.py")
 
 
 def crop_box(cfg=None):
@@ -120,6 +121,22 @@ def oom_first(cmd):
              "oom-first"] + [str(c) for c in cmd])
 
 
+def imgtool(args, timeout=120):
+    """Run imgtool.py: every OpenCV job, out of the controller's process.
+
+    OpenCV costs about 40 MB once imported and never returns it; run here it
+    is freed when the job ends, and oom_first makes the job, not the
+    controller, the kernel's choice if memory runs out."""
+    return subprocess.run(oom_first([sys.executable, str(IMGTOOL)] + [str(a) for a in args]),
+                          capture_output=True, timeout=timeout)
+
+
+def _imgtool_err(r):
+    if r.returncode < 0 or r.returncode == 137:
+        return killed_msg(r.returncode)
+    return (r.stderr or b"").decode(errors="replace").strip()[-200:] or f"exit {r.returncode}"
+
+
 def killed_msg(r, what):
     """Name an out-of-memory kill instead of reporting "no output"."""
     if r.returncode in (-9, 137):
@@ -160,21 +177,14 @@ def _make_thumb(photo_path, cfg, dst):
     corners = grid.get("corners")
     if cfg.get("timelapse_flatten", True) and corners and len(corners) == 4:
         try:
-            import cv2
             # a 640 px thumbnail does not need all 8 megapixels decoded
-            img = growth_mod.imread_min(cv2, photo_path, 1280)
-            if img is not None:
-                warped = growth_mod.rectify(img, corners,
-                                            cols=int(grid.get("cols", 4)),
-                                            rows=int(grid.get("rows", 4)))
-                h, w = warped.shape[:2]
-                if w > 640:
-                    warped = cv2.resize(warped, (640, max(1, int(h * 640 / w))))
-                ok, buf = cv2.imencode(".jpg", warped, [cv2.IMWRITE_JPEG_QUALITY, 82])
-                if ok:
-                    part.write_bytes(buf.tobytes())
-                    os.replace(part, dst)
-                    return
+            r = imgtool(["rectify", photo_path, part, json.dumps(corners),
+                         int(grid.get("cols", 4)), int(grid.get("rows", 4)),
+                         "--max-w", 640, "--min-side", 1280, "--q", 82])
+            if r.returncode == 0 and part.exists() and part.stat().st_size:
+                os.replace(part, dst)
+                return
+            log.error(f"thumb rectify failed for {photo_path.name} ({_imgtool_err(r)}); plain scale")
         except Exception as e:
             log.error(f"thumb rectify failed for {photo_path.name} ({e}); plain scale")
     roi = crop_box(cfg)
@@ -219,22 +229,15 @@ def frame_view(photo_path, cfg=None):
     roi = None if flatten else crop_box(cfg)
     if not flatten and not roi:
         return None, photo_path
-    import cv2
     with _frame_lock:
-        img = cv2.imread(str(photo_path))
-        if img is None:
-            raise ValueError("unreadable photo")
-        if flatten:
-            out = growth_mod.rectify(img, corners, cols=int(grid.get("cols", 4)),
-                                     rows=int(grid.get("rows", 4)))
-            q = 85                       # as /rectified.jpg
-        else:
-            out = crop_array(img, roi)
-            q = 88                       # as /photo/cropped.jpg
-        ok, buf = cv2.imencode(".jpg", out, [cv2.IMWRITE_JPEG_QUALITY, q])
-    if not ok:
-        raise ValueError("encode failed")
-    return buf.tobytes(), None
+        if flatten:                      # quality as /rectified.jpg
+            r = imgtool(["rectify", photo_path, "-", json.dumps(corners),
+                         int(grid.get("cols", 4)), int(grid.get("rows", 4)), "--q", 85])
+        else:                            # quality as /photo/cropped.jpg
+            r = imgtool(["crop", photo_path, "-", json.dumps(list(roi)), "--q", 88])
+    if r.returncode != 0 or not r.stdout:
+        raise ValueError(_imgtool_err(r))
+    return r.stdout, None
 
 
 def frame_etag(photo_path, cfg):
@@ -382,15 +385,9 @@ def _postprocess_file(path, cfg):
     if degrees not in (90, 180, 270):
         return
     try:
-        import cv2
-        img = cv2.imread(str(path))
-        if img is None:
-            return
-        if degrees in (90, 180, 270):
-            img = cv2.rotate(img, {90: cv2.ROTATE_90_CLOCKWISE,
-                                   180: cv2.ROTATE_180,
-                                   270: cv2.ROTATE_90_COUNTERCLOCKWISE}[degrees])
-        cv2.imwrite(str(path), img, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        r = imgtool(["rotate", path, degrees, "--q", 90])
+        if r.returncode != 0:
+            log.error(f"post-process failed ({_imgtool_err(r)}); keeping the frame as captured")
     except Exception as e:
         log.error(f"post-process failed ({e}); keeping the frame as captured")
 
@@ -573,6 +570,10 @@ def _capture_tick(last_shot):
         in_day = on_time is not None and on_time <= now <= off_time
         due = (last_shot is None or
                now - last_shot >= timedelta(minutes=cfg["capture_interval_min"]))
+        if time.time() - _pruned_check[0] > 3600:
+            _pruned_check[0] = time.time()
+            if disk_free_gb() < LOW_FREE_GB:
+                prune_archives()
         if in_day and due and disk_free_gb() < MIN_FREE_GB:
             # A full SD card stops the database and settings writes too,
             # so photos are what give way. Logged once an hour; the alert
@@ -616,8 +617,47 @@ def usb_link_speed(dev):
 
 
 MIN_FREE_GB = 1.0          # stop taking photos below this much free space
-LOW_FREE_GB = 3.0          # alert below this
+LOW_FREE_GB = 3.0          # alert below this, and start removing archived runs
+PRUNE_TARGET_GB = 4.0      # removing archived runs stops once this much is free
 _disk_warned = [0.0]
+
+
+_pruned_check = [0.0]
+
+
+def prune_archives(free_fn=None):
+    """Make room by deleting archived timelapse runs, oldest first, when the
+    SD card is low. Archived runs are the ones "Start new timelapse" moved to
+    timelapse_archive/; the current run is never touched.
+
+    Below LOW_FREE_GB it deletes the oldest archive, then the next, until
+    PRUNE_TARGET_GB is free, keeping the newest archive unless free space is
+    below MIN_FREE_GB (where photos would stop anyway). Each removal is an
+    event, so nothing goes quietly. Returns the names removed."""
+    free_fn = free_fn or disk_free_gb
+    removed = []
+    try:
+        runs = sorted(p for p in ARCHIVE_DIR.iterdir() if p.is_dir())
+    except FileNotFoundError:
+        return removed
+    while runs and free_fn() < PRUNE_TARGET_GB:
+        if len(runs) == 1 and free_fn() >= MIN_FREE_GB:
+            break                        # the newest archive stays unless it is that or the photos
+        if removed == [] and free_fn() >= LOW_FREE_GB:
+            break                        # only start below the alert level
+        old = runs.pop(0)
+        n = sum(1 for _ in old.glob("*.jpg"))
+        mb = sum(f.stat().st_size for f in old.rglob("*") if f.is_file()) / 1e6
+        shutil.rmtree(old, ignore_errors=True)
+        removed.append(old.name)
+        msg = (f"removed archived timelapse {old.name} ({n} photos, {mb:.0f} MB): "
+               f"the SD card was low on space")
+        log.warning(msg)
+        try:
+            db.log_event("disk", msg)
+        except Exception:
+            pass
+    return removed
 
 
 def disk_free_gb(path=None):
@@ -638,29 +678,24 @@ def _flatten_frames_to(dest, frames, cfg):
     rectified are copied through unchanged rather than dropped, so a bad frame
     leaves a blip instead of a gap in the timeline.
     """
-    import shutil
     grid = cfg.get("grid") or {}
     corners = grid.get("corners")
     if not corners or len(corners) != 4:
         return None
-    try:
-        import cv2
-    except Exception:
-        return None
     dest.mkdir(parents=True, exist_ok=True)
     for old in dest.glob("*.jpg"):
         old.unlink()
-    cols, rows = int(grid.get("cols", 4)), int(grid.get("rows", 4))
-    for i, src in enumerate(frames):
-        out = dest / f"{i:06d}.jpg"
-        try:
-            img = cv2.imread(str(src))
-            if img is None:
-                raise ValueError("unreadable")
-            warped = growth_mod.rectify(img, corners, cols=cols, rows=rows)
-            cv2.imwrite(str(out), warped, [cv2.IMWRITE_JPEG_QUALITY, 88])
-        except Exception:
-            shutil.copyfile(src, out)
+    listfile = dest / "frames.txt"
+    listfile.write_text("\n".join(str(f) for f in frames) + "\n")
+    try:
+        r = imgtool(["flatten", dest, listfile, json.dumps(corners),
+                     int(grid.get("cols", 4)), int(grid.get("rows", 4)), "--q", 88],
+                    timeout=4 * 3600)
+    finally:
+        listfile.unlink(missing_ok=True)
+    if r.returncode != 0:
+        log.error(f"flattening frames failed ({_imgtool_err(r)})")
+        return None
     return dest
 
 
@@ -824,13 +859,9 @@ def sharpness_score(path):
     are bench clutter that would reward focusing on the wrong thing.
     Returns None when the frame can't be read."""
     try:
-        import cv2
-        img = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
-        if img is None:
-            return None
-        h, w = img.shape[:2]
-        img = img[h // 4: 3 * h // 4, w // 4: 3 * w // 4]
-        return float(cv2.Laplacian(img, cv2.CV_64F).var())
+        r = imgtool(["sharpness", path], timeout=60)
+        v = float((r.stdout or b"nan").decode().strip() or "nan")
+        return None if r.returncode != 0 or v != v else v
     except Exception as e:
         log.error(f"sharpness score failed: {e}")
         return None

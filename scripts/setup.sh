@@ -149,6 +149,7 @@ provision() {
   step_modules
   step_groups
   step_swap
+  step_journal
   step_venv
   step_unit
   [[ "$MODE" == apply ]] && step_location
@@ -441,6 +442,23 @@ step_swap() {
     grep -qxF "/swapfile none swap sw 0 0" /etc/fstab \
       || echo "/swapfile none swap sw 0 0" | sudo tee -a /etc/fstab > /dev/null
     echo "    created /swapfile (1 GB)"
+  fi
+}
+
+step_journal() {
+  step "System log size"
+  # deploy/journald.conf caps the journal so it neither wears nor fills the SD card
+  local src="$REPO_ROOT/deploy/journald.conf"
+  local dst="${JOURNALD_DROPIN:-/etc/systemd/journald.conf.d/openseedling.conf}"
+  if [[ -f "$dst" ]] && cmp -s "$src" "$dst"; then
+    ok "capped ($(grep -m1 '^SystemMaxUse' "$src"))"
+  elif [[ "$MODE" == check ]]; then
+    drift "journal size cap not installed ($dst)"
+  else
+    sudo mkdir -p "$(dirname "$dst")"
+    sudo install -m 644 "$src" "$dst"
+    sudo systemctl restart systemd-journald 2>/dev/null || true
+    ok "installed $dst"
   fi
 }
 

@@ -579,6 +579,40 @@ def report_loop():
         time.sleep(60)
 
 
+KIOSK_CGROUP = Path("/sys/fs/cgroup/system.slice/growlight-kiosk.service/memory.current")
+
+
+def memory_readings():
+    """Memory every sample interval, in MB: what the kernel still has to give
+    (MemAvailable), swap in use, the controller's own resident size, and the
+    touchscreen's whole session if it runs. The 26 Sep out-of-memory kill of
+    the controller left no trend behind; the next one will."""
+    out = {}
+    try:
+        mi = {}
+        for line in open("/proc/meminfo"):
+            k, v = line.split(":", 1)
+            mi[k] = int(v.split()[0])            # kB
+        out["sys:mem_free"] = round(mi["MemAvailable"] / 1024, 1)
+        if mi.get("SwapTotal"):
+            out["sys:swap"] = round((mi["SwapTotal"] - mi.get("SwapFree", 0)) / 1024, 1)
+    except Exception:
+        pass
+    try:
+        for line in open("/proc/self/status"):
+            if line.startswith("VmRSS:"):
+                out["sys:app_mem"] = round(int(line.split()[1]) / 1024, 1)
+                break
+    except Exception:
+        pass
+    try:
+        if KIOSK_CGROUP.exists():
+            out["sys:screen_mem"] = round(int(KIOSK_CGROUP.read_text().strip()) / 1048576, 1)
+    except Exception:
+        pass
+    return out
+
+
 def sample_loop():
     """Read all sensors on an interval, log them in one transaction, and run
     daily downsampling. Tolerant: a read failure logs nothing and tries again
@@ -590,6 +624,10 @@ def sample_loop():
             interval = max(1, int(config.settings.get("sample_interval_min", 5)))
         try:
             readings = validate_readings(sensors.read_all())
+            mem = memory_readings()
+            if mem:
+                # charted under Device; never alerted on or fed to the AI report
+                db.log_many(list(mem.items()))
             if readings:
                 db.log_many(list(readings.items()))
                 run_alerts(readings)
@@ -651,7 +689,7 @@ SEEN_TTL = 3 * 86400    # a sensor silent this long is treated as removed
 
 # binary sensors are legitimately constant for days; a flatline there means
 # nothing and accusing them would train you to ignore the rule
-NON_STUCK_PREFIXES = ("float:", "reservoir:", "canopy:", "heat:")
+NON_STUCK_PREFIXES = ("float:", "reservoir:", "canopy:", "heat:", "sys:")
 
 
 def stuck_sensors(cadence_s):
@@ -682,7 +720,7 @@ def sensor_health(cfg, snap=None, max_age=60):
     out = {}
     canopy_since = camera_mod.canopy_due_since(cfg)
     for key, (ts, _v) in snap.items():
-        if key.startswith(("dry:", "growth", "moisture:", "heat:")):
+        if key.startswith(("dry:", "growth", "moisture:", "heat:", "sys:")):
             continue
         age = now - ts
         if key.startswith("canopy:"):

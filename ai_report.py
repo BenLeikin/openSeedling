@@ -48,29 +48,18 @@ def have_key():
 
 def _image_b64(path, crop=None):
     """Return a base64 JPEG of the photo, cut to `crop` (x, y, w, h fractions)
-    if given, downscaled to MAX_IMG_W on the long edge. Falls back to the raw
-    file bytes if OpenCV isn't available."""
+    if given, downscaled to MAX_IMG_W on the long edge. The resize runs in
+    imgtool.py, a separate process, so the controller never loads OpenCV.
+    Falls back to the raw file bytes if that fails."""
     try:
-        import cv2
-        try:
-            import growth
-            need = MAX_IMG_W / max(0.05, min(crop[2], crop[3])) if crop else MAX_IMG_W
-            img = growth.imread_min(cv2, path, need)
-        except Exception:
-            img = cv2.imread(str(path))
-        if img is not None and crop:
-            ih, iw = img.shape[:2]
-            x, y, w, h = crop
-            x0, y0 = int(iw * x), int(ih * y)
-            img = img[y0:y0 + max(2, int(ih * h)), x0:x0 + max(2, int(iw * w))]
-        if img is not None:
-            h, w = img.shape[:2]
-            if max(h, w) > MAX_IMG_W:
-                s = MAX_IMG_W / float(max(h, w))
-                img = cv2.resize(img, (max(1, int(w * s)), max(1, int(h * s))))
-            ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 85])
-            if ok:
-                return base64.b64encode(buf.tobytes()).decode()
+        import json as _json
+        import camera
+        roi = list(crop) if crop else [0, 0, 1, 1]
+        need = MAX_IMG_W / max(0.05, min(roi[2], roi[3]))
+        r = camera.imgtool(["crop", path, "-", _json.dumps(roi), "--max-w", MAX_IMG_W,
+                            "--min-side", int(need), "--q", 85])
+        if r.returncode == 0 and r.stdout:
+            return base64.b64encode(r.stdout).decode()
     except Exception:
         pass
     return base64.b64encode(Path(path).read_bytes()).decode()
