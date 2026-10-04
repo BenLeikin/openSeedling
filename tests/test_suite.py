@@ -49,7 +49,15 @@ WORK = Path(tempfile.mkdtemp(prefix="openseedling-test-"))
 APP = WORK / "app"
 # growlight.py is the entry point; the app's code lives in these modules
 APP_MODULES = ("growlight.py", "config.py", "hardware.py", "light.py", "setups.py",
-               "water.py", "monitor.py", "heat.py", "camera.py", "status.py", "routes.py")
+               "water.py", "monitor.py", "heat.py", "camera.py", "status.py", "routes.py",
+               "routes_camera.py", "routes_garden.py", "routes_climate.py", "routes_data.py")
+
+
+def page_js():
+    """The dashboard's scripts (static/js/*.js, loaded in this order by the
+    page), joined: what static/app.js was before the 4 Oct split."""
+    order = re.findall(r"filename='js/(\w+\.js)'", (APP / "templates" / "index.html").read_text())
+    return "\n".join((APP / "static" / "js" / f).read_text() for f in order)
 
 
 def app_source():
@@ -181,7 +189,7 @@ for p in sorted(APP.rglob("*.py")):
         bad.append(f"{p.relative_to(APP)}:{e.lineno}")
 check(not bad, "every Python file parses" + (f" {bad}" if bad else ""))
 
-js = (APP / "static" / "app.js").read_text()
+js = page_js()
 posts = re.findall(r"fetch\((['\"`][^'\"`]+['\"`])\s*,\s*\{method:'POST'(.{0,160})", js, re.S)
 no_json = [u for u, rest in posts if "application/json" not in rest]
 check(posts and not no_json, f"every dashboard POST sends JSON ({len(posts)} calls)" + (f" {no_json}" if no_json else ""))
@@ -524,14 +532,14 @@ def _dli_band():
     check("15-20" in msg and "6-12" not in msg, "the short-day alert quotes the configured band")
     ctx = ai_report.build_context({"light_metrics": {"ppfd": 200, "dli": 9.0, "dli_target": [15, 20]}})
     check("15-20" in ctx and "6-12" not in ctx, "the AI report is told the configured band")
-    stale = [f for f in ("static/app.js", "templates/index.html", *APP_MODULES,
-                         "alerts.py", "ai_report.py")
+    stale = [f for f in ("templates/index.html", *APP_MODULES, "alerts.py", "ai_report.py",
+                         *(str(p.relative_to(APP)) for p in sorted((APP / "static" / "js").glob("*.js"))))
              if re.search(r"\b6-12\b", (APP / f).read_text())]
     check(not stale, "no hardcoded 6-12 band left" + (f" {stale}" if stale else ""))
 
 
 def _camera_flatten():
-    js = (APP / "static" / "app.js").read_text()
+    js = page_js()
     html = (APP / "templates" / "index.html").read_text()
     check('name="timelapse_flatten"' in html and "timelapse_flatten===false" in js,
           "the snapshot's flattening follows a visible setting")
@@ -615,7 +623,7 @@ def _camera_modes_and_reset():
                                       "roi": "0.2,0.2,0.4,0.4"}).get_json()
     check(not r.get("crop_reset") and config.settings["roi"] == "0.2,0.2,0.4,0.4",
           "a crop drawn in the same save as a new size is kept")
-    js = (APP / "static" / "app.js").read_text()
+    js = page_js()
     html = (APP / "templates" / "index.html").read_text()
     check('id="cropreset"' in html and "getElementById('cropreset')" in js,
           "a Reset crop button sits beside Crop when a crop is set")
@@ -675,7 +683,7 @@ def _camera_crop():
 
 
 def _timelapse_sharp():
-    js = (APP / "static" / "app.js").read_text()
+    js = page_js()
     css = (APP / "static" / "style.css").read_text()
     show = re.search(r"function showFrame\(\)\{[\s\S]*?\n\}", js)
     stop = re.search(r"function stopPlay\(\)\{[\s\S]*?\n\}", js)
@@ -756,7 +764,7 @@ def _timelapse_sharp():
     enc = next((a for a in seen if "libx264" in a), [])
     vf = enc[enc.index("-vf") + 1] if "-vf" in enc else ""
     fr = enc[enc.index("-framerate") + 1] if "-framerate" in enc else ""
-    js_ = (APP / "static" / "app.js").read_text()
+    js_ = page_js()
     check(config.DEFAULTS.get("video_fps") == 8 and config.DEFAULTS.get("player_fps") == 4
           and fr == "8" and "},Math.round(1000/Math.max(0.5,playerFps)));" in js_
           and "playerFps=+j.settings.player_fps||4;" in js_ and "timelapse_speed_pct" not in js_,
@@ -792,7 +800,7 @@ def _timelapse_sharp():
 
 
 def _lightbox():
-    js = (APP / "static" / "app.js").read_text()
+    js = page_js()
     html = (APP / "templates" / "index.html").read_text()
     css = (APP / "static" / "style.css").read_text()
     check(re.search(r'<div id="lightbox"[^>]*role="dialog"[^>]*hidden>', html) and 'id="lbclose"' in html
@@ -890,7 +898,7 @@ def _setups():
     vals_ = [v for _, v in cur]
     check(len(cur) > 3 and vals_ == sorted(vals_) and abs(vals_[-1] - d1) < 0.2,
           f"the Day card's DLI curve climbs to today's total ({vals_[-1] if vals_ else None} vs {d1})")
-    js2 = (APP / "static" / "app.js").read_text()
+    js2 = page_js()
     check("function setLight2" in js2 and "light2_override" in js2 and "S.schedule_mode==='light2'" in js2,
           "the Light card and schedule chart drive the selected setup's light")
     check('id="dlichart"' in (APP / "templates" / "index.html").read_text(),
@@ -917,7 +925,7 @@ def _setups():
     opts2 = {o["value"]: o["label"] for o in setups_mod.light_options()}
     check(opts.get("main") == "AC fixture (dim line)" and opts2.get("main") == "5V LED panel",
           f"setups list lights by fixture, following the backend ({opts} / {opts2})")
-    js = (APP / "static" / "app.js").read_text()
+    js = page_js()
     check("'Main light'" not in js and "lightChoices(" in js,
           "the Setups editor offers fixtures, not 'main' and 'second'")
     check('id="setuptabs"' in (APP / "templates" / "index.html").read_text()
@@ -954,7 +962,7 @@ def _setups():
     got_t = {x["id"]: x["trays"] for x in c.get("/api/status").get_json()["setups"]}
     check(r["ok"] and got_t == {"seedlings": ["1", "2"], "transplants": ["T3"]},
           f"trays are assigned per setup, and a tray that no longer exists drops out ({got_t})")
-    js3 = (APP / "static" / "app.js").read_text()
+    js3 = page_js()
     check("filter(trayInSetup)" in js3 and "trayInSetup(t)?'':'none'" in js3 and 'data-t="' in js3,
           "the planting map, watering rows and the Setups editor follow each setup's trays")
     c.post("/api/settings", json={"setups": []})
@@ -1011,14 +1019,14 @@ def _fan_camera_timing():
     lm = monitor.gather_report_data()["light_metrics"]
     check(lm["dli_target"] == [15.0, 20.0] and lm["photo_setup"] == "Transplants",
           f"the AI report judges the camera's setup ({lm.get('photo_setup')}, {lm.get('dli_target')})")
-    js = (APP / "static" / "app.js").read_text()
+    js = page_js()
     check("camelsewhere" in js and "fanelsewhere" in js and 'data-flag="fan"' in js,
           "the camera cards and fan controls show only on their setup's tab")
     c.post("/api/settings", json={"setups": []})
 
 
 def _probe_names():
-    js = (APP / "static" / "app.js").read_text()
+    js = page_js()
     check("'Soil moisture '+t" in js and "trayLabels[t]||('Tray '+t)" in js,
           "probes read as Soil moisture 1 and 2; canopy and watering rows use the tray's name")
     check(config.settings.get("probe_names") == {"2": "Left bench"},
@@ -1068,7 +1076,7 @@ def _per_sensor_controls():
     st = c.get("/api/status").get_json()
     check("light2_cal" in st and st["light2_cal"]["light_curve"]["sensor"] == "lux:2",
           "the Light response card gets the second light's calibration")
-    js = (APP / "static" / "app.js").read_text()
+    js = page_js()
     check("linearize:true,light:ctlTarget" in js and "trays:autoWaterTrays" in js
           and "reselsewhere" in js,
           "Calibrate, Arm and the reservoir row follow the tab")
@@ -1357,7 +1365,7 @@ def _startup_log_noise():
 def _unsaved_settings():
     """An edited setting used to revert on the next status (every few seconds,
     from the live readings) as soon as its field lost focus."""
-    js = (APP / "static" / "app.js").read_text()
+    js = page_js()
     fh = re.search(r"function formHolds\(key, cfg\)\{[\s\S]*?\n\}", js)
     ff = re.search(r"function fillForm\(cfg\)\{[\s\S]*?(?=\nlet frames=)", js)
     sub2 = re.search(r"getElementById\('cfgform'\)\.addEventListener\('submit'[\s\S]*?\n\}\);", js)
@@ -1368,7 +1376,10 @@ def _unsaved_settings():
     check("f.addEventListener('input',markDirty);f.addEventListener('change',markDirty);" in js
           and fh and "if(formDirty.has(key))return true;" in fh.group(0),
           "a changed setting is marked unsaved and kept over any incoming status")
-    check(ff and "document.activeElement" not in ff.group(0) and ff.group(0).count("formHolds(") >= 20,
+    fill = re.search(r"function fillField\(f,k,spec,cfg\)\{[\s\S]*?\n\}", js)
+    check(ff and "document.activeElement" not in ff.group(0)
+          and "for(const k of Object.keys(FORM))fillField(f,k,FORM[k],cfg);" in ff.group(0)
+          and fill and "formHolds(k,cfg)" in fill.group(0),
           "every settings field is repainted only through formHolds, not a focus check")
     sub = re.search(r"getElementById\('cfgform'\)\.addEventListener\('submit'[\s\S]*?\n\}\);", js)
     check(sub and "if(!(j.errors&&k in j.errors))formDirty.delete(k);" in sub.group(0),
@@ -1419,7 +1430,8 @@ def _oom():
     unwrapped = [r for r in runs if "oom_first(" not in r and not r.rstrip().endswith("(")]
     heavy = cam_src.count("subprocess.run(oom_first(") + cam_src.count("oom_first([\"ffmpeg\"") \
         + cam_src.count("oom_first(\n            [\"ffmpeg\"")
-    rsrc = (APP / "routes.py").read_text()
+    rsrc = "\n".join((APP / f).read_text() for f in ("routes.py", "routes_camera.py", "routes_garden.py",
+                                                      "routes_climate.py", "routes_data.py"))
     check(not unwrapped and heavy >= 5 and "camera_mod.oom_first([sys.executable, str(helper)" in rsrc
           and "camera_mod.oom_first(cmd)" in rsrc,
           "captures, thumbnails, the render, canopy analysis, previews and corner detection all run OOM-first")
@@ -1468,12 +1480,11 @@ def _photo_light():
     check(config.DEFAULTS.get("capture_set_light") is False and off == [],
           "by default a photo leaves the light where it is")
     check(r["ok"] and on == [80], f"with the setting on, a photo sets the main light to the photo brightness ({on})")
-    html = (APP / "templates" / "index.html").read_text()
-    js = (APP / "static" / "app.js").read_text()
-    check('name="capture_set_light"' in html and 'class="capbright"' in html
-          and "body.capture_set_light=f.elements['capture_set_light'].checked;" in js
-          and "function syncCaptureLight()" in js
-          and "formHolds('capture_set_light',cfg)" in js,
+    page = c.get("/").get_data(as_text=True)
+    js = page_js()
+    check('name="capture_set_light"' in page and 'class="capbright"' in page
+          and config.FORM["capture_set_light"]["kind"] == "bool"
+          and "function syncCaptureLight()" in js,
           "Settings, Camera has the switch, and Photo brightness shows only when it is on")
     src = (APP / "camera.py").read_text()
     fs = re.search(r"def run_focus_sweep\(\):[\s\S]*?score_at", src)
@@ -1485,7 +1496,7 @@ def _photo_light():
 def _canopy_stale():
     """Canopy comes from photos, taken only while the camera's light is on:
     at night its last reading is hours old by design and must not read stale."""
-    js = (APP / "static" / "app.js").read_text()
+    js = page_js()
     rs = re.search(r"function readingStale\(key, ts\)\{[\s\S]*?\n\}", js)
     check(rs and "canopyDue!=null && now-Math.max(ts,canopyDue) > 3*capMin*60" in rs.group(0)
           and js.count("readingStale(") >= 3 and "const lim=" not in js
@@ -1728,7 +1739,7 @@ def _heat_mat():
               "the target by 3F; the probe must be a soil probe")
         r4 = c.post("/api/settings", json={"heat_target_f": 85, "heat_max_f": 87}).get_json()
         e4 = r4.get("errors", {})
-        js_ = (APP / "static" / "app.js").read_text()
+        js_ = page_js()
         check("88F" in e4.get("heat_max_f", "") and "85F" in e4.get("heat_max_f", "")
               and "not saved until" in e4.get("heat_target_f", "")
               and "fieldLabel(f,k)+' '+j.errors[k]" in js_ and "function fieldLabel(f, k)" in js_,
@@ -1754,12 +1765,14 @@ def _heat_mat():
         heat.heat_state.update(on=None, since=0.0, sent=0.0, fault="", reason="not in use",
                                duty=None, integral=0.0, window=None, on_until=0.0)
         heat._prev_use = None
-    js = (APP / "static" / "app.js").read_text()
+    js = page_js()
     html = (APP / "templates" / "index.html").read_text()
-    check('id="heatrow"' in html and 'name="plug_use"' in html and 'name="heat_target_f"' in html
+    page = c.get("/").get_data(as_text=True)
+    check('id="heatrow"' in html and 'name="plug_use"' in page and 'name="heat_target_f"' in page
           and "fetch('/api/heat'" in js and "renderHeat(j);" in js
           and ".lcbtn:not(.fanbtn):not(.heatbtn)" in js and ".lcbtn:not(.fanbtn)')" not in js
-          and "body[k]=Math.round(tToF(parseFloat(f.elements[k].value))*10)/10;" in js,
+          and config.FORM["heat_target_f"]["kind"] == "tempF"
+          and config.FORM["heat_target_f"]["round"] == 0.1,
           "the Light card has Heat mat buttons, Settings has the plug use and thermostat, "
           "temperatures are saved in F, and the light's buttons ignore the heat buttons")
     mon = (APP / "monitor.py").read_text()
@@ -1837,7 +1850,7 @@ def _shared_sensors():
         c.post("/api/settings", json={"setups": saved["setups"] or []})
         with config.settings_lock:
             config.settings.update(plug_use=saved["plug_use"], heat_mode=saved["heat_mode"])
-    js = (APP / "static" / "app.js").read_text()
+    js = page_js()
     css = (APP / "static" / "style.css").read_text()
     check("const keys=all.filter(k=>!/^(probe|canopy|float|reservoir):|^lux(:|$)/.test(k));" in js
           and 'data-flag="heat"' in js and "heatelsewhere" in js
@@ -1849,7 +1862,7 @@ def _shared_sensors():
 def _charts():
     """The chart grid: labelled axes, lights-off shading, one crosshair across
     every chart, and the heat mat's power where it belongs."""
-    js = (APP / "static" / "app.js").read_text()
+    js = page_js()
     html = (APP / "templates" / "index.html").read_text()
     css = (APP / "static" / "style.css").read_text()
     dm = re.search(r"function drawMini\(key\)\{[\s\S]*?\n\}\nfunction chartMove", js)
@@ -2035,7 +2048,7 @@ def _form_validity():
     """27 Sep: Save did nothing. The migrated video speed 7.92 broke the field's
     step="1", and the browser silently refused to submit while that field sat
     in a closed section."""
-    html = (APP / "templates" / "index.html").read_text()
+    html = c.get("/").get_data(as_text=True)
     check(re.search(r'<form id="cfgform"[^>]*\bnovalidate\b', html) is not None,
           "the settings form leaves validation to the server, so a hidden field can never "
           "silently block Save")
@@ -2049,14 +2062,15 @@ def _form_validity():
         v = config.DEFAULTS[name]
         if isinstance(v, (int, float)) and abs(v / step - round(v / step)) > 1e-9:
             bad.append(f"{name}={v} step {step}")
-    check(not bad and 'name="video_fps" type="number" min="1" max="60" step="any"' in html,
+    check(not bad and 'name="video_fps" type="number" min="1" max="60" step="any"' in html
+          and len(re.findall(r'<input name="(\w+)" type="number"', html)) >= 40,
           f"every default fits its field's step, and the speeds take decimals ({bad or 'ok'})")
 
 
 def _phone_layout():
     """29 Sep, on Ben's phone: the planting map's five columns widened the page
     past the screen, so the browser zoomed the whole dashboard out."""
-    js = (APP / "static" / "app.js").read_text()
+    js = page_js()
     css = (APP / "static" / "style.css").read_text()
     check('<div class="tscroll"><div class="tgrid" style="--tcols:${cols}">' in js
           and "h+='</div></div></div>';" in js
@@ -2086,7 +2100,7 @@ def _kiosk():
     r = c.get("/screen")
     page = r.get_data(as_text=True)
     sjs = (APP / "static" / "screen.js").read_text()
-    ajs = (APP / "static" / "app.js").read_text()
+    ajs = page_js()
     check(r.status_code == 200 and "/static/screen.js" in page and 'id="setups"' in page
           and "KIOSK_URL=http://127.0.0.1:5000/screen" in unit
           and "post('/api/heat', {mode: v})" in sjs and "post('/api/light', {mode: v})" in sjs
@@ -2161,7 +2175,7 @@ def _usb_link():
 
 def _settings_layout():
     """3 Oct: fifteen settings groups merged into eight, nothing lost."""
-    html = (APP / "templates" / "index.html").read_text()
+    html = c.get("/").get_data(as_text=True)
     form = html[html.index('<form id="cfgform"'):html.index("</form>", html.index('<form id="cfgform"'))]
     titles = re.findall(r"<summary><h3>(.*?)</h3></summary>", form)
     subs = re.findall(r'<h4 class="fsub">(.*?)</h4>', form)
@@ -2187,9 +2201,10 @@ def _optimizations():
     import sys as _sys
     for path in ("/rectified.jpg", "/photo/cropped.jpg"):
         c.get(path)
-    names = sorted(_sys.modules)
     loaded = [m for m in ("cv2", "numpy") if m in _sys.modules]
-    srcs = {f: (APP / f).read_text() for f in ("camera.py", "routes.py", "ai_report.py", "monitor.py",
+    srcs = {f: (APP / f).read_text() for f in ("camera.py", "routes.py", "routes_camera.py",
+                                                "routes_garden.py", "routes_climate.py", "routes_data.py",
+                                                "ai_report.py", "monitor.py",
                                                 "status.py", "light.py", "water.py", "heat.py")}
     no_import = [f for f, t in srcs.items() if "import cv2" in t or "import numpy" in t]
     check(not no_import and "def imgtool(args, timeout=120):" in srcs["camera.py"]
@@ -2223,7 +2238,7 @@ def _optimizations():
               "imgtool crops, flattens and resizes, scores sharpness and rotates in place")
     # 2. memory readings
     mem = monitor.memory_readings()
-    js = (APP / "static" / "app.js").read_text()
+    js = page_js()
     check({"sys:mem_free", "sys:app_mem"} <= set(mem) and all(v > 0 for v in mem.values())
           and "{id:'device', title:'Device',           match:k=>k.startsWith('sys:')}" in js
           and "if(s.startsWith('sys:'))return 'MB';" in js,
@@ -2285,6 +2300,50 @@ def _optimizations():
           and "fetch('/api/status?lite=1'" in sjs,
           f"the touchscreen fetches a lite status ({len(lit)} bytes against {len(full)})")
 
+
+def _form_definitions():
+    """config.FORM is the single definition of each Settings field: the form,
+    the server and the page's save and fill code all come from it."""
+    html = c.get("/").get_data(as_text=True)
+    form = html[html.index('<form id="cfgform"'):html.index("</form>", html.index('<form id="cfgform"'))]
+    names = re.findall(r'\bname="(\w+)"', form)
+    fk = set(config.FORM)
+    missing = sorted(fk - set(names))
+    extra = sorted(set(names) - fk)
+    dup = sorted({n for n in names if names.count(n) > 1})
+    nodefault = sorted(k for k in fk if k not in config.DEFAULTS)
+    check(not missing and not extra and not dup and not nodefault,
+          f"every field on the Settings form is defined once in config.FORM and has a default "
+          f"(missing {missing}, undefined {extra}, twice {dup}, no default {nodefault})")
+    wrong = []
+    for m in re.finditer(r'<input name="(\w+)" type="number" ([^>]*)>', form):
+        k, attrs = m.group(1), m.group(2)
+        sp = config.FORM[k]
+        if sp["kind"] in ("int", "float"):
+            if f'min="{sp["min"]}"' not in attrs or f'max="{sp["max"]}"' not in attrs:
+                wrong.append(k)
+    v = config.SETTINGS_VALIDATORS
+    accepts = all(v[k](config.DEFAULTS[k]) is not None or config.DEFAULTS[k] in ("", None)
+                  for k in fk if config.FORM[k]["kind"] not in ("text", "secret"))
+    refuses = [k for k, sp in config.FORM.items() if sp["kind"] in ("int", "float")
+               and sp.get("clamp") is False and _refuses(v[k], sp["max"] + 1)]
+    check(not wrong and accepts and len(refuses) == sum(
+              1 for sp in config.FORM.values() if sp["kind"] in ("int", "float")
+              and sp.get("clamp") is False),
+          f"the form offers exactly the range the server accepts (mismatched {wrong})")
+    spec = json.loads(re.search(r'<script id="formspec" type="application/json">(.*?)</script>',
+                                html, re.S).group(1))
+    check(set(spec) == fk and all(spec[k]["default"] == config.DEFAULTS[k] for k in fk),
+          "the page gets config.FORM, with defaults, for its save and fill code")
+
+
+def _refuses(fn, value):
+    try:
+        fn(value)
+        return False
+    except Exception:
+        return True
+
 def run(name, fn):
     """A section that crashes counts as one failure; the rest still run."""
     section(name)
@@ -2328,6 +2387,7 @@ run('Phone layout', _phone_layout)
 run('Touchscreen kiosk', _kiosk)
 run('USB link', _usb_link)
 run('Settings layout', _settings_layout)
+run('Settings field definitions', _form_definitions)
 run('Optimizations', _optimizations)
 run('Shutdown', _shutdown)
 

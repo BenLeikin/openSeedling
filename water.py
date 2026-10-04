@@ -386,7 +386,7 @@ def probe_cal_flag(volts, cal):
 def latest_soil_temp_f(snapshot=None):
     """Current soil temperature in F, or None. Uses the first DS18B20 found.
     Pass an existing db.latest() snapshot to avoid a redundant query."""
-    for k, (ts, v) in (snapshot if snapshot is not None else db.latest()).items():
+    for k, (_ts, v) in (snapshot if snapshot is not None else db.latest()).items():
         if k.startswith("temp:soil"):
             return v * 9 / 5 + 32
     return None

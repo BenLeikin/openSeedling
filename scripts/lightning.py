@@ -77,7 +77,7 @@ class Effects:
         level(p, self.peak)
         time.sleep(self.fast * random.uniform(1.0, 2.2))
         # restrikes down the same channel, decaying
-        for i in range(random.randint(1, 4)):
+        for _i in range(random.randint(1, 4)):
             level(p, self.base)
             time.sleep(random.uniform(.03, .09))
             level(p, self.peak * random.uniform(.55, .95))

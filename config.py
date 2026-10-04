@@ -194,7 +194,7 @@ DEFAULTS = {
         "2": {"label": "Tray 2", "rows": 4, "cols": 3, "cells": {}},
     },
 }
-HTTP_PORT     = 5000
+HTTP_PORT     = int(os.environ.get("GROWLIGHT_HTTP_PORT", "5000"))   # tests/test_ui.py runs on a spare port
 
 # Set by scripts/kiosk.sh for the touchscreen on this Pi's own HDMI port:
 # requests from 127.0.0.1 count as signed in, so the screen can change
@@ -548,97 +548,142 @@ def _v_setups(v):
     return out
 
 
+def _v_trimmed(v):
+    return str(v or "").strip()[:200]
+
+
+def _v_secret(v):
+    return str(v or "")[:200]
+
+
+# One definition per field on the Settings form: its kind, the range the
+# server accepts, and the step the form offers. The server's validators for
+# these keys, the form's min/max/step attributes (routes.form_attrs) and the
+# page's save and fill code (static/js/photos.js, from the embedded copy of this table) are
+# all generated from it, so a field cannot be accepted by one and rejected or
+# dropped by another. Kinds: int, float, bool, choice, time, text (with a
+# check function), secret (blank keeps the stored value), tempF (stored in F,
+# shown in the display units; zero_off: 0 means off and is never converted).
+FORM = {
+    "light_backend": {"kind": "choice", "choices": ["pwm", "dim", "kasa"]},
+    "max_bright": {"kind": "int", "min": 1, "max": 100, "clamp": False},
+    "light_floor_pct": {"kind": "float", "min": 0, "max": 50, "step": "0.1"},
+    "dim_below_min": {"kind": "choice", "choices": ["hold", "cycle"]},
+    "light_linear_on": {"kind": "bool"},
+    "ramp_min": {"kind": "int", "min": 0, "max": 240, "clamp": False},
+    "schedule_mode": {"kind": "choice", "choices": ["solar", "fixed", "duration"]},
+    "sunrise_offset_min": {"kind": "int", "min": -720, "max": 720},
+    "sunset_offset_min": {"kind": "int", "min": -720, "max": 720},
+    "fixed_on": {"kind": "time"},
+    "fixed_off": {"kind": "time"},
+    "duration_hours": {"kind": "float", "min": 0.0, "max": 24.0, "step": "0.25"},
+    "duration_end": {"kind": "time"},
+    "light2_on": {"kind": "bool"},
+    "light2_override": {"kind": "choice", "choices": ["auto", "on", "off"]},
+    "light2_start": {"kind": "time"},
+    "light2_end": {"kind": "time"},
+    "light2_bright": {"kind": "int", "min": 0, "max": 100},
+    "light2_ramp_min": {"kind": "int", "min": 0, "max": 120},
+    "lux_to_ppfd_k": {"kind": "float", "min": 0.0, "max": 200.0, "step": "1"},
+    "canopy_factor": {"kind": "float", "min": 0.1, "max": 10.0, "step": "0.05"},
+    "heat_target_f": {"kind": "tempF", "min": 40, "max": 105, "clamp": False, "round": 0.1, "step": "0.5"},
+    "heat_max_f": {"kind": "tempF", "min": 50, "max": 120, "clamp": False, "round": 0.1, "step": "0.5"},
+    "heat_sensor": {"kind": "text", "check": "_v_heat_sensor"},
+    "fan_humidity_on": {"kind": "int", "min": 0, "max": 100},
+    "fan_min_speed": {"kind": "int", "min": 0, "max": 100},
+    "fan_with_light": {"kind": "bool"},
+    "soil_temp_low_f": {"kind": "tempF", "min": 0, "max": 150, "round": 1, "zero_off": True},
+    "soil_temp_high_f": {"kind": "tempF", "min": 0, "max": 150, "round": 1, "zero_off": True},
+    "humidity_low": {"kind": "int", "min": 0, "max": 100},
+    "humidity_high": {"kind": "int", "min": 0, "max": 100},
+    "moisture_threshold_pct": {"kind": "int", "min": 1, "max": 90},
+    "pump_cooldown_min": {"kind": "int", "min": 1, "max": 1440},
+    "fill_max_seconds": {"kind": "int", "min": 1, "max": 600},
+    "pump_daily_max_seconds": {"kind": "int", "min": 1, "max": 3600},
+    "pump_max_seconds": {"kind": "int", "min": 1, "max": 120},
+    "probe_median_depth": {"kind": "int", "min": 1, "max": 15},
+    "auto_wet_cal": {"kind": "bool"},
+    "auto_wet_cal_max_move": {"kind": "float", "min": 0.01, "max": 1.0, "step": "0.01"},
+    "camera_backend": {"kind": "choice", "choices": ["rpicam", "usb"]},
+    "usb_device": {"kind": "text", "check": "_v_usb_device"},
+    "usb_width": {"kind": "int", "min": 160, "max": 4096},
+    "usb_height": {"kind": "int", "min": 120, "max": 4096},
+    "usb_auto_focus": {"kind": "bool"},
+    "usb_focus_absolute": {"kind": "int", "min": 0, "max": 1023},
+    "usb_auto_exposure_on": {"kind": "bool"},
+    "usb_exposure_time_absolute": {"kind": "int", "min": 1, "max": 100000},
+    "usb_gain": {"kind": "int", "min": 0, "max": 255},
+    "usb_auto_white_balance": {"kind": "bool"},
+    "usb_white_balance_temperature": {"kind": "int", "min": 1000, "max": 10000},
+    "camera_enabled": {"kind": "bool"},
+    "capture_enabled": {"kind": "bool"},
+    "capture_interval_min": {"kind": "int", "min": 5, "max": 720, "clamp": False},
+    "player_fps": {"kind": "float", "min": 0.5, "max": 30, "clamp": False, "step": "any"},
+    "video_fps": {"kind": "float", "min": 1, "max": 60, "clamp": False, "step": "any"},
+    "capture_set_light": {"kind": "bool"},
+    "capture_brightness": {"kind": "int", "min": 1, "max": 100, "clamp": False},
+    "roi": {"kind": "text", "check": "_v_roi"},
+    "cam_rotate": {"kind": "choice", "choices": [0, 90, 180, 270], "ints": True},
+    "timelapse_flatten": {"kind": "bool"},
+    "cam_rectify": {"kind": "bool"},
+    "alerts_enabled": {"kind": "bool"},
+    "alert_sustain_min": {"kind": "int", "min": 1, "max": 120},
+    "alert_cooldown_hours": {"kind": "int", "min": 1, "max": 72},
+    "alert_dry_pct": {"kind": "int", "min": 0, "max": 90},
+    "alert_humidity_high": {"kind": "int", "min": 0, "max": 100},
+    "alert_dli_low": {"kind": "float", "min": 0, "max": 30, "step": "0.5"},
+    "alert_dli_high": {"kind": "float", "min": 0, "max": 80, "step": "0.5"},
+    "latitude": {"kind": "float", "min": -90, "max": 90, "clamp": False, "step": "0.0001"},
+    "longitude": {"kind": "float", "min": -180, "max": 180, "clamp": False, "step": "0.0001"},
+    "timezone": {"kind": "text", "check": "_v_timezone"},
+    "plug_use": {"kind": "choice", "choices": ["light", "heat"]},
+    "kasa_host": {"kind": "text", "check": "_v_host"},
+    # never sent to the page (status.SECRET_SETTINGS), so a blank field keeps
+    # the stored one: as plain text it was blanked by every save
+    "kasa_user": {"kind": "secret", "check": "_v_trimmed"},
+    "kasa_pass": {"kind": "secret", "check": "_v_secret"},
+    "little_buddy": {"kind": "bool"},
+    "buddy_model": {"kind": "choice", "choices": ["sprout", "pepper", "cat", "snail", "ladybug", "drop", "bee", "gnome", "random"]},
+    "units": {"kind": "choice", "choices": ["imperial", "metric"]},
+}
+
+
+def _form_validator(spec):
+    kind = spec["kind"]
+    if kind in ("int", "float", "tempF"):
+        whole = kind == "int" or (kind == "tempF" and spec.get("round") == 1)
+        lo, hi = spec["min"], spec["max"]
+        if whole:
+            return _v_int(int(lo), int(hi), clamp=spec.get("clamp", True))
+        return _v_float(lo, hi, clamp=spec.get("clamp", True))
+    if kind == "bool":
+        return _v_bool
+    if kind == "choice":
+        return _v_choice(*spec["choices"])
+    if kind == "time":
+        return _v_hhmm
+    return globals()[spec["check"]]
+
+
 SETTINGS_VALIDATORS = {
-    "latitude": _v_float(-90, 90, clamp=False),
-    "longitude": _v_float(-180, 180, clamp=False),
-    "timezone": _v_timezone,
-    "max_bright": _v_int(1, 100, clamp=False),
-    "ramp_min": _v_int(0, 240, clamp=False),
-    "sunrise_offset_min": _v_int(-720, 720),
-    "sunset_offset_min": _v_int(-720, 720),
-    "capture_enabled": _v_bool,
-    "camera_enabled": _v_bool,
-    "usb_auto_focus": _v_bool,
-    "usb_auto_exposure_on": _v_bool,
-    "usb_auto_white_balance": _v_bool,
-    "timelapse_flatten": _v_bool,
-    "cam_rectify": _v_bool,
-    "alerts_enabled": _v_bool,
-    "fan_with_light": _v_bool,
-    "camera_backend": _v_choice("rpicam", "usb"),
-    "usb_device": _v_usb_device,
-    "usb_width": _v_int(160, 4096),
-    "usb_height": _v_int(120, 4096),
     "usb_warmup_frames": _v_int(1, 20),
-    "usb_exposure_time_absolute": _v_int(1, 100000),
-    "usb_gain": _v_int(0, 255),
-    "usb_white_balance_temperature": _v_int(1000, 10000),
-    "usb_focus_absolute": _v_int(0, 1023),
-    "cam_rotate": _v_choice(0, 90, 180, 270),
     "live_interval_s": _v_int(0, 120),
-    "capture_interval_min": _v_int(5, 720, clamp=False),
-    "player_fps": _v_float(0.5, 30, clamp=False),
-    "video_fps": _v_float(1, 60, clamp=False),
-    "capture_set_light": _v_bool,
-    "plug_use": _v_choice("light", "heat"),
     "heat_mode": _v_choice("off", "auto", "on"),
-    "heat_target_f": _v_float(40, 105, clamp=False),
-    "heat_max_f": _v_float(50, 120, clamp=False),
-    "heat_sensor": _v_heat_sensor,
-    "capture_brightness": _v_int(1, 100, clamp=False),
-    "roi": _v_roi,
-    "alert_sustain_min": _v_int(1, 120),
-    "alert_cooldown_hours": _v_int(1, 72),
-    "soil_temp_low_f": _v_int(0, 150),
-    "soil_temp_high_f": _v_int(0, 150),
-    "alert_dry_pct": _v_int(0, 90),
-    "alert_humidity_high": _v_int(0, 100),
-    "alert_dli_low": _v_float(0, 30),
-    "alert_dli_high": _v_float(0, 80),
     "setups": _v_setups,
     "dli_target_low": _v_float(0.5, 60, clamp=False),
     "dli_target_high": _v_float(1, 65, clamp=False),
     "fan_mode": _v_choice("auto", "on", "off"),
     "fan_speed": _v_int(0, 100),
     "fan_auto_speed": _v_int(0, 100),
-    "fan_min_speed": _v_int(0, 100),
-    "fan_humidity_on": _v_int(0, 100),
-    "moisture_threshold_pct": _v_int(1, 90),
-    "pump_max_seconds": _v_int(1, 120),
-    "pump_cooldown_min": _v_int(1, 1440),
-    "pump_daily_max_seconds": _v_int(1, 3600),
-    "fill_max_seconds": _v_int(1, 600),
-    "units": _v_choice("imperial", "metric"),
-    "light_backend": _v_choice("pwm", "dim", "kasa"),
-    "light_floor_pct": _v_float(0, 50),
-    "light_linear_on": _v_bool,
-    "dim_below_min": _v_choice("hold", "cycle"),
-    "light2_on": _v_bool,
-    "light2_start": _v_hhmm,
-    "light2_end": _v_hhmm,
-    "light2_bright": _v_int(0, 100),
-    "light2_ramp_min": _v_int(0, 120),
-    "light2_override": _v_choice("auto", "on", "off"),
-    "kasa_host": _v_host,
-    "kasa_user": lambda v: str(v or "").strip()[:200],
-    "kasa_pass": lambda v: str(v or "")[:200],
-    "little_buddy": _v_bool,
     "theme": _v_choice("auto", "light", "dark"),
-    "buddy_model": _v_choice("sprout", "pepper", "cat", "snail", "ladybug",
-                             "drop", "bee", "gnome", "random"),
-    "probe_median_depth": _v_int(1, 15),
-    "auto_wet_cal": _v_bool,
-    "auto_wet_cal_max_move": _v_float(0.01, 1.0),
-    "schedule_mode": _v_choice("solar", "fixed", "duration"),
-    "fixed_on": _v_hhmm,
-    "fixed_off": _v_hhmm,
-    "duration_end": _v_hhmm,
-    "duration_hours": _v_float(0.0, 24.0),
-    "humidity_low": _v_int(0, 100),
-    "humidity_high": _v_int(0, 100),
-    "canopy_factor": _v_float(0.1, 10.0),
-    "lux_to_ppfd_k": _v_float(0.0, 200.0),
 }
+SETTINGS_VALIDATORS.update({k: _form_validator(s) for k, s in FORM.items()})
+
+
+def form_spec():
+    """FORM for the page, each field with its default (the page fills a
+    missing value from it, and saves it for a field left blank)."""
+    return {k: dict(s, default=DEFAULTS.get(k)) for k, s in FORM.items()}
 
 # Imported last: these modules import this one, and their import-time
 # code runs only after everything above is defined. Their names are

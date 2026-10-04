@@ -452,7 +452,7 @@ def _lux_open(addr, st):
         import adafruit_bh1750
         dev = adafruit_bh1750.BH1750(_i2c(), address=addr)
         with _io_lock:
-            dev.lux                                   # probe read
+            _ = dev.lux                               # probe read
         st["dev"], st["seen"] = dev, True
         log.info(f"lux sensor: BH1750 at {hex(addr)} ({LUX_ADDRS[addr]})")
     except Exception:

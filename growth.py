@@ -76,7 +76,7 @@ def imread_min(cv2, path, min_side):
 
 
 def _bil(C, u, v):
-    """Bilinear interpolation of the four corners; mirrors bil() in app.js."""
+    """Bilinear interpolation of the four corners; mirrors bil() in static/js/grid.js."""
     tx = (1 - u) * C[0][0] + u * C[1][0]
     ty = (1 - u) * C[0][1] + u * C[1][1]
     bx = (1 - u) * C[3][0] + u * C[2][0]

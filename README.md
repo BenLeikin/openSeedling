@@ -289,6 +289,26 @@ metrics), **Climate** (heat mat, fan, target bands), **Watering** (auto-watering
 and sensor smoothing), **Camera**, **Setups**, **Trays**, **Alerts**, and
 **System** (location, smart plug, display, backup).
 
+### Code checks
+
+- **Settings fields are defined once**, in `config.FORM`: kind, accepted
+  range, step. The server's validators for those keys, the form's
+  min/max/step (`routes.form_attrs`) and the page's save and fill code
+  (`readField`/`fillField` in `static/js/photos.js`, from a copy of the table
+  embedded in the page) are generated from it. To add a setting: a default in
+  `DEFAULTS`, one line in `FORM`, and the field in `index.html`
+  (`<input {{ fa('key') }}>` for numbers). The suite checks they agree.
+- `tests/test_suite.py` runs everywhere, the Pi included: the server's
+  behavior through the test client, plus some checks on the page's code.
+- `tests/test_ui.py` runs on a desktop with Playwright
+  (`pip install playwright && playwright install chromium`): the app from a
+  throwaway copy with fake GPIO, driven in a headless browser. Every Settings
+  field is changed, saved and checked after a reload; refused values,
+  units, Setups, charts, the phone layout and the touchscreen summary are
+  checked by what happens on screen, not by how the code is written. Without
+  Playwright it skips and exits 0.
+- `ruff check .` lints with the rules in `ruff.toml`.
+
 ### Memory and storage
 
 - The controller never imports OpenCV (about 40 MB that is never given back).
@@ -930,7 +950,15 @@ hoststats.py        Pi health: CPU temp, load, memory, throttling, wifi
 notify.py           ntfy push transport
 discord_alert.py    Discord webhook transport
 ai_report.py        Claude API daily report
-templates/index.html, static/{app.js,style.css}
+imgtool.py          every OpenCV job, run as a short-lived process (never in the controller)
+routes.py           Flask app, sign-in, pages, live status, settings
+routes_camera.py    photos, thumbnails, frames, grid, capture, timelapse
+routes_garden.py    probes, floats, plantings, tray map, pumps, auto-water
+routes_climate.py   light, schedule, sweeps, smart plug, fan, heat mat
+routes_data.py      AI report, backups, readings history, host stats
+templates/index.html, templates/screen.html
+static/js/*.js      the dashboard, ten plain scripts loaded in order (see index.html)
+static/{style.css,screen.js,screen.css}
 scripts/{setup.sh,update.sh,set_password.py,test_ramp.py}
 deploy/             box config applied by setup.sh (boot, unit, packages, env reference)
 ```

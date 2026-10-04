@@ -934,7 +934,7 @@ def run_light_sweep(step=5, settle=2.0, linearize=False, target="main"):
         if levels[-1] != 100:
             levels.append(100)
         key = lux_key_for_light(target) or "lux"
-        for i, pct in enumerate(levels):
+        for _i, pct in enumerate(levels):
             if sweep_state["cancel"]:
                 break
             if target == "second":

@@ -16,7 +16,6 @@ from zoneinfo import ZoneInfo
 
 from applog import log
 import db
-import growth as growth_mod
 
 import config
 import light as light_mod

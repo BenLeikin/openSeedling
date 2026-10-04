@@ -110,7 +110,7 @@ def gather_report_data():
     trays_cfg = cfg.get("trays") or {}
     snap = db.latest()
     stf = water.latest_soil_temp_f(snap)
-    for k, (ts, v) in snap.items():
+    for k, (_ts, v) in snap.items():
         if k.startswith("canopy:"):
             tid = k[7:]
             if tid not in setups_mod.camera_trays(cfg):
@@ -229,8 +229,8 @@ def gather_report_data():
                 g["days"].append((d1 - d0).days)
             except ValueError:
                 pass
-    for tid, t in sorted((cfg.get("trays") or {}).items()):
-        for cid, v in (t.get("cells") or {}).items():
+    for _tid, t in sorted((cfg.get("trays") or {}).items()):
+        for v in (t.get("cells") or {}).values():
             seed = (v.get("seed") or "").strip()
             if not seed or not v.get("planted"):
                 continue
@@ -399,7 +399,7 @@ def report_by_setup(cfg, state, snap, now, probe_txt, floats, planting_by_tray):
                  "float": floats.get(tid),
                  "planting": planting_by_tray.get(tid) or []}
         group_of(setups_mod.tray_setup(cfg, tid))["trays"].append(entry)
-    for key, (ts, v) in sorted(snap.items()):
+    for key, (_ts, v) in sorted(snap.items()):
         if key.startswith(("probe:", "canopy:", "float:")):
             continue                      # reported with their tray
         if any(key == stp.get("lux") for stp in sts):

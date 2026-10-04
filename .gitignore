@@ -23,3 +23,6 @@ timelapse_archive/
 config.json.bak
 *.tmp
 *.part
+
+# lint cache
+.ruff_cache/
