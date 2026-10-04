@@ -30,23 +30,27 @@ def api_lightning():
     with config.settings_lock:
         cfg = dict(config.settings)
     if not light_mod.lightning_available(cfg):
-        return jsonify(ok=False, error="only available on a dimmable fixture "
-                                       "wired through the inverted PWM"), 200
+        return jsonify(
+            ok=False, error="only available on a dimmable fixture wired through the inverted PWM"
+        ), 200
     try:
         seconds = max(3, min(light_mod.LIGHTNING_MAX_S, int(data.get("seconds", 20))))
     except (TypeError, ValueError):
         seconds = 20
-    style = data.get("style") if data.get("style") in (
-        "storm", "strike", "sheet", "flicker") else "storm"
+    style = (
+        data.get("style")
+        if data.get("style") in ("storm", "strike", "sheet", "flicker")
+        else "storm"
+    )
     with light_mod._lightning_lock:
         if light_mod.lightning_state["running"]:
             return jsonify(ok=False, error="already running"), 200
         light_mod._lightning_stop.clear()
-        light_mod.lightning_state.update(running=True, until=time.time() + seconds,
-                               style=style)
+        light_mod.lightning_state.update(running=True, until=time.time() + seconds, style=style)
     db.log_event("light", f"lightning: {style} for {seconds}s")
-    threading.Thread(target=light_mod._storm, args=(seconds, style), daemon=True,
-                     name="lightning").start()
+    threading.Thread(
+        target=light_mod._storm, args=(seconds, style), daemon=True, name="lightning"
+    ).start()
     return jsonify(ok=True, seconds=seconds, style=style)
 
 
@@ -76,7 +80,7 @@ def api_light():
         config.save_config()
         cur_mode = config.settings["light_override"]
         cur_bright = config.settings["manual_bright"]
-    config.wake.set()          # apply now instead of waiting for the next loop pass
+    config.wake.set()  # apply now instead of waiting for the next loop pass
     if mode is not None:
         db.log_event("light", f"override set to {mode}")
     return jsonify(ok=True, mode=cur_mode, brightness=cur_bright)
@@ -89,17 +93,22 @@ def api_light_sweep():
     data = request.get_json(silent=True) or {}
     if data.get("cancel"):
         with light_mod.sweep_lock:
-            light_mod.sweep_state["cancel"] = True     # the worker restores the light
+            light_mod.sweep_state["cancel"] = True  # the worker restores the light
         return jsonify(ok=True, cancelled=True)
     target = "second" if data.get("light") == "second" else "main"
     if target == "second" and light_mod.light2_fixture() is None:
-        return jsonify(ok=False, error="the second light is not available "
-                                       "(turned off, or no second PWM channel)"), 200
+        return jsonify(
+            ok=False,
+            error="the second light is not available (turned off, or no second PWM channel)",
+        ), 200
     key = light_mod.lux_key_for_light(target)
     if not key or sensors.read_all().get(key) is None:
-        return jsonify(ok=False, error=f"no light sensor reading for the "
-                                       f"{setups_mod.light_label(target)}; assign one in "
-                                       "Settings, Setups"), 200
+        return jsonify(
+            ok=False,
+            error=f"no light sensor reading for the "
+            f"{setups_mod.light_label(target)}; assign one in "
+            "Settings, Setups",
+        ), 200
     try:
         step = max(1, min(25, int(data.get("step", 5))))
         settle = max(0.5, min(10.0, float(data.get("settle", 2.0))))
@@ -114,10 +123,18 @@ def api_light_sweep():
     with light_mod.sweep_lock:
         if light_mod.sweep_state["running"]:
             return jsonify(ok=False, error="a sweep is already running"), 200
-        light_mod.sweep_state.update(running=True, pct=0, error="", cancel=False,
-                           started=time.time(), target=target, l2_raw=0.0)
-    threading.Thread(target=light_mod.run_light_sweep, args=(step, settle, linearize, target),
-                     daemon=True).start()
+        light_mod.sweep_state.update(
+            running=True,
+            pct=0,
+            error="",
+            cancel=False,
+            started=time.time(),
+            target=target,
+            l2_raw=0.0,
+        )
+    threading.Thread(
+        target=light_mod.run_light_sweep, args=(step, settle, linearize, target), daemon=True
+    ).start()
     est = int((101 / step + 1) * (settle + 0.3))
     return jsonify(ok=True, started=True, estimate_seconds=est)
 
@@ -143,14 +160,21 @@ def api_plug_discover():
 
     async def scan():
         from kasa import Discover, Credentials
+
         kw = {"discovery_timeout": timeout}
         if user or password:
             kw["credentials"] = Credentials(user, password)
         found = await Discover.discover(**kw)
         out = []
         for host, dev in (found or {}).items():
-            entry = {"host": host, "alias": "", "model": "", "on": None,
-                     "needs_auth": False, "error": ""}
+            entry = {
+                "host": host,
+                "alias": "",
+                "model": "",
+                "on": None,
+                "needs_auth": False,
+                "error": "",
+            }
             try:
                 await dev.update()
                 entry["alias"] = getattr(dev, "alias", "") or ""
@@ -193,9 +217,11 @@ def api_plug_test():
     async def probe():
         dev = await light_mod._kasa_connect(host, user, password)
         await dev.update()
-        return {"alias": getattr(dev, "alias", "") or "",
-                "model": getattr(dev, "model", "") or "",
-                "on": bool(getattr(dev, "is_on", False))}
+        return {
+            "alias": getattr(dev, "alias", "") or "",
+            "model": getattr(dev, "model", "") or "",
+            "on": bool(getattr(dev, "is_on", False)),
+        }
 
     try:
         info = light_mod._kasa_run(probe(), timeout=20)
@@ -205,10 +231,12 @@ def api_plug_test():
         msg = str(e)[:200]
         hint = ""
         if "credential" in msg.lower() or "auth" in msg.lower():
-            hint = ("This plug wants TP-Link account credentials. If they are "
-                    "correct and it still fails, remove the plug in the Kasa "
-                    "app and add it again: changing the account password "
-                    "leaves the device holding the old one.")
+            hint = (
+                "This plug wants TP-Link account credentials. If they are "
+                "correct and it still fails, remove the plug in the Kasa "
+                "app and add it again: changing the account password "
+                "leaves the device holding the old one."
+            )
         return jsonify(ok=False, error=msg, hint=hint), 200
     return jsonify(ok=True, **info)
 
@@ -236,7 +264,7 @@ def api_fan():
                 pass
         mode = config.settings.get("fan_mode", "auto")
         config.save_config()
-    config.wake.set()                      # apply on the next loop pass immediately
+    config.wake.set()  # apply on the next loop pass immediately
     return jsonify(ok=True, mode=mode)
 
 
@@ -250,11 +278,13 @@ def api_heat():
         return jsonify(ok=False, error="mode must be auto, on or off"), 200
     with config.settings_lock:
         if config.settings.get("plug_use", "light") != "heat":
-            return jsonify(ok=False, error="the smart plug is not set to the heat mat "
-                           "(Settings, System, Smart plug)"), 200
+            return jsonify(
+                ok=False,
+                error="the smart plug is not set to the heat mat (Settings, System, Smart plug)",
+            ), 200
         config.settings["heat_mode"] = mode
         config.save_config()
-    threading.Thread(target=heat_mod.heat_pass, daemon=True).start()   # act now
+    threading.Thread(target=heat_mod.heat_pass, daemon=True).start()  # act now
     return jsonify(ok=True, mode=mode)
 
 
@@ -268,8 +298,9 @@ def api_schedule():
     with config.settings_lock:
         mode = config.settings.get("schedule_mode", "solar")
         if mode == "solar":
-            return jsonify(ok=False, error="switch to fixed or duration mode "
-                                           "to drag the schedule"), 200
+            return jsonify(
+                ok=False, error="switch to fixed or duration mode to drag the schedule"
+            ), 200
         changed = {}
         for k in ("fixed_on", "fixed_off", "duration_end"):
             if k in data:
@@ -287,6 +318,6 @@ def api_schedule():
         if changed:
             config.save_config()
     if changed:
-        config.wake.set()                      # recompute the window immediately
+        config.wake.set()  # recompute the window immediately
         log.info(f"schedule updated from chart: {changed}")
     return jsonify(ok=True, changed=changed, mode=mode)

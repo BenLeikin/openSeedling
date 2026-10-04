@@ -22,6 +22,7 @@ early with Ctrl-C and still keep what it measured.
 Duty is PWM duty cycle. On the optocoupler wiring 0% duty is full brightness
 and 100% is dark, so the sweep runs from 100 down to 0 to go dark to bright.
 """
+
 import argparse
 import csv
 import statistics
@@ -45,6 +46,7 @@ def get_lux_reader(samples, app_dir):
     try:
         sys.path.insert(0, app_dir)
         import sensors
+
         if "lux" not in sensors._read_lux():
             return None
 
@@ -56,6 +58,7 @@ def get_lux_reader(samples, app_dir):
                     vals.append(r["lux"])
                 time.sleep(0.05)
             return statistics.median(vals) if vals else None
+
         return read
     except Exception as e:
         print(f"lux sensor unavailable: {e}")
@@ -73,8 +76,10 @@ def summarize(rows, step):
     cutoff = lit[0]
     print(f"peak            {top:.0f} lx at {cutoff[1]:.1f}%..100% brightness")
     print(f"first light at  {cutoff[1]:.2f}% brightness ({cutoff[0]:.2f}% duty)")
-    print(f"usable range    {cutoff[1]:.1f}% to 100% brightness "
-          f"({100 - cutoff[1]:.1f} points of the scale)")
+    print(
+        f"usable range    {cutoff[1]:.1f}% to 100% brightness "
+        f"({100 - cutoff[1]:.1f} points of the scale)"
+    )
 
     # how many steps actually changed the reading, and by how much
     deltas = []
@@ -83,46 +88,61 @@ def summarize(rows, step):
             deltas.append(abs(b[2] - a[2]))
     if deltas:
         moved = sum(1 for d in deltas if d > max(1.0, top * 0.0005))
-        print(f"\nof {len(deltas)} steps of {step}% inside the lit range, "
-              f"{moved} changed the reading")
+        print(
+            f"\nof {len(deltas)} steps of {step}% inside the lit range, {moved} changed the reading"
+        )
         print(f"median change per step   {statistics.median(deltas):.1f} lx")
         print(f"largest single step      {max(deltas):.1f} lx")
         if moved < len(deltas) * 0.5:
-            print(f"\nMore than half the {step}% steps did nothing measurable. "
-                  f"The practical resolution is coarser than {step}%.")
+            print(
+                f"\nMore than half the {step}% steps did nothing measurable. "
+                f"The practical resolution is coarser than {step}%."
+            )
         else:
-            print(f"\nMost {step}% steps moved the light, so the fixture "
-                  f"resolves at least that finely.")
+            print(
+                f"\nMost {step}% steps moved the light, so the fixture "
+                f"resolves at least that finely."
+            )
 
     # where the curve is steep: those regions need finer control in software
     if len(lit) > 20:
         chunk = max(1, len(lit) // 10)
         print("\nsteepness by tenth of the lit range (lx change per step):")
         for i in range(0, len(lit) - 1, chunk):
-            part = lit[i:i + chunk + 1]
-            ds = [abs(b[2] - a[2]) for a, b in zip(part, part[1:])
-                  if a[2] is not None and b[2] is not None]
+            part = lit[i : i + chunk + 1]
+            ds = [
+                abs(b[2] - a[2])
+                for a, b in zip(part, part[1:])
+                if a[2] is not None and b[2] is not None
+            ]
             if ds:
-                print(f"  {part[0][1]:5.1f}% to {part[-1][1]:5.1f}% brightness: "
-                      f"{statistics.mean(ds):7.1f}")
+                print(
+                    f"  {part[0][1]:5.1f}% to {part[-1][1]:5.1f}% brightness: "
+                    f"{statistics.mean(ds):7.1f}"
+                )
 
 
 def main():
-    ap = argparse.ArgumentParser(
-        description="Sweep dark to full at the finest usable resolution")
+    ap = argparse.ArgumentParser(description="Sweep dark to full at the finest usable resolution")
     ap.add_argument("--pin", type=int, default=DEFAULT_PIN)
     ap.add_argument("--hz", type=int, default=DEFAULT_HZ)
-    ap.add_argument("--step", type=float, default=0.1,
-                    help="duty step in percent (default 0.1)")
-    ap.add_argument("--settle", type=float, default=0.35,
-                    help="seconds to wait after each change (default 0.35)")
-    ap.add_argument("--samples", type=int, default=3,
-                    help="lux readings median-averaged per point")
+    ap.add_argument("--step", type=float, default=0.1, help="duty step in percent (default 0.1)")
+    ap.add_argument(
+        "--settle",
+        type=float,
+        default=0.35,
+        help="seconds to wait after each change (default 0.35)",
+    )
+    ap.add_argument("--samples", type=int, default=3, help="lux readings median-averaged per point")
     ap.add_argument("--csv", default=None, help="write the curve to this file")
-    ap.add_argument("--app", default=str(Path(__file__).resolve().parent.parent),
-                    help="app directory, for the sensors module")
-    ap.add_argument("--quiet", action="store_true",
-                    help="only print points where the reading changed")
+    ap.add_argument(
+        "--app",
+        default=str(Path(__file__).resolve().parent.parent),
+        help="app directory, for the sensors module",
+    )
+    ap.add_argument(
+        "--quiet", action="store_true", help="only print points where the reading changed"
+    )
     args = ap.parse_args()
 
     if args.step <= 0:
@@ -137,14 +157,15 @@ def main():
     try:
         pwm = HardwarePWM(pwm_channel=ch, hz=args.hz, chip=0)
     except Exception as e:
-        raise SystemExit(f"could not open PWM channel {ch}: {e}\n"
-                         "Is the growlight service stopped?")
+        raise SystemExit(f"could not open PWM channel {ch}: {e}\nIs the growlight service stopped?")
 
     read_lux = get_lux_reader(args.samples, args.app)
     if read_lux is None:
-        raise SystemExit("this needs the BH1750: without a light reading there "
-                         "is nothing to measure. Use pwm_sweep.py to step by "
-                         "hand instead.")
+        raise SystemExit(
+            "this needs the BH1750: without a light reading there "
+            "is nothing to measure. Use pwm_sweep.py to step by "
+            "hand instead."
+        )
 
     points = int(round(100.0 / args.step)) + 1
     est = points * (args.settle + args.samples * 0.05) / 60.0

@@ -9,6 +9,7 @@ Run as a subprocess so OpenCV's memory is freed after each call rather than
 staying resident in the controller process. Detection is a starting point only;
 the dashboard always lets you drag the corners to correct it.
 """
+
 import json
 import sys
 
@@ -18,8 +19,7 @@ def detect(path):
         import cv2
         import numpy as np
     except Exception:
-        return {"ok": False,
-                "error": "OpenCV isn't installed on the Pi; place corners manually."}
+        return {"ok": False, "error": "OpenCV isn't installed on the Pi; place corners manually."}
 
     img = cv2.imread(path)
     if img is None:
@@ -30,8 +30,7 @@ def detect(path):
     small = cv2.resize(img, (max(1, int(w * scale)), max(1, int(h * scale))))
     H, W = small.shape[:2]
     gray = cv2.GaussianBlur(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY), (5, 5), 0)
-    edges = cv2.dilate(cv2.Canny(gray, 40, 120),
-                       np.ones((5, 5), np.uint8), iterations=2)
+    edges = cv2.dilate(cv2.Canny(gray, 40, 120), np.ones((5, 5), np.uint8), iterations=2)
     cnts, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not cnts:
         return {"ok": False, "error": "Nothing detected; place corners manually."}
@@ -40,8 +39,12 @@ def detect(path):
         pts = np.array(pts, dtype=np.float32)
         s = pts.sum(1)
         d = np.diff(pts, axis=1).ravel()
-        return [pts[np.argmin(s)], pts[np.argmin(d)],
-                pts[np.argmax(s)], pts[np.argmax(d)]]  # TL, TR, BR, BL
+        return [
+            pts[np.argmin(s)],
+            pts[np.argmin(d)],
+            pts[np.argmax(s)],
+            pts[np.argmax(d)],
+        ]  # TL, TR, BR, BL
 
     cnts = sorted(cnts, key=cv2.contourArea, reverse=True)
     quad = None
@@ -55,8 +58,10 @@ def detect(path):
     if quad is None:
         quad = order(cv2.boxPoints(cv2.minAreaRect(cnts[0])))
 
-    corners = [[round(min(1.0, max(0.0, float(x) / W)), 4),
-                round(min(1.0, max(0.0, float(y) / H)), 4)] for x, y in quad]
+    corners = [
+        [round(min(1.0, max(0.0, float(x) / W)), 4), round(min(1.0, max(0.0, float(y) / H)), 4)]
+        for x, y in quad
+    ]
     return {"ok": True, "corners": corners}
 
 

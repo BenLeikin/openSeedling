@@ -10,6 +10,7 @@ never provided. These rules exist to say WHEN a reading should be distrusted,
 not to invent a better number. A rule that silently "corrects" a value is
 worse than one that flags it, because it hides the fault that needs fixing.
 """
+
 import statistics
 
 # ---------------------------------------------------------------- bounds ----
@@ -18,15 +19,15 @@ import statistics
 # signal is gone, not that the soil is dry. Keyed by sensor prefix, checked
 # longest-prefix first so "temp:soil" can differ from "temp:air".
 BOUNDS = {
-    "probe:":      (0.05, 3.25),   # volts on a 3.3V rail; rail or 0 = fault
-    "temp:soil":   (-5.0, 70.0),   # Celsius
-    "temp:air":    (-20.0, 60.0),
-    "humidity":    (0.0, 100.0),
-    "pressure":    (800.0, 1100.0),  # hPa at any habitable altitude
-    "lux":         (0.0, 200000.0),
-    "canopy:":     (0.0, 100.0),
-    "float:":      (0.0, 1.0),
-    "reservoir:":  (0.0, 1.0),
+    "probe:": (0.05, 3.25),  # volts on a 3.3V rail; rail or 0 = fault
+    "temp:soil": (-5.0, 70.0),  # Celsius
+    "temp:air": (-20.0, 60.0),
+    "humidity": (0.0, 100.0),
+    "pressure": (800.0, 1100.0),  # hPa at any habitable altitude
+    "lux": (0.0, 200000.0),
+    "canopy:": (0.0, 100.0),
+    "float:": (0.0, 1.0),
+    "reservoir:": (0.0, 1.0),
 }
 
 
@@ -49,7 +50,7 @@ def check_bounds(sensor, value):
         v = float(value)
     except (TypeError, ValueError):
         return "not a number"
-    if v != v:                      # NaN
+    if v != v:  # NaN
         return "not a number"
     if v < lo:
         return f"below the possible minimum ({v:g} < {lo:g})"
@@ -85,15 +86,15 @@ def spike_or_step(values, jump=0.08, confirm=3, window=9):
             f = float(v)
         except (TypeError, ValueError):
             continue
-        if f == f:                 # drop NaN, which compares false against all
+        if f == f:  # drop NaN, which compares false against all
             clean.append(f)
     values = clean
     if not values:
         return None, "no data"
     newest = values[0]
     if len(values) < confirm + 2:
-        return newest, "steady"      # not enough history to judge
-    baseline_pool = values[confirm:confirm + window]
+        return newest, "steady"  # not enough history to judge
+    baseline_pool = values[confirm : confirm + window]
     if len(baseline_pool) < 2:
         return newest, "steady"
     baseline = statistics.median(baseline_pool)
@@ -113,8 +114,7 @@ def spike_or_step(values, jump=0.08, confirm=3, window=9):
         # movement is the signal; half the threshold is enough to separate it
         # from a spike decaying back to baseline.
         up = newest > baseline
-        ordered = all((recent[i] - recent[i + 1] > 0) == up
-                      for i in range(len(recent) - 1))
+        ordered = all((recent[i] - recent[i + 1] > 0) == up for i in range(len(recent) - 1))
         if ordered and all(abs(v - baseline) > jump / 2 for v in recent):
             return newest, "trend"
     return baseline, "spike"
@@ -151,8 +151,9 @@ def check_stuck(values, cadence_s, min_run=12, min_hours=2.0):
         return None
     if run * max(1.0, cadence_s) < min_hours * 3600:
         return None
-    return (f"identical value for {run} readings "
-            f"(~{run * cadence_s / 3600:.1f}h); sensor may be frozen")
+    return (
+        f"identical value for {run} readings (~{run * cadence_s / 3600:.1f}h); sensor may be frozen"
+    )
 
 
 # --------------------------------------------------- cross-sensor checks ----
@@ -172,31 +173,51 @@ def contradictions(snap, cfg=None, pumped_recently=False):
     if len(probes) == 2 and not pumped_recently:
         a, b = sorted(probes)
         if abs(probes[a] - probes[b]) > 0.60:
-            out.append(("probe", f"trays {a} and {b} disagree by "
-                                 f"{abs(probes[a]-probes[b]):.2f}V with no recent "
-                                 "watering; one probe may be faulty or misplaced"))
+            out.append(
+                (
+                    "probe",
+                    f"trays {a} and {b} disagree by "
+                    f"{abs(probes[a] - probes[b]):.2f}V with no recent "
+                    "watering; one probe may be faulty or misplaced",
+                )
+            )
 
     # a float reporting full while its probe reads bone dry is a contradiction
     # that one of the two is wrong about
     for t, v in probes.items():
         f = snap.get(f"float:{t}")
-        cal = ((cfg.get("probe_cal") or {}).get(t) or {})
+        cal = (cfg.get("probe_cal") or {}).get(t) or {}
         dry = cal.get("dry")
         if f is not None and dry is not None and f < 1 and v >= dry - 0.05:
-            out.append(("probe", f"tray {t} float says full but its probe reads "
-                                 "dry; check the probe placement or the float"))
+            out.append(
+                (
+                    "probe",
+                    f"tray {t} float says full but its probe reads "
+                    "dry; check the probe placement or the float",
+                )
+            )
 
     # soil far from air with no heat source explains itself only if a mat is on
     st, at = snap.get("temp:soil"), snap.get("temp:air")
     if st is not None and at is not None and abs(st - at) > 15:
-        out.append(("temp:soil", f"soil is {abs(st-at):.0f}C from air temp; "
-                                 "expected with a heat mat, otherwise suspect "
-                                 "the probe"))
+        out.append(
+            (
+                "temp:soil",
+                f"soil is {abs(st - at):.0f}C from air temp; "
+                "expected with a heat mat, otherwise suspect "
+                "the probe",
+            )
+        )
 
     # lux during the photoperiod should not be zero
     if cfg.get("_light_on") and snap.get("lux") is not None and snap["lux"] < 1:
-        out.append(("lux", "the light is on but the sensor reads darkness; "
-                           "check the sensor or whether the fixture is lit"))
+        out.append(
+            (
+                "lux",
+                "the light is on but the sensor reads darkness; "
+                "check the sensor or whether the fixture is lit",
+            )
+        )
     return out
 
 
@@ -215,17 +236,20 @@ def postfill_verdict(volts, cal, tolerance=0.15):
     if abs(delta) <= tolerance:
         return True, f"post-fill {volts:.3f}V, wet anchor {wet:.3f}V: healthy"
     if delta > 0:
-        return False, (f"post-fill {volts:.3f}V is {delta:.3f}V drier than the "
-                       f"wet anchor ({wet:.3f}V): the tray may not be filling, "
-                       "or the probe is drifting")
-    return False, (f"post-fill {volts:.3f}V is {abs(delta):.3f}V wetter than the "
-                   f"wet anchor ({wet:.3f}V): the wet anchor was captured too "
-                   "dry, so readings will peg at 100%")
+        return False, (
+            f"post-fill {volts:.3f}V is {delta:.3f}V drier than the "
+            f"wet anchor ({wet:.3f}V): the tray may not be filling, "
+            "or the probe is drifting"
+        )
+    return False, (
+        f"post-fill {volts:.3f}V is {abs(delta):.3f}V wetter than the "
+        f"wet anchor ({wet:.3f}V): the wet anchor was captured too "
+        "dry, so readings will peg at 100%"
+    )
 
 
 # --------------------------------------------------------- health score ----
-def health(values, *, age_s=None, cadence_s=300, rejects=0, verdict="steady",
-           noise_ref=None):
+def health(values, *, age_s=None, cadence_s=300, rejects=0, verdict="steady", noise_ref=None):
     """Per-sensor health -> (score 0-100, grade, reasons).
 
     Deliberately simple and explainable: each fault subtracts a fixed amount
@@ -237,7 +261,7 @@ def health(values, *, age_s=None, cadence_s=300, rejects=0, verdict="steady",
 
     if age_s is not None and cadence_s and age_s > 3 * cadence_s:
         score -= 40
-        why.append(f"last reading {age_s/60:.0f} min old")
+        why.append(f"last reading {age_s / 60:.0f} min old")
 
     stuck = check_stuck(values, cadence_s)
     if stuck:
@@ -262,7 +286,5 @@ def health(values, *, age_s=None, cadence_s=300, rejects=0, verdict="steady",
             pass
 
     score = max(0, min(100, score))
-    grade = ("good" if score >= 80 else
-             "fair" if score >= 55 else
-             "poor" if score >= 30 else "bad")
+    grade = "good" if score >= 80 else "fair" if score >= 55 else "poor" if score >= 30 else "bad"
     return score, grade, why

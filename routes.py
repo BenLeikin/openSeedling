@@ -13,7 +13,16 @@ from datetime import timedelta
 from functools import wraps
 from pathlib import Path
 from markupsafe import Markup
-from flask import Flask, Response, has_request_context, jsonify, render_template, request, session, send_from_directory
+from flask import (
+    Flask,
+    Response,
+    has_request_context,
+    jsonify,
+    render_template,
+    request,
+    session,
+    send_from_directory,
+)
 from flask.sessions import SecureCookieSessionInterface
 from werkzeug.security import check_password_hash
 
@@ -31,6 +40,8 @@ import status as status_mod
 app = Flask(__name__)
 
 SECRET_PATH = Path(__file__).with_name(".secret")
+
+
 def _load_secret():
     try:
         s = SECRET_PATH.read_text().strip()
@@ -46,6 +57,7 @@ def _load_secret():
     except Exception:
         pass
     return s
+
 
 app.secret_key = _load_secret()
 app.config.update(
@@ -63,14 +75,14 @@ class _SessionInterface(SecureCookieSessionInterface):
     fixed False sent the session in clear behind HTTPS. "auto" marks it Secure
     when the request arrived over HTTPS, directly or via a proxy that sets
     X-Forwarded-Proto. An explicit true/false in config.json still wins."""
+
     def get_cookie_secure(self, app):
         mode = config.settings.get("cookie_secure", "auto")
         if mode != "auto":
             return bool(mode)
         if not has_request_context():
             return False
-        return (request.is_secure or
-                request.headers.get("X-Forwarded-Proto", "").lower() == "https")
+        return request.is_secure or request.headers.get("X-Forwarded-Proto", "").lower() == "https"
 
 
 app.session_interface = _SessionInterface()
@@ -86,9 +98,12 @@ def is_authed():
     if not auth_enabled() or session.get("authed"):
         return True
     # The touchscreen on this Pi (scripts/kiosk.sh) connects from 127.0.0.1.
-    return bool(config.TRUST_LOCALHOST and has_request_context()
-                and request.remote_addr in ("127.0.0.1", "::1")
-                and not request.headers.get("X-Forwarded-For"))
+    return bool(
+        config.TRUST_LOCALHOST
+        and has_request_context()
+        and request.remote_addr in ("127.0.0.1", "::1")
+        and not request.headers.get("X-Forwarded-For")
+    )
 
 
 def require_auth(fn):
@@ -99,6 +114,7 @@ def require_auth(fn):
     one: that needs a CORS preflight this app never answers. SameSite=Lax alone
     does not cover it, because it lets a sibling subdomain through, and with no
     password set there is no cookie to protect at all."""
+
     @wraps(fn)
     def wrapper(*a, **k):
         if request.method != "GET" and not request.is_json:
@@ -109,6 +125,7 @@ def require_auth(fn):
         if not is_authed():
             return jsonify(error="login required"), 401
         return fn(*a, **k)
+
     return wrapper
 
 
@@ -175,8 +192,13 @@ def form_attrs(key):
 
 @app.route("/")
 def index():
-    return render_template("index.html", tzs=config.TIMEZONES, v=_asset_ver(),
-                           fa=form_attrs, form_spec=config.form_spec())
+    return render_template(
+        "index.html",
+        tzs=config.TIMEZONES,
+        v=_asset_ver(),
+        fa=form_attrs,
+        form_spec=config.form_spec(),
+    )
 
 
 @app.after_request
@@ -208,8 +230,7 @@ def screen():
 @app.route("/favicon.ico")
 def favicon():
     # browsers request this at the site root regardless of the <link> tags
-    return send_from_directory(app.static_folder, "favicon.ico",
-                               mimetype="image/x-icon")
+    return send_from_directory(app.static_folder, "favicon.ico", mimetype="image/x-icon")
 
 
 @app.route("/site.webmanifest")
@@ -217,19 +238,24 @@ def webmanifest():
     """Home-screen metadata. Served from a route rather than /static because
     Flask's mimetype guess for .webmanifest is application/octet-stream, which
     some browsers refuse."""
-    return Response(json.dumps({
-        "name": "OpenSeedling",
-        "short_name": "Seedling",
-        "start_url": "/",
-        "display": "standalone",
-        "background_color": "#f0f6ea",
-        "theme_color": "#f0f6ea",
-        "icons": [
-            {"src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png"},
-            {"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png"},
-            {"src": "/static/icon.svg", "sizes": "any", "type": "image/svg+xml"},
-        ],
-    }), mimetype="application/manifest+json")
+    return Response(
+        json.dumps(
+            {
+                "name": "OpenSeedling",
+                "short_name": "Seedling",
+                "start_url": "/",
+                "display": "standalone",
+                "background_color": "#f0f6ea",
+                "theme_color": "#f0f6ea",
+                "icons": [
+                    {"src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png"},
+                    {"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png"},
+                    {"src": "/static/icon.svg", "sizes": "any", "type": "image/svg+xml"},
+                ],
+            }
+        ),
+        mimetype="application/manifest+json",
+    )
 
 
 @app.route("/api/stream")
@@ -240,7 +266,7 @@ def api_stream():
     slow poll running regardless, so a stream that dies quietly degrades to the
     old behaviour instead of freezing the page.
     """
-    authed = is_authed()          # read while the request context still exists
+    authed = is_authed()  # read while the request context still exists
     with status_mod._subs_lock:
         if len(status_mod._subs) >= status_mod.STREAM_MAX:
             return jsonify(error="too many live connections"), 503
@@ -249,7 +275,7 @@ def api_stream():
 
     def gen():
         try:
-            yield "retry: 5000\n\n"          # how soon the browser retries
+            yield "retry: 5000\n\n"  # how soon the browser retries
             # a new tab gets a fresh status, not the last push's copy, which
             # may predate things that changed without a push (the clock)
             yield f"event: status\ndata: {json.dumps(status_mod.status_payload(authed))}\n\n"
@@ -257,7 +283,7 @@ def api_stream():
                 with status_mod._subs_lock:
                     culled = q not in status_mod._subs
                 if culled or hardware.SHUTTING_DOWN.is_set():
-                    return      # dropped or shutting down; the browser reconnects
+                    return  # dropped or shutting down; the browser reconnects
                 try:
                     q.get(timeout=status_mod.STREAM_HEARTBEAT)
                     if hardware.SHUTTING_DOWN.is_set():
@@ -280,10 +306,14 @@ def api_stream():
     # No "Connection" header: it is hop-by-hop, and PEP 3333 forbids a WSGI
     # application from setting it. The dev server tolerated it; waitress
     # refuses the response outright.
-    return Response(gen(), mimetype="text/event-stream", headers={
-        "Cache-Control": "no-cache, no-transform",
-        "X-Accel-Buffering": "no",    # nginx would otherwise buffer the stream
-    })
+    return Response(
+        gen(),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",  # nginx would otherwise buffer the stream
+        },
+    )
 
 
 @app.route("/api/status")
@@ -292,7 +322,7 @@ def status():
     if payload.get("error") == "warming up":
         return jsonify(payload), 503
     if request.args.get("lite"):
-        payload = status_mod.lite(payload)       # the touchscreen summary
+        payload = status_mod.lite(payload)  # the touchscreen summary
     return jsonify(payload)
 
 
@@ -333,8 +363,10 @@ def update_settings():
         for k in ("plug_use", "light_backend"):
             if k in new:
                 new.pop(k)
-                errors[k] = ("the smart plug cannot be the light and the heat mat; "
-                             "pick another light backend or give the plug to the light")
+                errors[k] = (
+                    "the smart plug cannot be the light and the heat mat; "
+                    "pick another light backend or give the plug to the light"
+                )
     # The mat keeps heating the soil for a while after it switches off, and the
     # probe is read every few minutes, so the soil overshoots the target. A
     # cut-off closer than 3F would trip on that ordinary overshoot, hold the
@@ -343,14 +375,16 @@ def update_settings():
     if ("heat_target_f" in new or "heat_max_f" in new) and float(mx) < float(tgt) + 3:
         new.pop("heat_target_f", None)
         new.pop("heat_max_f", None)
-        errors["heat_max_f"] = (f"must be at least {float(tgt) + 3:g}F with the soil target at "
-                                f"{float(tgt):g}F (3F above it, room for the soil's overshoot "
-                                "after the mat switches off)")
+        errors["heat_max_f"] = (
+            f"must be at least {float(tgt) + 3:g}F with the soil target at "
+            f"{float(tgt):g}F (3F above it, room for the soil's overshoot "
+            "after the mat switches off)"
+        )
         if "heat_target_f" in data:
             errors["heat_target_f"] = "not saved until the cut-off is at least 3F above it"
     if new:
         if any(k.startswith("kasa_") for k in new):
-            light_mod._kasa_dev = None      # reconnect with the new address or credentials
+            light_mod._kasa_dev = None  # reconnect with the new address or credentials
         with config.settings_lock:
             was = light_mod.light_backend(config.settings)
             flat_was = config.settings.get("timelapse_flatten", True)
@@ -360,23 +394,32 @@ def update_settings():
             crop_reset = False
             # (the settings form resubmits the crop field unchanged, so "the
             # crop was not edited in this save" is the test, not "absent")
-            if (roi_was and new.get("roi", roi_was) == roi_was and
-                    (config.settings.get("usb_width"), config.settings.get("usb_height")) != size_was):
+            if (
+                roi_was
+                and new.get("roi", roi_was) == roi_was
+                and (config.settings.get("usb_width"), config.settings.get("usb_height"))
+                != size_was
+            ):
                 # the crop was drawn on the old mode's view, which a UVC camera
                 # frames differently; keeping it would cut the wrong area
                 config.settings["roi"] = ""
                 crop_reset = True
                 log.info("capture size changed: crop reset to full frame")
             now_backend = light_mod.light_backend(config.settings)
-            flat_changed = (config.settings.get("timelapse_flatten", True) != flat_was
-                            or config.settings.get("roi", "") != roi_was)
+            flat_changed = (
+                config.settings.get("timelapse_flatten", True) != flat_was
+                or config.settings.get("roi", "") != roi_was
+            )
             config.save_config()
         if flat_changed:
             # thumbnails are built once per photo; without this the scrubber
             # would keep showing the old geometry
             camera_mod.rebuild_thumbs_async()
-        if ("video_fps" in new and camera_mod.VIDEO_PATH.exists()
-                and db.kv_get("video_fps_rendered") != float(new["video_fps"])):
+        if (
+            "video_fps" in new
+            and camera_mod.VIDEO_PATH.exists()
+            and db.kv_get("video_fps_rendered") != float(new["video_fps"])
+        ):
             # the video file only changes when it is rendered; do it now
             # rather than leave the download at the old speed
             camera_mod.start_render()
@@ -385,14 +428,14 @@ def update_settings():
             light_mod.release_backend(was)
             db.log_event("light", f"backend {was} -> {now_backend}")
         config.wake.set()
-    return jsonify(ok=not errors, saved=sorted(new), errors=errors,
-                   crop_reset=bool(new) and crop_reset)
+    return jsonify(
+        ok=not errors, saved=sorted(new), errors=errors, crop_reset=bool(new) and crop_reset
+    )
 
 
 # The routes for each area live in their own modules; importing them
 # registers their routes on app. Last, because they import this module.
-import routes_camera   # noqa: E402,F401
-import routes_garden   # noqa: E402,F401
+import routes_camera  # noqa: E402,F401
+import routes_garden  # noqa: E402,F401
 import routes_climate  # noqa: E402,F401
-import routes_data     # noqa: E402,F401
-
+import routes_data  # noqa: E402,F401

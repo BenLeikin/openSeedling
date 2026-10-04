@@ -26,8 +26,9 @@ PERSIST_PUMP_KEYS = ("last_run", "today_seconds", "day", "last_detail")
 def save_persistent_state():
     """Write pump history and the failed-fill notice to the database."""
     try:
-        data = {t: {k: st.get(k) for k in PERSIST_PUMP_KEYS}
-                for t, st in hardware.pump_state.items()}
+        data = {
+            t: {k: st.get(k) for k in PERSIST_PUMP_KEYS} for t, st in hardware.pump_state.items()
+        }
         db.kv_set("pump_state", data)
         db.kv_set("fill_failure", {"msg": fill_failure.get("msg", "")})
     except Exception as e:
@@ -43,10 +44,10 @@ def restore_persistent_state():
         log.error(f"could not restore pump state: {e}")
         return
     today = config._today_str()
-    for tray, saved in (data.items() if isinstance(data, dict) else []):
+    for tray, saved in data.items() if isinstance(data, dict) else []:
         st = hardware.pump_state.get(str(tray))
         if st is None or not isinstance(saved, dict):
-            continue                  # a tray that is no longer wired
+            continue  # a tray that is no longer wired
         try:
             st["last_run"] = max(0.0, float(saved.get("last_run") or 0))
             st["today_seconds"] = max(0.0, float(saved.get("today_seconds") or 0))
@@ -64,6 +65,7 @@ def restore_persistent_state():
         fill_failure["msg"] = str(ff.get("msg") or "")
     restored = {t: round(st["today_seconds"], 1) for t, st in hardware.pump_state.items()}
     log.info(f"restored pump state: today {restored}s")
+
 
 # Auto-watering used to be one switch for every tray. A config from then with
 # it on arms every tray with a pump, once, so an upgrade changes nothing.
@@ -130,8 +132,8 @@ def run_pump(tray, seconds, reason="manual", force=False):
     elapsed = 0.0
     try:
         hardware._pumps[tray].on()
-        t0 = time.monotonic()          # a clock step (NTP at boot) must not stretch or cut a run
-        hardware.SHUTTING_DOWN.wait(secs)          # a shutdown ends the run early
+        t0 = time.monotonic()  # a clock step (NTP at boot) must not stretch or cut a run
+        hardware.SHUTTING_DOWN.wait(secs)  # a shutdown ends the run early
         elapsed = time.monotonic() - t0
     finally:
         hardware._pumps[tray].off()
@@ -184,33 +186,33 @@ def run_pump_until_full(tray, reason="fill", force=False):
         st["running"] = True
     elapsed = 0.0
     tripped = False
-    stop_why = "cap"                         # cap | float_lost | reservoir
-    confirm = 0                              # consecutive "full" reads needed
-    CONFIRM_NEEDED = 4                        # ~0.4s steady, rejects slosh/bobble
+    stop_why = "cap"  # cap | float_lost | reservoir
+    confirm = 0  # consecutive "full" reads needed
+    CONFIRM_NEEDED = 4  # ~0.4s steady, rejects slosh/bobble
     try:
         hardware._pumps[tray].on()
-        t0 = time.monotonic()          # a clock step (NTP at boot) must not stretch or cut a run
+        t0 = time.monotonic()  # a clock step (NTP at boot) must not stretch or cut a run
         while True:
             elapsed = time.monotonic() - t0
             if elapsed >= run_cap:
-                break                        # cap hit, float never stayed full
+                break  # cap hit, float never stayed full
             if hardware.SHUTTING_DOWN.is_set():
                 stop_why = "shutdown"
                 break
             if not force and reservoir_state() == "empty":
-                stop_why = "reservoir"       # ran the source dry mid-fill
+                stop_why = "reservoir"  # ran the source dry mid-fill
                 break
             fv = sensors.read_float(tray)
-            if fv is None or fv < 1:         # full (open) or sensor lost
+            if fv is None or fv < 1:  # full (open) or sensor lost
                 confirm += 1
                 if confirm >= CONFIRM_NEEDED:
-                    tripped = (fv is not None and fv < 1)
+                    tripped = fv is not None and fv < 1
                     if not tripped:
                         stop_why = "float_lost"
-                    break                    # full held steady -> stop
+                    break  # full held steady -> stop
             else:
-                confirm = 0                  # a not-full read resets the count
-            time.sleep(0.1)                  # poll the float ~10x/sec
+                confirm = 0  # a not-full read resets the count
+            time.sleep(0.1)  # poll the float ~10x/sec
     finally:
         hardware._pumps[tray].off()
         with hardware.pump_lock:
@@ -220,17 +222,16 @@ def run_pump_until_full(tray, reason="fill", force=False):
             if tripped:
                 detail = f"tray {tray} {reason}: full at {elapsed:.1f}s"
             elif stop_why == "reservoir":
-                detail = (f"tray {tray} {reason}: STOPPED at {elapsed:.1f}s, "
-                          "reservoir ran empty")
+                detail = f"tray {tray} {reason}: STOPPED at {elapsed:.1f}s, reservoir ran empty"
             elif stop_why == "float_lost":
-                detail = (f"tray {tray} {reason}: STOPPED at {elapsed:.1f}s, "
-                          "float sensor stopped answering")
+                detail = (
+                    f"tray {tray} {reason}: STOPPED at {elapsed:.1f}s, "
+                    "float sensor stopped answering"
+                )
             elif stop_why == "shutdown":
-                detail = (f"tray {tray} {reason}: STOPPED at {elapsed:.1f}s, "
-                          "service shutting down")
+                detail = f"tray {tray} {reason}: STOPPED at {elapsed:.1f}s, service shutting down"
             else:
-                detail = (f"tray {tray} {reason}: STOPPED at {elapsed:.1f}s cap, "
-                          "no float trip")
+                detail = f"tray {tray} {reason}: STOPPED at {elapsed:.1f}s cap, no float trip"
             st["last_detail"] = detail
     try:
         db.log_event("pump", detail)
@@ -238,9 +239,9 @@ def run_pump_until_full(tray, reason="fill", force=False):
         pass
     status_mod.publish("pump")
     if tripped:
-        fill_failure["msg"] = ""             # a good fill resolves the alert
+        fill_failure["msg"] = ""  # a good fill resolves the alert
         save_persistent_state()
-        schedule_postfill(tray, tripped=True)   # judge the probe once water wicks
+        schedule_postfill(tray, tripped=True)  # judge the probe once water wicks
         return True, f"filled in {elapsed:.1f}s"
     if stop_why == "shutdown":
         # Not a failed fill: no alert, and auto-watering stays as it was, so
@@ -249,12 +250,15 @@ def run_pump_until_full(tray, reason="fill", force=False):
         return False, f"stopped at {elapsed:.1f}s, service shutting down"
     fill_failure["msg"] = {
         "reservoir": f"Tray {tray} fill stopped at {elapsed:.1f}s: the "
-                     "reservoir ran empty. Refill it before watering again.",
+        "reservoir ran empty. Refill it before watering again.",
         "float_lost": f"Tray {tray} fill stopped at {elapsed:.1f}s: the float "
-                      "switch stopped answering. Check its wiring.",
-    }.get(stop_why, f"Tray {tray} fill ran to the {elapsed:.1f}s cap "
-                    "without the float tripping. Likely causes: source "
-                    "empty, tube off, or float stuck.")
+        "switch stopped answering. Check its wiring.",
+    }.get(
+        stop_why,
+        f"Tray {tray} fill ran to the {elapsed:.1f}s cap "
+        "without the float tripping. Likely causes: source "
+        "empty, tube off, or float stuck.",
+    )
     # a fill that can't complete means auto-watering must not keep trying
     # this tray; the others keep their own arming
     with config.settings_lock:
@@ -268,17 +272,17 @@ def run_pump_until_full(tray, reason="fill", force=False):
             except Exception as e:
                 log.warning(f"auto_water disable not persisted ({e})")
     save_persistent_state()
-    return False, {"reservoir": f"stopped at {elapsed:.1f}s, reservoir empty",
-                   "float_lost": f"stopped at {elapsed:.1f}s, float sensor lost",
-                   }.get(stop_why,
-                         f"ran to {elapsed:.1f}s cap without float trip (source empty?)")
+    return False, {
+        "reservoir": f"stopped at {elapsed:.1f}s, reservoir empty",
+        "float_lost": f"stopped at {elapsed:.1f}s, float sensor lost",
+    }.get(stop_why, f"ran to {elapsed:.1f}s cap without float trip (source empty?)")
 
 
-PROBE_DEFAULT_CAL = {"wet": 1.25, "dry": 2.95}   # typical HW-390 on 3.3V; used
-                                                 # until a tray is calibrated
+PROBE_DEFAULT_CAL = {"wet": 1.25, "dry": 2.95}  # typical HW-390 on 3.3V; used
+# until a tray is calibrated
 
 
-TEMP_COMP_REF_F = 70.0   # compensation is zero at this soil temp
+TEMP_COMP_REF_F = 70.0  # compensation is zero at this soil temp
 
 
 def compensated_volts(volts, cal, soil_temp_f):
@@ -292,9 +296,10 @@ def compensated_volts(volts, cal, soil_temp_f):
     ref = tc.get("ref_f", TEMP_COMP_REF_F)
     return volts - coeff * (soil_temp_f - ref)
 
-PROBE_JUMP_V = 0.08     # volts; a departure larger than this is judged
-PROBE_CONFIRM = 3       # consecutive agreeing readings that make it a step
-_probe_verdict = {}     # tray -> "steady" | "spike" | "step", for display
+
+PROBE_JUMP_V = 0.08  # volts; a departure larger than this is judged
+PROBE_CONFIRM = 3  # consecutive agreeing readings that make it a step
+_probe_verdict = {}  # tray -> "steady" | "spike" | "step", for display
 
 
 def probe_volts_filtered(tray, snap=None):
@@ -333,9 +338,8 @@ def probe_volts_filtered(tray, snap=None):
         return raw, ts
     vals = [v for v in vals if isinstance(v, (int, float))]
     if len(vals) < 3:
-        return raw, ts          # not enough history to filter meaningfully
-    val, verdict = quality.spike_or_step(vals, jump=PROBE_JUMP_V,
-                                         confirm=PROBE_CONFIRM)
+        return raw, ts  # not enough history to filter meaningfully
+    val, verdict = quality.spike_or_step(vals, jump=PROBE_JUMP_V, confirm=PROBE_CONFIRM)
     _probe_verdict[str(tray)] = verdict
     return (val if val is not None else raw), ts
 
@@ -348,7 +352,7 @@ def probe_moisture(volts, cal, soil_temp_f=None):
     wet, dry = cal.get("wet"), cal.get("dry")
     if wet is None or dry is None:
         return None
-    if dry - wet < 0.05:      # anchors too close to mean anything
+    if dry - wet < 0.05:  # anchors too close to mean anything
         return None
     v = compensated_volts(volts, cal, soil_temp_f)
     return round(max(0.0, min(100.0, 100.0 * (dry - v) / (dry - wet))))
@@ -363,7 +367,7 @@ def probe_moisture_any(volts, cal, soil_temp_f=None):
     return probe_moisture(volts, PROBE_DEFAULT_CAL, soil_temp_f), True
 
 
-PROBE_CAL_SLOP = 0.02   # volts past an anchor before the calibration is flagged
+PROBE_CAL_SLOP = 0.02  # volts past an anchor before the calibration is flagged
 
 
 def probe_cal_flag(volts, cal):
@@ -405,8 +409,8 @@ def estimate_temp_comp(tray, hours=48):
         t = db.reading_near("temp:soil", ts, window=1800)
         if t is None:
             continue
-        xs.append(t * 9 / 5 + 32)   # soil temp F
-        ys.append(v)                # probe volts
+        xs.append(t * 9 / 5 + 32)  # soil temp F
+        ys.append(v)  # probe volts
     n = len(xs)
     if n < 10:
         return {"ok": False, "error": f"not enough paired temp data ({n} points)"}
@@ -416,11 +420,17 @@ def estimate_temp_comp(tray, hours=48):
         return {"ok": False, "error": "soil temp did not vary enough to estimate"}
     slope = sum((xs[i] - mx) * (ys[i] - my) for i in range(n)) / denom
     sy = sum((y - my) ** 2 for y in ys) ** 0.5
-    r = (sum((xs[i] - mx) * (ys[i] - my) for i in range(n)) / (denom ** 0.5 * sy)
-         if sy > 0 else 0.0)
-    return {"ok": True, "tray": tray, "coeff": round(slope, 5), "r": round(r, 3),
-            "n": n, "temp_min": round(min(xs), 1), "temp_max": round(max(xs), 1),
-            "span": round(max(xs) - min(xs), 1)}
+    r = sum((xs[i] - mx) * (ys[i] - my) for i in range(n)) / (denom**0.5 * sy) if sy > 0 else 0.0
+    return {
+        "ok": True,
+        "tray": tray,
+        "coeff": round(slope, 5),
+        "r": round(r, 3),
+        "n": n,
+        "temp_min": round(min(xs), 1),
+        "temp_max": round(max(xs), 1),
+        "span": round(max(xs) - min(xs), 1),
+    }
 
 
 def armed_trays(cfg):
@@ -463,7 +473,7 @@ def auto_water_blockers(cfg=None):
     return out
 
 
-POSTFILL_DELAY_S = 20 * 60     # let water wick to the probe before judging
+POSTFILL_DELAY_S = 20 * 60  # let water wick to the probe before judging
 
 
 def schedule_postfill(tray, tripped=True):
@@ -478,8 +488,11 @@ def schedule_postfill(tray, tripped=True):
     # Scheduled even with no wet anchor yet: there is no verdict to give in
     # that case, but it is exactly when an automatic first capture is most
     # useful, and skipping it here would silently rule that out.
-    _postfill_due[str(tray)] = {"due": time.time() + POSTFILL_DELAY_S,
-                                "cal": cal, "tripped": bool(tripped)}
+    _postfill_due[str(tray)] = {
+        "due": time.time() + POSTFILL_DELAY_S,
+        "cal": cal,
+        "tripped": bool(tripped),
+    }
 
 
 def check_postfill(readings=None):
@@ -494,8 +507,11 @@ def check_postfill(readings=None):
         ok, msg = quality.postfill_verdict(volts, pending["cal"])
         # ok is None when there is no anchor to judge against; that is not a
         # reason to skip the recapture below, which is what would create one
-        postfill_result[tray] = {"ok": None if ok is None else bool(ok),
-                                 "msg": msg, "ts": time.time()}
+        postfill_result[tray] = {
+            "ok": None if ok is None else bool(ok),
+            "msg": msg,
+            "ts": time.time(),
+        }
         if ok is not None:
             log.info(f"post-fill check tray {tray}: {msg}")
             try:
@@ -542,9 +558,11 @@ def auto_wet_calibrate(tray, pending):
     old = ((cfg.get("probe_cal") or {}).get(tray) or {}).get("wet")
     limit = float(cfg.get("auto_wet_cal_max_move", 0.10))
     if old is not None and abs(live - old) > limit:
-        return (f"not recalibrated: the wet anchor would move "
-                f"{abs(live - old):.3f}V, more than the {limit:.2f}V limit. "
-                "Capture it by hand if that is real")
+        return (
+            f"not recalibrated: the wet anchor would move "
+            f"{abs(live - old):.3f}V, more than the {limit:.2f}V limit. "
+            "Capture it by hand if that is real"
+        )
 
     with config.settings_lock:
         config.settings.setdefault("probe_cal", {}).setdefault(tray, {})["wet"] = live
@@ -589,7 +607,7 @@ def auto_water_pass():
         if volts is None:
             continue
         if time.time() - ts > 3600:
-            continue          # stale reading: do not water on old data
+            continue  # stale reading: do not water on old data
         pct = probe_moisture(volts, cal.get(tray) or {}, stf)
         if pct is None or pct > threshold:
             continue
@@ -598,7 +616,7 @@ def auto_water_pass():
             continue
         f = sensors.read_float(tray)
         if f is None or f < 1:
-            continue          # no float, or already full
+            continue  # no float, or already full
 
         # Confirm before pumping. The decision above came from the
         # logged history; take a fresh reading now and require it to
@@ -608,21 +626,20 @@ def auto_water_pass():
         # recorded what the loop had actually seen.
         cal_t = cal.get(tray) or {}
         fresh_v, spread = sensors.probe_spread(tray)
-        fresh_pct = (probe_moisture(fresh_v, cal_t, stf)
-                     if fresh_v is not None else None)
-        inputs = (f"logged {volts:.4f}V -> {pct:.0f}%, fresh "
-                  f"{'n/a' if fresh_v is None else f'{fresh_v:.4f}V'}"
-                  f" -> {'n/a' if fresh_pct is None else f'{fresh_pct:.0f}%'}"
-                  f" (spread {'n/a' if spread is None else f'{spread:.3f}V'})"
-                  f", anchors wet {cal_t.get('wet')} dry {cal_t.get('dry')}"
-                  f", soil {'n/a' if stf is None else f'{stf:.1f}F'}"
-                  f", threshold {threshold:.0f}%")
+        fresh_pct = probe_moisture(fresh_v, cal_t, stf) if fresh_v is not None else None
+        inputs = (
+            f"logged {volts:.4f}V -> {pct:.0f}%, fresh "
+            f"{'n/a' if fresh_v is None else f'{fresh_v:.4f}V'}"
+            f" -> {'n/a' if fresh_pct is None else f'{fresh_pct:.0f}%'}"
+            f" (spread {'n/a' if spread is None else f'{spread:.3f}V'})"
+            f", anchors wet {cal_t.get('wet')} dry {cal_t.get('dry')}"
+            f", soil {'n/a' if stf is None else f'{stf:.1f}F'}"
+            f", threshold {threshold:.0f}%"
+        )
         if fresh_pct is None or fresh_pct > threshold + AUTO_WATER_AGREE_PCT:
-            log.warning(f"auto-water tray {tray} NOT run: the fresh reading "
-                        f"disagrees. {inputs}")
+            log.warning(f"auto-water tray {tray} NOT run: the fresh reading disagrees. {inputs}")
             try:
-                db.log_event("auto_water", f"tray {tray} skipped, readings "
-                             f"disagree: {inputs}")
+                db.log_event("auto_water", f"tray {tray} skipped, readings disagree: {inputs}")
             except Exception:
                 pass
             continue
@@ -631,11 +648,10 @@ def auto_water_pass():
         log.info(f"auto-water tray {tray}: {msg}. {inputs}")
         if ok:
             try:
-                db.log_event("auto_water",
-                             f"tray {tray} at {pct:.0f}% moisture: {msg}. {inputs}")
+                db.log_event("auto_water", f"tray {tray} at {pct:.0f}% moisture: {msg}. {inputs}")
             except Exception:
                 pass
-        return                # one pump per pass; re-evaluate next minute
+        return  # one pump per pass; re-evaluate next minute
 
 
 def watering_loop():
@@ -656,16 +672,18 @@ def watering_loop():
             auto_water_pass()
         except Exception as e:
             log.exception(f"watering_loop error: {e}")
+
+
 # tray -> pending post-fill probe check: {"due": ts, "cal": {...}}
 _postfill_due = {}
 # tray -> last post-fill verdict for display
 postfill_result = {}
 
 
-PROBE_SETTLE_S   = 15.0   # how long to watch before accepting an anchor
-PROBE_NOISE_MAX  = 0.05   # volts of spread; above this the run is too noisy
-PROBE_DRIFT_MAX  = 0.015  # volts of movement across the window; still changing
-PROBE_SPAN_MIN   = 0.15   # volts between wet and dry for a usable scale
+PROBE_SETTLE_S = 15.0  # how long to watch before accepting an anchor
+PROBE_NOISE_MAX = 0.05  # volts of spread; above this the run is too noisy
+PROBE_DRIFT_MAX = 0.015  # volts of movement across the window; still changing
+PROBE_SPAN_MIN = 0.15  # volts between wet and dry for a usable scale
 
 
 def probe_cal_check(tray, point, volts, drift, spread):
@@ -686,18 +704,21 @@ def probe_cal_check(tray, point, volts, drift, spread):
         problems.append(
             f"the reading is jumping around by {spread:.3f}V while sampling, "
             "which points at electrical noise on the probe lead rather than "
-            "anything about the soil")
+            "anything about the soil"
+        )
 
     if drift is not None and abs(drift) > PROBE_DRIFT_MAX:
         if point == "wet" and drift < 0:
             problems.append(
                 f"still falling ({drift:+.3f}V over the sample): the soil is "
                 "still absorbing. Wait until it stops moving, usually about "
-                "30 minutes after watering, then capture")
+                "30 minutes after watering, then capture"
+            )
         elif point == "dry" and drift > 0:
             problems.append(
                 f"still rising ({drift:+.3f}V over the sample): the soil is "
-                "still drying. Capture once it levels off")
+                "still drying. Capture once it levels off"
+            )
         else:
             notes.append(f"moved {drift:+.3f}V during the sample")
 
@@ -713,7 +734,8 @@ def probe_cal_check(tray, point, volts, drift, spread):
             problems.append(
                 f"{volts:.3f}V is drier than this tray's own recent low of "
                 f"{lowest:.3f}V, so normal readings would fall below the anchor "
-                "and peg at 100%. The soil is not saturated yet")
+                "and peg at 100%. The soil is not saturated yet"
+            )
         else:
             notes.append(f"wetter than the 14-day low of {lowest:.3f}V")
     if recent and point == "dry":
@@ -722,7 +744,8 @@ def probe_cal_check(tray, point, volts, drift, spread):
             problems.append(
                 f"{volts:.3f}V is wetter than this tray's recent high of "
                 f"{highest:.3f}V, so dry soil would read past the anchor. "
-                "Capture this one when the tray is genuinely dry")
+                "Capture this one when the tray is genuinely dry"
+            )
 
     if other is not None:
         span = (other - volts) if point == "wet" else (volts - other)
@@ -730,10 +753,12 @@ def probe_cal_check(tray, point, volts, drift, spread):
             problems.append(
                 f"only {span:.3f}V between wet and dry, too small a range to "
                 "read a percentage from. Check the probe is inserted to its "
-                "line and that the other anchor is right")
+                "line and that the other anchor is right"
+            )
         else:
             notes.append(f"{span:.3f}V between wet and dry")
     return problems, notes
+
 
 # Imported last: these modules import this one, and their import-time
 # code runs only after everything above is defined. Their names are

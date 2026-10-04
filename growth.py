@@ -19,6 +19,7 @@ Usage:  growth.py <image.jpg> '<grid-json>'
 Prints:  {"ok": true, "readings": {"canopy:1": 12.3, "canopy:2": 8.1}}
     or:  {"ok": false, "error": "..."}
 """
+
 import json
 import sys
 
@@ -30,7 +31,7 @@ import sys
 # leaves. (Absolute coverage is understated under magenta light; for true
 # coverage, capture under white light. Good for tracking and ranking either way.)
 EXG_MIN = 15
-ANALYSIS_W = 1000   # longest image side scaled to this before counting
+ANALYSIS_W = 1000  # longest image side scaled to this before counting
 
 
 def jpeg_size(path):
@@ -44,13 +45,13 @@ def jpeg_size(path):
             continue
         m = data[i + 1]
         if m in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
-            h = int.from_bytes(data[i + 5:i + 7], "big")
-            w = int.from_bytes(data[i + 7:i + 9], "big")
+            h = int.from_bytes(data[i + 5 : i + 7], "big")
+            w = int.from_bytes(data[i + 7 : i + 9], "big")
             return (w, h) if w and h else None
         if m in (0xD8, 0x01, 0xFF) or 0xD0 <= m <= 0xD7:
             i += 1 if m == 0xFF else 2
             continue
-        i += 2 + int.from_bytes(data[i + 2:i + 4], "big")
+        i += 2 + int.from_bytes(data[i + 2 : i + 4], "big")
     return None
 
 
@@ -65,8 +66,11 @@ def imread_min(cv2, path, min_side):
         size = None
     if size:
         longest = max(size)
-        for f, flag in ((8, cv2.IMREAD_REDUCED_COLOR_8), (4, cv2.IMREAD_REDUCED_COLOR_4),
-                        (2, cv2.IMREAD_REDUCED_COLOR_2)):
+        for f, flag in (
+            (8, cv2.IMREAD_REDUCED_COLOR_8),
+            (4, cv2.IMREAD_REDUCED_COLOR_4),
+            (2, cv2.IMREAD_REDUCED_COLOR_2),
+        ):
             if longest / f >= min_side:
                 img = cv2.imread(str(path), flag)
                 if img is not None:
@@ -98,6 +102,7 @@ def rectify(img, corners, out_w=None, out_h=None, cols=6, rows=4):
     """
     import cv2
     import numpy as np
+
     h, w = img.shape[:2]
     src = np.float32([[x * w, y * h] for x, y in corners])
     if out_w is None or out_h is None:
@@ -130,8 +135,11 @@ def analyze(path, grid, rectify_first=True, rotate=0):
         return {"ok": False, "error": "Could not read the photo."}
 
     if rotate:
-        codes = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180,
-                 270: cv2.ROTATE_90_COUNTERCLOCKWISE}
+        codes = {
+            90: cv2.ROTATE_90_CLOCKWISE,
+            180: cv2.ROTATE_180,
+            270: cv2.ROTATE_90_COUNTERCLOCKWISE,
+        }
         if rotate in codes:
             img = cv2.rotate(img, codes[rotate])
 
@@ -143,8 +151,11 @@ def analyze(path, grid, rectify_first=True, rotate=0):
 
     def _green_mask(bgr):
         """Plant mask via excess-green index, robust to the magenta grow light."""
-        b, g, r = (bgr[:, :, 0].astype(np.int32), bgr[:, :, 1].astype(np.int32),
-                   bgr[:, :, 2].astype(np.int32))
+        b, g, r = (
+            bgr[:, :, 0].astype(np.int32),
+            bgr[:, :, 1].astype(np.int32),
+            bgr[:, :, 2].astype(np.int32),
+        )
         return ((2 * g - r - b) > EXG_MIN).astype(np.uint8) * 255
 
     green = _green_mask(img)
@@ -165,8 +176,7 @@ def analyze(path, grid, rectify_first=True, rotate=0):
         tc = int(t.get("cols", 0))
         if tc < 1:
             continue
-        spans.append((str(t.get("id", len(spans) + 1)),
-                      col / K, min(col + tc, K) / K))
+        spans.append((str(t.get("id", len(spans) + 1)), col / K, min(col + tc, K) / K))
         col += tc
         if col >= K:
             break
@@ -183,15 +193,12 @@ def analyze(path, grid, rectify_first=True, rotate=0):
             C = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
         except Exception as e:
             # stderr: stdout carries the JSON result the parent parses
-            print(f"rectify failed ({e}); sampling the original frame",
-                  file=sys.stderr)
+            print(f"rectify failed ({e}); sampling the original frame", file=sys.stderr)
 
     readings = {}
     for tid, u0, u1 in spans:
-        quad = [_bil(C, u0, 0.0), _bil(C, u1, 0.0),
-                _bil(C, u1, 1.0), _bil(C, u0, 1.0)]
-        pts = np.array([[int(round(x * w)), int(round(y * h))] for x, y in quad],
-                       dtype=np.int32)
+        quad = [_bil(C, u0, 0.0), _bil(C, u1, 0.0), _bil(C, u1, 1.0), _bil(C, u0, 1.0)]
+        pts = np.array([[int(round(x * w)), int(round(y * h))] for x, y in quad], dtype=np.int32)
         mask = np.zeros((h, w), dtype=np.uint8)
         cv2.fillPoly(mask, [pts], 255)
         area = int(np.count_nonzero(mask))
@@ -211,9 +218,16 @@ def main():
     except Exception:
         print(json.dumps({"ok": False, "error": "Bad grid JSON."}))
         return
-    print(json.dumps(analyze(sys.argv[1], grid,
-                             rectify_first=bool(grid.get("rectify", True)),
-                             rotate=int(grid.get("rotate", 0)))))
+    print(
+        json.dumps(
+            analyze(
+                sys.argv[1],
+                grid,
+                rectify_first=bool(grid.get("rectify", True)),
+                rotate=int(grid.get("rotate", 0)),
+            )
+        )
+    )
 
 
 if __name__ == "__main__":

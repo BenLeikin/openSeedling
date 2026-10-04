@@ -32,11 +32,11 @@ import threading
 import time
 from pathlib import Path
 
-from applog import log     # levelled logging; see applog.py
+from applog import log  # levelled logging; see applog.py
 
 DB_PATH = Path(__file__).with_name("growlight.db")
 
-RAW_RETENTION_DAYS = 30   # raw samples older than this are rolled up + deleted
+RAW_RETENTION_DAYS = 30  # raw samples older than this are rolled up + deleted
 
 _conn = None
 _lock = threading.RLock()
@@ -47,6 +47,7 @@ def _locked(fn):
     def wrapper(*a, **k):
         with _lock:
             return fn(*a, **k)
+
     return wrapper
 
 
@@ -119,6 +120,7 @@ def init():
 
 # ----------------------------- writing -----------------------------
 
+
 @_locked
 def log_many(pairs, ts=None):
     """Insert several (sensor, value) readings in one transaction.
@@ -147,18 +149,19 @@ def kv_set(key, obj):
     """
     c = _c()
     with c:
-        c.execute("INSERT INTO kv(key, value, ts) VALUES (?,?,?) "
-                  "ON CONFLICT(key) DO UPDATE SET value=excluded.value, "
-                  "ts=excluded.ts",
-                  (str(key), json.dumps(obj), int(time.time())))
+        c.execute(
+            "INSERT INTO kv(key, value, ts) VALUES (?,?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value, "
+            "ts=excluded.ts",
+            (str(key), json.dumps(obj), int(time.time())),
+        )
 
 
 @_locked
 def kv_get(key, default=None):
     """Read state stored with kv_set; default if absent or unreadable."""
     try:
-        row = _c().execute("SELECT value FROM kv WHERE key=?",
-                           (str(key),)).fetchone()
+        row = _c().execute("SELECT value FROM kv WHERE key=?", (str(key),)).fetchone()
     except sqlite3.Error:
         return default
     if not row:
@@ -174,11 +177,13 @@ def log_event(etype, detail="", ts=None):
     ts = int(ts if ts is not None else time.time())
     c = _c()
     with c:
-        c.execute("INSERT INTO events(ts, type, detail) VALUES (?,?,?)",
-                  (ts, str(etype), str(detail)))
+        c.execute(
+            "INSERT INTO events(ts, type, detail) VALUES (?,?,?)", (ts, str(etype), str(detail))
+        )
 
 
 # ----------------------------- reading -----------------------------
+
 
 @_locked
 def series(sensor, hours=168):
@@ -188,11 +193,12 @@ def series(sensor, hours=168):
     since = int(time.time()) - hours * 3600
     c = _c()
     raw = c.execute(
-        "SELECT ts, value FROM readings WHERE sensor=? AND ts>=? ORDER BY ts",
-        (sensor, since)).fetchall()
+        "SELECT ts, value FROM readings WHERE sensor=? AND ts>=? ORDER BY ts", (sensor, since)
+    ).fetchall()
     hourly = c.execute(
         "SELECT ts, value FROM readings_hourly WHERE sensor=? AND ts>=? ORDER BY ts",
-        (sensor, since)).fetchall()
+        (sensor, since),
+    ).fetchall()
     merged = {r["ts"]: r["value"] for r in hourly}
     merged.update({r["ts"]: r["value"] for r in raw})  # raw wins where overlapping
     return sorted(merged.items())
@@ -208,12 +214,15 @@ def latest(sensors=None, max_age_days=7):
     alert covers telling you it died)."""
     since = int(time.time()) - max_age_days * 86400
     c = _c()
-    rows = c.execute("""
+    rows = c.execute(
+        """
         SELECT r.sensor, r.ts, r.value FROM readings r
         JOIN (SELECT sensor, MAX(ts) ts FROM readings
               WHERE ts >= ? GROUP BY sensor) m
           ON r.sensor=m.sensor AND r.ts=m.ts
-    """, (since,)).fetchall()
+    """,
+        (since,),
+    ).fetchall()
     out = {r["sensor"]: (r["ts"], r["value"]) for r in rows}
     if sensors is not None:
         out = {k: v for k, v in out.items() if k in sensors}
@@ -228,12 +237,21 @@ def add_planting(rec):
         "INSERT INTO plantings (ts, tray, cell, seed, equipment, planted, "
         "sprouted, ended, outcome, count, source, notes) "
         "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-        (int(time.time()), str(rec.get("tray", "")), str(rec.get("cell", "")),
-         rec.get("seed") or "", rec.get("equipment") or "",
-         rec.get("planted") or "", rec.get("sprouted") or "",
-         rec.get("ended") or "", rec.get("outcome") or "transplanted",
-         int(rec.get("count") or 0), rec.get("source") or "",
-         rec.get("notes") or ""))
+        (
+            int(time.time()),
+            str(rec.get("tray", "")),
+            str(rec.get("cell", "")),
+            rec.get("seed") or "",
+            rec.get("equipment") or "",
+            rec.get("planted") or "",
+            rec.get("sprouted") or "",
+            rec.get("ended") or "",
+            rec.get("outcome") or "transplanted",
+            int(rec.get("count") or 0),
+            rec.get("source") or "",
+            rec.get("notes") or "",
+        ),
+    )
     c.commit()
     return cur.lastrowid
 
@@ -241,11 +259,29 @@ def add_planting(rec):
 @_locked
 def plantings(limit=500):
     """Finished plantings, newest first."""
-    cols = ("id", "ts", "tray", "cell", "seed", "equipment", "planted",
-            "sprouted", "ended", "outcome", "count", "source", "notes")
-    rows = _c().execute(
-        f"SELECT {', '.join(cols)} FROM plantings ORDER BY ts DESC, id DESC "
-        "LIMIT ?", (int(limit),)).fetchall()
+    cols = (
+        "id",
+        "ts",
+        "tray",
+        "cell",
+        "seed",
+        "equipment",
+        "planted",
+        "sprouted",
+        "ended",
+        "outcome",
+        "count",
+        "source",
+        "notes",
+    )
+    rows = (
+        _c()
+        .execute(
+            f"SELECT {', '.join(cols)} FROM plantings ORDER BY ts DESC, id DESC LIMIT ?",
+            (int(limit),),
+        )
+        .fetchall()
+    )
     return [dict(zip(cols, r)) for r in rows]
 
 
@@ -262,8 +298,8 @@ def delete_planting(pid):
 def recent_events(limit=50):
     c = _c()
     rows = c.execute(
-        "SELECT ts, type, detail FROM events ORDER BY ts DESC LIMIT ?",
-        (limit,)).fetchall()
+        "SELECT ts, type, detail FROM events ORDER BY ts DESC LIMIT ?", (limit,)
+    ).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -273,9 +309,13 @@ def recent_values(sensor, n=9, max_age=7200):
     older than `max_age` seconds. For filtering a live reading: a median over
     these rejects a single transient without waiting for a long window."""
     since = int(time.time()) - max_age
-    return [r[0] for r in _c().execute(
-        "SELECT value FROM readings WHERE sensor=? AND ts>=? "
-        "ORDER BY ts DESC LIMIT ?", (sensor, since, max(1, int(n))))]
+    return [
+        r[0]
+        for r in _c().execute(
+            "SELECT value FROM readings WHERE sensor=? AND ts>=? ORDER BY ts DESC LIMIT ?",
+            (sensor, since, max(1, int(n))),
+        )
+    ]
 
 
 @_locked
@@ -284,14 +324,18 @@ def reading_near(sensor, ts, window=3600):
     Returns None if nothing within `window` seconds."""
     c = _c()
     # BETWEEN, not ABS(ts-?)<=?, so the (sensor, ts) index bounds the scan
-    row = c.execute("""
+    row = c.execute(
+        """
         SELECT value, ABS(ts-?) d FROM readings
         WHERE sensor=? AND ts BETWEEN ? AND ? ORDER BY d LIMIT 1
-    """, (ts, sensor, ts - window, ts + window)).fetchone()
+    """,
+        (ts, sensor, ts - window, ts + window),
+    ).fetchone()
     return row["value"] if row else None
 
 
 # --------------------------- housekeeping ---------------------------
+
 
 @_locked
 def delete_series_prefix(prefix):
@@ -300,12 +344,9 @@ def delete_series_prefix(prefix):
     c = _c()
     # % and _ are LIKE wildcards; escape them instead of stripping them, or a
     # prefix like "growth_px:" becomes "growthpx:%" and matches nothing
-    esc = (prefix.replace("\\", "\\\\").replace("%", "\\%")
-                 .replace("_", "\\_")) + "%"
-    n = c.execute("DELETE FROM readings WHERE sensor LIKE ? ESCAPE '\\'",
-                  (esc,)).rowcount
-    c.execute("DELETE FROM readings_hourly WHERE sensor LIKE ? ESCAPE '\\'",
-              (esc,))
+    esc = (prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")) + "%"
+    n = c.execute("DELETE FROM readings WHERE sensor LIKE ? ESCAPE '\\'", (esc,)).rowcount
+    c.execute("DELETE FROM readings_hourly WHERE sensor LIKE ? ESCAPE '\\'", (esc,))
     c.commit()
     return n
 
@@ -318,12 +359,15 @@ def downsample_and_prune():
     cutoff = (int(time.time()) - RAW_RETENTION_DAYS * 86400) // 3600 * 3600
     c = _c()
     with c:
-        c.execute("""
+        c.execute(
+            """
             INSERT OR REPLACE INTO readings_hourly(ts, sensor, value)
             SELECT (ts/3600)*3600 AS hr, sensor, AVG(value)
             FROM readings WHERE ts < ?
             GROUP BY hr, sensor
-        """, (cutoff,))
+        """,
+            (cutoff,),
+        )
         c.execute("DELETE FROM readings WHERE ts < ?", (cutoff,))
     c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
@@ -331,10 +375,11 @@ def downsample_and_prune():
 if __name__ == "__main__":
     # Self-test: log fake data, query it, exercise housekeeping. No hardware needed.
     import random
+
     init()
     now = int(time.time())
     log.info("seeding 3 days of fake data for moisture:B2 ...")
-    for i in range(3 * 24 * 12):                 # every 5 min for 3 days
+    for i in range(3 * 24 * 12):  # every 5 min for 3 days
         t = now - i * 300
         log_reading("moisture:B2", 40 + 10 * random.random(), ts=t)
     log_event("pump", "ran 8s (self-test)")

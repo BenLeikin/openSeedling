@@ -28,14 +28,13 @@ All pin assignments are overridable by environment variable, so moving a
 signal off a bad pin is an .env change rather than a code edit.
 """
 
-
 import glob
 import os
 import statistics
 import threading
 import time
 
-from applog import log     # levelled logging; see applog.py
+from applog import log  # levelled logging; see applog.py
 
 # One lock for every I2C read. The sample loop, the calibration endpoints, and
 # the light sweep all touch these devices from different threads. Blinka only
@@ -48,9 +47,9 @@ _io_lock = threading.Lock()
 # Per-type master switches. All wired; set one False to stop reading that
 # device without unplugging it.
 ENABLED = {
-    "air": True,       # BME280/BMP280 air temp (+ humidity, + pressure)
-    "lux": True,       # BH1750 ambient light
-    "soil_temp": True,   # DS18B20 on 1-Wire (GPIO4); auto-detects attached probes
+    "air": True,  # BME280/BMP280 air temp (+ humidity, + pressure)
+    "lux": True,  # BH1750 ambient light
+    "soil_temp": True,  # DS18B20 on 1-Wire (GPIO4); auto-detects attached probes
 }
 
 # --- float switches (one per tray) ---
@@ -59,16 +58,15 @@ ENABLED = {
 # broken-wire state, so a cut lead fails safe.
 # Override via GROWLIGHT_FLOAT_PINS="1:23,2:22" to move one off a bad pin
 # without editing code.
-FLOAT_PINS = {"1": 23, "2": 22}   # tray -> BCM pin (physical 16, 15)
+FLOAT_PINS = {"1": 23, "2": 22}  # tray -> BCM pin (physical 16, 15)
 _fp = os.environ.get("GROWLIGHT_FLOAT_PINS")
 if _fp is not None and not _fp.strip():
-    FLOAT_PINS = {}                     # explicitly configured as "no floats"
+    FLOAT_PINS = {}  # explicitly configured as "no floats"
     log.info("float pins: none configured")
 elif (_fp or "").strip():
     _fp = _fp.strip()
     try:
-        FLOAT_PINS = {a.strip(): int(b) for a, b in
-                      (part.split(":") for part in _fp.split(","))}
+        FLOAT_PINS = {a.strip(): int(b) for a, b in (part.split(":") for part in _fp.split(","))}
         log.info(f"float pins from environment: {FLOAT_PINS}")
     except Exception as _e:
         log.warning(f"GROWLIGHT_FLOAT_PINS unreadable ({_e}); using {FLOAT_PINS}")
@@ -84,7 +82,7 @@ _float_init = False
 # backwards rather than reswapping wires.
 # Pins overridable via GROWLIGHT_RESERVOIR_PINS="low:27,high:17"; empty
 # string = no reservoir sensors.
-RESERVOIR_PINS = {"low": 27, "high": 17}   # BCM (physical 13, 11), as built
+RESERVOIR_PINS = {"low": 27, "high": 17}  # BCM (physical 13, 11), as built
 _rp = os.environ.get("GROWLIGHT_RESERVOIR_PINS")
 if _rp is not None and not _rp.strip():
     RESERVOIR_PINS = {}
@@ -92,13 +90,13 @@ if _rp is not None and not _rp.strip():
 elif (_rp or "").strip():
     _rp = _rp.strip()
     try:
-        RESERVOIR_PINS = {a.strip(): int(b) for a, b in
-                          (part.split(":") for part in _rp.split(","))}
+        RESERVOIR_PINS = {
+            a.strip(): int(b) for a, b in (part.split(":") for part in _rp.split(","))
+        }
         log.info(f"reservoir pins from environment: {RESERVOIR_PINS}")
     except Exception as _e:
         log.warning(f"GROWLIGHT_RESERVOIR_PINS unreadable ({_e}); using {RESERVOIR_PINS}")
-RESERVOIR_INVERT = bool((os.environ.get("GROWLIGHT_RESERVOIR_INVERT") or "")
-                        .strip())
+RESERVOIR_INVERT = bool((os.environ.get("GROWLIGHT_RESERVOIR_INVERT") or "").strip())
 _res_devs = {}
 _res_init = False
 
@@ -155,8 +153,7 @@ def _reservoirs():
             dev.when_pressed = dev.when_released = _edge(f"reservoir:{which}")
             _res_devs[which] = dev
         except Exception as e:
-            log.warning(f"reservoir {which} (GPIO{pin}) unavailable ({e}); "
-                  "reporting unknown")
+            log.warning(f"reservoir {which} (GPIO{pin}) unavailable ({e}); reporting unknown")
     return _res_devs
 
 
@@ -232,9 +229,9 @@ def read_floats():
     return out
 
 
-PROBE_BUS = 1            # /dev/i2c-1 (pins 3/5)
-PROBE_ADDR = 0x48        # ADS1115, ADDR tied to GND
-PROBE_CHANNELS = {"1": 0, "2": 1}   # tray -> ADS input (probe 1 -> A0, 2 -> A1)
+PROBE_BUS = 1  # /dev/i2c-1 (pins 3/5)
+PROBE_ADDR = 0x48  # ADS1115, ADDR tied to GND
+PROBE_CHANNELS = {"1": 0, "2": 1}  # tray -> ADS input (probe 1 -> A0, 2 -> A1)
 
 _probe_chans = None
 _probe_init = False
@@ -250,7 +247,7 @@ def _probes():
     if _probe_init:
         return _probe_chans or {}
     with _io_lock:
-        if _probe_init:                 # another thread initialized while we waited
+        if _probe_init:  # another thread initialized while we waited
             return _probe_chans or {}
         _probe_init = True
         return _probes_init_locked()
@@ -261,13 +258,13 @@ def _probes_init_locked():
     try:
         import adafruit_ads1x15.ads1115 as ADS
         from adafruit_ads1x15.analog_in import AnalogIn
+
         ads = ADS.ADS1115(_i2c(), address=PROBE_ADDR)
         ads.gain = 1
         # AnalogIn takes a plain channel number. Some driver versions also
         # export P0..P3 constants, but they're just ints 0-3 and not all
         # versions have them, so pass the integer directly.
-        _probe_chans = {tray: AnalogIn(ads, idx)
-                        for tray, idx in PROBE_CHANNELS.items()}
+        _probe_chans = {tray: AnalogIn(ads, idx) for tray, idx in PROBE_CHANNELS.items()}
     except Exception as e:
         log.warning(f"ADS1115 unavailable ({e}); moisture probes disabled")
         _probe_chans = {}
@@ -321,9 +318,11 @@ def probe_settle(tray, seconds=15.0, delay=0.5):
     third = max(2, len(vals) // 3)
     early = statistics.median(vals[:third])
     late = statistics.median(vals[-third:])
-    return (round(statistics.median(vals), 4),
-            round(max(vals) - min(vals), 4),
-            round(late - early, 4))
+    return (
+        round(statistics.median(vals), 4),
+        round(max(vals) - min(vals), 4),
+        round(late - early, 4),
+    )
 
 
 def probe_spread(tray, samples=10, delay=0.2):
@@ -337,7 +336,7 @@ def probe_spread(tray, samples=10, delay=0.2):
     vals = []
     for _ in range(max(2, samples)):
         try:
-            with _io_lock:              # per sample, so sampling isn't starved
+            with _io_lock:  # per sample, so sampling isn't starved
                 vals.append(ch.voltage)
         except Exception:
             pass
@@ -360,6 +359,7 @@ def _i2c():
         return _i2c_bus
     try:
         from adafruit_extended_bus import ExtendedI2C
+
         # frequency=None: the bus speed is the kernel's (dtparam in
         # config.txt). The library's default 400000 is ignored anyway and
         # only produced a RuntimeWarning at every start.
@@ -367,6 +367,7 @@ def _i2c():
     except ImportError:
         import board
         import busio
+
         _i2c_bus = busio.I2C(board.SCL, board.SDA)
     return _i2c_bus
 
@@ -390,21 +391,26 @@ def _read_air():
                 i2c = _i2c()
                 # read chip id first to pick the right driver
                 from adafruit_bus_device.i2c_device import I2CDevice
+
                 buf = bytearray(1)
                 with I2CDevice(i2c, addr) as dev:
                     dev.write_then_readinto(bytes([0xD0]), buf)
                 chip = buf[0]
-                if chip == 0x60:          # BME280: has humidity
+                if chip == 0x60:  # BME280: has humidity
                     from adafruit_bme280 import basic as bme280
+
                     _air_dev = bme280.Adafruit_BME280_I2C(i2c, address=addr)
                     _air_has_humidity = True
-                elif chip == 0x58:        # BMP280: no humidity
+                elif chip == 0x58:  # BMP280: no humidity
                     import adafruit_bmp280
+
                     _air_dev = adafruit_bmp280.Adafruit_BMP280_I2C(i2c, address=addr)
                     _air_has_humidity = False
                 else:
                     continue
-                log.info(f"air sensor: {'BME280' if _air_has_humidity else 'BMP280'} at {hex(addr)}")
+                log.info(
+                    f"air sensor: {'BME280' if _air_has_humidity else 'BMP280'} at {hex(addr)}"
+                )
                 break
             except Exception:
                 continue
@@ -414,8 +420,10 @@ def _read_air():
         return {}
     try:
         with _io_lock:
-            out = {"temp:air": round(_air_dev.temperature, 2),
-                   "pressure": round(_air_dev.pressure, 1)}
+            out = {
+                "temp:air": round(_air_dev.temperature, 2),
+                "pressure": round(_air_dev.pressure, 1),
+            }
             if _air_has_humidity:
                 out["humidity"] = round(_air_dev.relative_humidity, 1)
         return out
@@ -450,9 +458,10 @@ def _lux_open(addr, st):
     st["init"] = True
     try:
         import adafruit_bh1750
+
         dev = adafruit_bh1750.BH1750(_i2c(), address=addr)
         with _io_lock:
-            _ = dev.lux                               # probe read
+            _ = dev.lux  # probe read
         st["dev"], st["seen"] = dev, True
         log.info(f"lux sensor: BH1750 at {hex(addr)} ({LUX_ADDRS[addr]})")
     except Exception:
@@ -463,8 +472,7 @@ def _lux_open(addr, st):
             st["init"] = False
             st["fail"] += 1
             if st["fail"] % 50 == 0:
-                log.error(f"lux sensor {hex(addr)} still not answering "
-                          f"({st['fail']} attempts)")
+                log.error(f"lux sensor {hex(addr)} still not answering ({st['fail']} attempts)")
 
 
 def _read_lux():
@@ -507,12 +515,13 @@ def _lux_failed(addr, err):
         log.error(f"lux read error at {hex(addr)} ({n} in a row): {err}")
     if n % LUX_REINIT_AFTER == 0:
         st["dev"] = None
-        st["init"] = False          # the next read finds and configures it again
+        st["init"] = False  # the next read finds and configures it again
         if n == LUX_REINIT_AFTER:
             log.warning(f"lux sensor {hex(addr)}: re-initializing after repeated read errors")
 
 
 # -------------------------- soil temp (DS18B20) ---------------------------
+
 
 def _read_soil_temps():
     """Every DS18B20 on the 1-Wire bus, in Celsius (the dashboard converts to F,
@@ -540,10 +549,10 @@ def _read_soil_temps():
             if "t=" not in lines[1]:
                 continue
             c = int(lines[1].split("t=")[1]) / 1000.0
-            if c in (85.0, -127.0):   # power-on default / disconnected
+            if c in (85.0, -127.0):  # power-on default / disconnected
                 log.info(f"{serial}: bogus reading {c}C, skipping")
                 continue
-            out[key] = round(c, 2)   # Celsius; the dashboard converts to F
+            out[key] = round(c, 2)  # Celsius; the dashboard converts to F
         except Exception as e:
             log.error(f"{serial}: read error ({e})")
     return out

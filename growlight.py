@@ -30,19 +30,19 @@ from applog import log
 import config
 import hardware
 import light as light_mod
-import setups as setups_mod    # noqa: F401
+import setups as setups_mod  # noqa: F401
 import water
 import monitor
 import heat
 import camera as camera_mod
-import status as status_mod    # noqa: F401
+import status as status_mod  # noqa: F401
 import routes
 
 signal.signal(signal.SIGINT, hardware.cleanup)
 signal.signal(signal.SIGTERM, hardware.cleanup)
 
 if __name__ == "__main__":
-    water.restore_persistent_state()      # before anything can water
+    water.restore_persistent_state()  # before anything can water
     threading.Thread(target=light_mod.control_loop, daemon=True).start()
     threading.Thread(target=camera_mod.capture_loop, daemon=True).start()
     threading.Thread(target=monitor.sample_loop, daemon=True).start()
@@ -61,8 +61,15 @@ if __name__ == "__main__":
     # same hardware, so never run this under multiple workers.
     try:
         from waitress import serve
-        serve(routes.app, host="0.0.0.0", port=config.HTTP_PORT, threads=16,
-              channel_timeout=120, ident="OpenSeedling")
+
+        serve(
+            routes.app,
+            host="0.0.0.0",
+            port=config.HTTP_PORT,
+            threads=16,
+            channel_timeout=120,
+            ident="OpenSeedling",
+        )
     except ImportError:
         log.info("waitress not installed; falling back to the Flask dev server")
         routes.app.run(host="0.0.0.0", port=config.HTTP_PORT, threaded=True)

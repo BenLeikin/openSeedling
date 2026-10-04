@@ -1,0 +1,10 @@
+# Project metadata. Dependencies are pinned in requirements.txt (installed by
+# scripts/setup.sh into the Pi's venv); lint settings are in ruff.toml,
+# eslint.config.mjs and .prettierrc.json.
+[project]
+name = "openseedling"
+version = "39"
+description = "Raspberry Pi seedling controller and web dashboard: grow light, watering, heat mat, camera and timelapse"
+requires-python = ">=3.11"
+readme = "README.md"
+license = { file = "LICENSE" }

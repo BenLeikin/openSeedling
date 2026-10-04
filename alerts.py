@@ -24,20 +24,21 @@ _state = {}
 
 DEFAULTS = {
     "enabled": True,
-    "sustain_seconds": 600,      # how long a condition must hold before firing
-    "cooldown_seconds": 21600,   # 6h between reminders while still active
-    "soil_temp_high_f": 0,       # 0 = follow the chart threshold setting
+    "sustain_seconds": 600,  # how long a condition must hold before firing
+    "cooldown_seconds": 21600,  # 6h between reminders while still active
+    "soil_temp_high_f": 0,  # 0 = follow the chart threshold setting
     "soil_temp_low_f": 60,
     "probe_dry_pct": 15,
     "humidity_high": 80,
-    "dli_low": 4.0,              # checked once daily, near lights-off
-    "dli_high": 0.0,            # ceiling counterpart; 0 disables
+    "dli_low": 4.0,  # checked once daily, near lights-off
+    "dli_high": 0.0,  # ceiling counterpart; 0 disables
 }
 
 
 def _rule(key):
-    return _state.setdefault(key, {"active": False, "since": 0.0,
-                                   "last_sent": 0.0, "clear_since": 0.0})
+    return _state.setdefault(
+        key, {"active": False, "since": 0.0, "last_sent": 0.0, "clear_since": 0.0}
+    )
 
 
 def evaluate(key, condition, now=None, release=None, hold=None, clear_hold=0.0):
@@ -68,11 +69,11 @@ def evaluate(key, condition, now=None, release=None, hold=None, clear_hold=0.0):
     if not st["active"]:
         if condition:
             if not st["since"]:
-                st["since"] = now             # start the sustain clock
+                st["since"] = now  # start the sustain clock
             if now - st["since"] >= sustain:
                 st.update(active=True, last_sent=now, clear_since=0.0)
                 return "fire"
-            return None                        # still settling
+            return None  # still settling
         st["since"] = 0.0
         return None
 
@@ -84,7 +85,7 @@ def evaluate(key, condition, now=None, release=None, hold=None, clear_hold=0.0):
         if now - st["clear_since"] >= clear_hold:
             st.update(active=False, since=0.0, clear_since=0.0)
             return "clear"
-        return None                            # recovering, not confirmed yet
+        return None  # recovering, not confirmed yet
     st["clear_since"] = 0.0
     if now - st["last_sent"] >= cooldown:
         st["last_sent"] = now
@@ -97,8 +98,9 @@ def configure(cfg):
 
 
 def active_rules():
-    return sorted(k for k, v in _state.items()
-                  if k != "_cfg" and isinstance(v, dict) and v.get("active"))
+    return sorted(
+        k for k, v in _state.items() if k != "_cfg" and isinstance(v, dict) and v.get("active")
+    )
 
 
 def reset():
@@ -122,8 +124,8 @@ def check_all(snapshot, cfg, unit_temp="F"):
     tu = "\u00b0C" if unit_temp == "C" else "\u00b0F"
 
     sustain = cfg.get("sustain_seconds", DEFAULTS["sustain_seconds"])
-    TEMP_MARGIN_F = 2.0     # hysteresis: clear 2F past the threshold
-    PCT_MARGIN = 3          # ...and 3 points for the percentage rules
+    TEMP_MARGIN_F = 2.0  # hysteresis: clear 2F past the threshold
+    PCT_MARGIN = 3  # ...and 3 points for the percentage rules
 
     # --- soil temperature, the one that ruins a germination run ---
     hi = cfg.get("soil_temp_high_f") or 0
@@ -134,59 +136,111 @@ def check_all(snapshot, cfg, unit_temp="F"):
         f = val * 9 / 5 + 32
         label = "Soil" if key == "temp:soil" else key.split(":", 1)[1]
         if hi:
-            act = evaluate(f"soil_hot:{key}", f > hi, now,
-                           release=f < hi - TEMP_MARGIN_F, clear_hold=sustain)
+            act = evaluate(
+                f"soil_hot:{key}", f > hi, now, release=f < hi - TEMP_MARGIN_F, clear_hold=sustain
+            )
             if act in ("fire", "remind"):
-                out.append((act, f"soil_hot:{key}", "Soil too warm",
-                            f"{label} is {temp_disp(val):.1f}{tu}, above the "
-                            f"{temp_disp((hi - 32) * 5 / 9):.0f}{tu} warning line. "
-                            "Sustained heat past this stalls germination and "
-                            "stretches seedlings.", "warn"))
+                out.append(
+                    (
+                        act,
+                        f"soil_hot:{key}",
+                        "Soil too warm",
+                        f"{label} is {temp_disp(val):.1f}{tu}, above the "
+                        f"{temp_disp((hi - 32) * 5 / 9):.0f}{tu} warning line. "
+                        "Sustained heat past this stalls germination and "
+                        "stretches seedlings.",
+                        "warn",
+                    )
+                )
             elif act == "clear":
-                out.append((act, f"soil_hot:{key}", "Soil temperature back to normal",
-                            f"{label} is {temp_disp(val):.1f}{tu}.", "good"))
+                out.append(
+                    (
+                        act,
+                        f"soil_hot:{key}",
+                        "Soil temperature back to normal",
+                        f"{label} is {temp_disp(val):.1f}{tu}.",
+                        "good",
+                    )
+                )
         if lo:
-            act = evaluate(f"soil_cold:{key}", f < lo, now,
-                           release=f > lo + TEMP_MARGIN_F, clear_hold=sustain)
+            act = evaluate(
+                f"soil_cold:{key}", f < lo, now, release=f > lo + TEMP_MARGIN_F, clear_hold=sustain
+            )
             if act in ("fire", "remind"):
-                out.append((act, f"soil_cold:{key}", "Soil too cold",
-                            f"{label} is {temp_disp(val):.1f}{tu}, below "
-                            f"{temp_disp((lo - 32) * 5 / 9):.0f}{tu}. Chile seed "
-                            "germination slows sharply and seed rot risk rises.",
-                            "warn"))
+                out.append(
+                    (
+                        act,
+                        f"soil_cold:{key}",
+                        "Soil too cold",
+                        f"{label} is {temp_disp(val):.1f}{tu}, below "
+                        f"{temp_disp((lo - 32) * 5 / 9):.0f}{tu}. Chile seed "
+                        "germination slows sharply and seed rot risk rises.",
+                        "warn",
+                    )
+                )
             elif act == "clear":
-                out.append((act, f"soil_cold:{key}", "Soil temperature recovered",
-                            f"{label} is {temp_disp(val):.1f}{tu}.", "good"))
+                out.append(
+                    (
+                        act,
+                        f"soil_cold:{key}",
+                        "Soil temperature recovered",
+                        f"{label} is {temp_disp(val):.1f}{tu}.",
+                        "good",
+                    )
+                )
 
     # --- tray moisture, as a percentage the caller has already converted ---
     dry_at = cfg.get("probe_dry_pct", DEFAULTS["probe_dry_pct"])
     for tray, pct in (snapshot.get("_moisture") or {}).items():
         if pct is None:
             continue
-        act = evaluate(f"dry:{tray}", pct <= dry_at, now,
-                       release=pct > dry_at + PCT_MARGIN, clear_hold=sustain)
+        act = evaluate(
+            f"dry:{tray}", pct <= dry_at, now, release=pct > dry_at + PCT_MARGIN, clear_hold=sustain
+        )
         if act in ("fire", "remind"):
-            out.append((act, f"dry:{tray}", "Tray drying out",
-                        f"{tray} moisture is {pct}%, at or below the {dry_at}% "
-                        "alert level.", "warn"))
+            out.append(
+                (
+                    act,
+                    f"dry:{tray}",
+                    "Tray drying out",
+                    f"{tray} moisture is {pct}%, at or below the {dry_at}% alert level.",
+                    "warn",
+                )
+            )
         elif act == "clear":
-            out.append((act, f"dry:{tray}", "Tray moisture recovered",
-                        f"{tray} is back to {pct}%.", "good"))
+            out.append(
+                (
+                    act,
+                    f"dry:{tray}",
+                    "Tray moisture recovered",
+                    f"{tray} is back to {pct}%.",
+                    "good",
+                )
+            )
 
     # --- humidity: damping-off weather ---
     rh_hi = cfg.get("humidity_high", DEFAULTS["humidity_high"])
     rh = snapshot.get("humidity")
     if rh is not None and rh_hi:
-        act = evaluate("humidity_high", rh >= rh_hi, now,
-                       release=rh < rh_hi - PCT_MARGIN, clear_hold=sustain)
+        act = evaluate(
+            "humidity_high", rh >= rh_hi, now, release=rh < rh_hi - PCT_MARGIN, clear_hold=sustain
+        )
         if act in ("fire", "remind"):
-            out.append((act, "humidity_high", "Humidity high",
-                        f"Air is {rh:.0f}% RH, at or above {rh_hi}%. Combined "
-                        "with warm soil this is damping-off weather; increase "
-                        "airflow.", "warn"))
+            out.append(
+                (
+                    act,
+                    "humidity_high",
+                    "Humidity high",
+                    f"Air is {rh:.0f}% RH, at or above {rh_hi}%. Combined "
+                    "with warm soil this is damping-off weather; increase "
+                    "airflow.",
+                    "warn",
+                )
+            )
         elif act == "clear":
-            out.append((act, "humidity_high", "Humidity back down",
-                        f"Air is {rh:.0f}% RH.", "good"))
+            out.append(
+                (act, "humidity_high", "Humidity back down", f"Air is {rh:.0f}% RH.", "good")
+            )
 
     # --- daily light total, judged just after lights-off. The caller only
     # supplies _dli inside that window, so no evaluation (and no clear)
@@ -203,37 +257,77 @@ def check_all(snapshot, cfg, unit_temp="F"):
         if lo_:
             act = evaluate(f"dli_low:{sid}", d < lo_, now, hold=0)
             if act in ("fire", "remind"):
-                out.append((act, f"dli_low:{sid}", f"{name}: short light day",
-                            f"{name} finished at {d:.1f} mol/m2, below the {lo_:g} "
-                            f"mol alert level; its target is {blo:g}-{bhi:g} "
-                            "mol/day.", "warn"))
+                out.append(
+                    (
+                        act,
+                        f"dli_low:{sid}",
+                        f"{name}: short light day",
+                        f"{name} finished at {d:.1f} mol/m2, below the {lo_:g} "
+                        f"mol alert level; its target is {blo:g}-{bhi:g} "
+                        "mol/day.",
+                        "warn",
+                    )
+                )
             elif act == "clear":
-                out.append((act, f"dli_low:{sid}", f"{name}: light back on target",
-                            f"{name} finished at {d:.1f} mol/m2.", "good"))
+                out.append(
+                    (
+                        act,
+                        f"dli_low:{sid}",
+                        f"{name}: light back on target",
+                        f"{name} finished at {d:.1f} mol/m2.",
+                        "good",
+                    )
+                )
         hi_ = cfg.get("dli_high", DEFAULTS["dli_high"])
         if hi_:
             act = evaluate(f"dli_high:{sid}", d > hi_, now, hold=0)
             if act in ("fire", "remind"):
-                out.append((act, f"dli_high:{sid}", f"{name}: too much light today",
-                            f"{name} finished at {d:.1f} mol/m2, above the {hi_:g} "
-                            "mol ceiling.", "warn"))
+                out.append(
+                    (
+                        act,
+                        f"dli_high:{sid}",
+                        f"{name}: too much light today",
+                        f"{name} finished at {d:.1f} mol/m2, above the {hi_:g} mol ceiling.",
+                        "warn",
+                    )
+                )
             elif act == "clear":
-                out.append((act, f"dli_high:{sid}", f"{name}: light back under the ceiling",
-                            f"{name} finished at {d:.1f} mol/m2.", "good"))
+                out.append(
+                    (
+                        act,
+                        f"dli_high:{sid}",
+                        f"{name}: light back under the ceiling",
+                        f"{name} finished at {d:.1f} mol/m2.",
+                        "good",
+                    )
+                )
     dli_low = cfg.get("dli_low", DEFAULTS["dli_low"])
     d = snapshot.get("_dli")
     if d is not None and dli_low:
         act = evaluate("dli_low", d < dli_low, now, hold=0)
         if act in ("fire", "remind"):
-            out.append((act, "dli_low", "Short light day",
-                        f"Today finished at {d:.1f} mol/m2, below the "
-                        f"{dli_low:g} mol target. The light was off, dimmed, "
-                        "or blocked for part of the photoperiod; the seedling "
-                        "target is {:g}-{:g} mol/day.".format(*cfg.get(
-                            "dli_target", (15, 20))), "warn"))
+            out.append(
+                (
+                    act,
+                    "dli_low",
+                    "Short light day",
+                    f"Today finished at {d:.1f} mol/m2, below the "
+                    f"{dli_low:g} mol target. The light was off, dimmed, "
+                    "or blocked for part of the photoperiod; the seedling "
+                    "target is {:g}-{:g} mol/day.".format(*cfg.get("dli_target", (15, 20))),
+                    "warn",
+                )
+            )
         elif act == "clear":
-            out.append((act, "dli_low", "Light back on target",
-                        f"Today finished at {d:.1f} mol/m2.", "good"))
+            out.append(
+                (
+                    act,
+                    "dli_low",
+                    "Light back on target",
+                    f"Today finished at {d:.1f} mol/m2.",
+                    "good",
+                )
+            )
 
     # ceiling: the other half of the loop when intensity is set by hand on the
     # fixture and the controller can only observe the result
@@ -241,91 +335,177 @@ def check_all(snapshot, cfg, unit_temp="F"):
     if d is not None and dli_high:
         act = evaluate("dli_high", d > dli_high, now, hold=0)
         if act in ("fire", "remind"):
-            out.append((act, "dli_high", "Too much light today",
-                        f"Today finished at {d:.1f} mol/m2, above the "
-                        f"{dli_high:g} mol ceiling. Turn the fixture down or "
-                        "raise it; too much light bleaches seedlings and wastes "
-                        "power.", "warn"))
+            out.append(
+                (
+                    act,
+                    "dli_high",
+                    "Too much light today",
+                    f"Today finished at {d:.1f} mol/m2, above the "
+                    f"{dli_high:g} mol ceiling. Turn the fixture down or "
+                    "raise it; too much light bleaches seedlings and wastes "
+                    "power.",
+                    "warn",
+                )
+            )
         elif act == "clear":
-            out.append((act, "dli_high", "Light back under the ceiling",
-                        f"Today finished at {d:.1f} mol/m2.", "good"))
+            out.append(
+                (
+                    act,
+                    "dli_high",
+                    "Light back under the ceiling",
+                    f"Today finished at {d:.1f} mol/m2.",
+                    "good",
+                )
+            )
 
     # --- reservoir level: empty stops watering, fault means a lying sensor ---
     res = snapshot.get("_reservoir")
     if res:
         # sustained so pump slosh or a wave during a refill can't flap it;
         # clear only once water is solidly back at the low sensor
-        act = evaluate("res_empty", res == "empty", now,
-                       release=res in ("ok", "full"), clear_hold=sustain)
+        act = evaluate(
+            "res_empty", res == "empty", now, release=res in ("ok", "full"), clear_hold=sustain
+        )
         if act in ("fire", "remind"):
-            out.append((act, "res_empty", "Reservoir empty",
-                        "No water at either reservoir sensor. Pump runs are "
-                        "refused until it is refilled.", "error"))
+            out.append(
+                (
+                    act,
+                    "res_empty",
+                    "Reservoir empty",
+                    "No water at either reservoir sensor. Pump runs are "
+                    "refused until it is refilled.",
+                    "error",
+                )
+            )
         elif act == "clear":
-            out.append((act, "res_empty", "Reservoir refilled",
-                        f"Water level is back ({res}).", "good"))
+            out.append(
+                (act, "res_empty", "Reservoir refilled", f"Water level is back ({res}).", "good")
+            )
         act = evaluate("res_fault", res == "fault", now)
         if act in ("fire", "remind"):
-            out.append((act, "res_fault", "Reservoir sensor fault",
-                        "The high sensor reads water but the low one does "
-                        "not, which is physically impossible. A sensor died, "
-                        "slipped off the wall, or needs its sensitivity pot "
-                        "adjusted.", "warn"))
+            out.append(
+                (
+                    act,
+                    "res_fault",
+                    "Reservoir sensor fault",
+                    "The high sensor reads water but the low one does "
+                    "not, which is physically impossible. A sensor died, "
+                    "slipped off the wall, or needs its sensitivity pot "
+                    "adjusted.",
+                    "warn",
+                )
+            )
         elif act == "clear":
-            out.append((act, "res_fault", "Reservoir sensors agree again",
-                        f"Level reads {res}.", "good"))
+            out.append(
+                (act, "res_fault", "Reservoir sensors agree again", f"Level reads {res}.", "good")
+            )
 
     if snapshot.get("_camera_slow_link"):
         act = evaluate("camera_slow_link", True, now)
         if act in ("fire", "remind"):
-            out.append((act, "camera_slow_link", "Camera on a slow USB link",
-                        f"The camera is connected at {snapshot['_camera_slow_link']} instead of "
-                        "480 Mbit/s, so large photo sizes are missing or fail. A USB hub or "
-                        "cable is holding it back: plug the camera in directly, or use a "
-                        "USB 2.0 high-speed hub (scripts/usbcheck.sh tests one).", "error"))
+            out.append(
+                (
+                    act,
+                    "camera_slow_link",
+                    "Camera on a slow USB link",
+                    f"The camera is connected at {snapshot['_camera_slow_link']} instead of "
+                    "480 Mbit/s, so large photo sizes are missing or fail. A USB hub or "
+                    "cable is holding it back: plug the camera in directly, or use a "
+                    "USB 2.0 high-speed hub (scripts/usbcheck.sh tests one).",
+                    "error",
+                )
+            )
     else:
         act = evaluate("camera_slow_link", False, now)
         if act == "clear":
-            out.append((act, "camera_slow_link", "Camera USB link back to full speed",
-                        "The camera is connected at 480 Mbit/s again.", "good"))
+            out.append(
+                (
+                    act,
+                    "camera_slow_link",
+                    "Camera USB link back to full speed",
+                    "The camera is connected at 480 Mbit/s again.",
+                    "good",
+                )
+            )
 
     if snapshot.get("_disk_low"):
         act = evaluate("disk_low", True, now)
         if act in ("fire", "remind"):
-            out.append((act, "disk_low", "SD card nearly full",
-                        f"{snapshot['_disk_low']}. Archived timelapse runs are being "
-                        "removed, oldest first (the current run is never touched); "
-                        "if none are left, start a new timelapse or free space by "
-                        "hand. A full card stops the database and settings writes.", "error"))
+            out.append(
+                (
+                    act,
+                    "disk_low",
+                    "SD card nearly full",
+                    f"{snapshot['_disk_low']}. Archived timelapse runs are being "
+                    "removed, oldest first (the current run is never touched); "
+                    "if none are left, start a new timelapse or free space by "
+                    "hand. A full card stops the database and settings writes.",
+                    "error",
+                )
+            )
     else:
         act = evaluate("disk_low", False, now)
         if act == "clear":
-            out.append((act, "disk_low", "SD card space recovered", "Free space is back above the alert level.", "good"))
+            out.append(
+                (
+                    act,
+                    "disk_low",
+                    "SD card space recovered",
+                    "Free space is back above the alert level.",
+                    "good",
+                )
+            )
 
     if snapshot.get("_heat_fault"):
         act = evaluate("heat_fault", True, now)
         if act in ("fire", "remind"):
-            out.append((act, "heat_fault", "Heat mat held off",
-                        "The heat mat is off for safety: "
-                        + str(snapshot["_heat_fault"]) + ".", "error"))
+            out.append(
+                (
+                    act,
+                    "heat_fault",
+                    "Heat mat held off",
+                    "The heat mat is off for safety: " + str(snapshot["_heat_fault"]) + ".",
+                    "error",
+                )
+            )
     else:
         act = evaluate("heat_fault", False, now)
         if act == "clear":
-            out.append((act, "heat_fault", "Heat mat back under control",
-                        "The soil temperature is reading and the plug is responding.", "good"))
+            out.append(
+                (
+                    act,
+                    "heat_fault",
+                    "Heat mat back under control",
+                    "The soil temperature is reading and the plug is responding.",
+                    "good",
+                )
+            )
 
     if snapshot.get("_plug_failed"):
         act = evaluate("plug_failed", True, now)
         if act in ("fire", "remind"):
-            out.append((act, "plug_failed", "Light plug not responding",
-                        "The smart plug is not accepting commands, so the light "
-                        "is stuck wherever it last was. "
-                        + str(snapshot["_plug_failed"]), "error"))
+            out.append(
+                (
+                    act,
+                    "plug_failed",
+                    "Light plug not responding",
+                    "The smart plug is not accepting commands, so the light "
+                    "is stuck wherever it last was. " + str(snapshot["_plug_failed"]),
+                    "error",
+                )
+            )
     else:
         act = evaluate("plug_failed", False, now)
         if act == "clear":
-            out.append((act, "plug_failed", "Light plug responding again",
-                        "Plug commands are succeeding.", "good"))
+            out.append(
+                (
+                    act,
+                    "plug_failed",
+                    "Light plug responding again",
+                    "Plug commands are succeeding.",
+                    "good",
+                )
+            )
 
     stuck = snapshot.get("_stuck") or {}
     for key, why in sorted(stuck.items()):
@@ -336,41 +516,75 @@ def check_all(snapshot, cfg, unit_temp="F"):
         if key not in stuck:
             act = evaluate(f"stuck:{key}", False, now, hold=0)
             if act == "clear":
-                out.append((act, f"stuck:{key}", f"{key} is changing again",
-                            "The sensor is reporting varying values.", "good"))
+                out.append(
+                    (
+                        act,
+                        f"stuck:{key}",
+                        f"{key} is changing again",
+                        "The sensor is reporting varying values.",
+                        "good",
+                    )
+                )
 
     # --- reservoir / fill failure, surfaced by the caller ---
     if snapshot.get("_fill_failed"):
         act = evaluate("fill_failed", True, now, hold=0)
         if act in ("fire", "remind"):
-            out.append((act, "fill_failed", "Watering did not complete",
-                        str(snapshot["_fill_failed"]), "error"))
+            out.append(
+                (
+                    act,
+                    "fill_failed",
+                    "Watering did not complete",
+                    str(snapshot["_fill_failed"]),
+                    "error",
+                )
+            )
     else:
         act = evaluate("fill_failed", False, now, hold=0)
         if act == "clear":
-            out.append((act, "fill_failed", "Watering completed normally",
-                        "A fill reached the float again.", "good"))
+            out.append(
+                (
+                    act,
+                    "fill_failed",
+                    "Watering completed normally",
+                    "A fill reached the float again.",
+                    "good",
+                )
+            )
 
     # --- camera health, when the camera is in use ---
     cam_fails = snapshot.get("_camera_fails") or 0
     act = evaluate("camera", cam_fails >= 3, now)
     if act in ("fire", "remind"):
-        out.append((act, "camera", "Camera not responding",
-                    f"{cam_fails} consecutive capture failures. "
-                    "Timelapse and the daily report are affected.", "warn"))
+        out.append(
+            (
+                act,
+                "camera",
+                "Camera not responding",
+                f"{cam_fails} consecutive capture failures. "
+                "Timelapse and the daily report are affected.",
+                "warn",
+            )
+        )
     elif act == "clear":
-        out.append((act, "camera", "Camera recovered",
-                    "Captures are succeeding again.", "good"))
+        out.append((act, "camera", "Camera recovered", "Captures are succeeding again.", "good"))
 
     # --- sensors that have stopped reporting entirely ---
     stale = snapshot.get("_stale") or []
     act = evaluate("stale", bool(stale), now)
     if act in ("fire", "remind"):
-        out.append((act, "stale", "Sensors not reporting",
-                    "No recent readings from: " + ", ".join(sorted(stale))
-                    + ". Check wiring and the service log.", "warn"))
+        out.append(
+            (
+                act,
+                "stale",
+                "Sensors not reporting",
+                "No recent readings from: "
+                + ", ".join(sorted(stale))
+                + ". Check wiring and the service log.",
+                "warn",
+            )
+        )
     elif act == "clear":
-        out.append((act, "stale", "Sensors reporting again",
-                    "All sensors are logging.", "good"))
+        out.append((act, "stale", "Sensors reporting again", "All sensors are logging.", "good"))
 
     return out

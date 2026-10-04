@@ -1,0 +1,4 @@
+templates/
+venv/
+node_modules/
+timelapse/

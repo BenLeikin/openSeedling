@@ -17,6 +17,7 @@ when the process exits.
 DST may be "-" to write the JPEG to stdout. Exit status 0 on success; errors
 go to stderr. ROI is [x, y, w, h] as fractions of the frame.
 """
+
 import json
 import os
 import shutil
@@ -56,7 +57,9 @@ def _fit(img, max_w):
     m = int(max_w)
     if max(h, w) > m:
         s = m / float(max(h, w))
-        img = cv2.resize(img, (max(1, int(w * s)), max(1, int(h * s))), interpolation=cv2.INTER_AREA)
+        img = cv2.resize(
+            img, (max(1, int(w * s)), max(1, int(h * s))), interpolation=cv2.INTER_AREA
+        )
     return img
 
 
@@ -101,8 +104,11 @@ def main(argv):
         _write(_fit(crop_array(img, json.loads(roi)), opt.get("max-w")), dst, q)
     elif op == "rotate":
         path, degrees = pos
-        rot = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180,
-               270: cv2.ROTATE_90_COUNTERCLOCKWISE}[int(degrees)]
+        rot = {
+            90: cv2.ROTATE_90_CLOCKWISE,
+            180: cv2.ROTATE_180,
+            270: cv2.ROTATE_90_COUNTERCLOCKWISE,
+        }[int(degrees)]
         img = cv2.imread(str(path))
         if img is None:
             raise SystemExit(f"could not read {path}")
@@ -121,7 +127,7 @@ def main(argv):
                 warped = growth.rectify(img, corners, cols=int(cols), rows=int(rows))
                 cv2.imwrite(str(out), warped, [cv2.IMWRITE_JPEG_QUALITY, int(opt.get("q", 88))])
             except Exception:
-                shutil.copyfile(src, out)      # a blip, not a gap in the timeline
+                shutil.copyfile(src, out)  # a blip, not a gap in the timeline
     elif op == "sharpness":
         for path in pos:
             img = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
@@ -129,7 +135,7 @@ def main(argv):
                 print("nan")
                 continue
             h, w = img.shape[:2]
-            img = img[h // 4: 3 * h // 4, w // 4: 3 * w // 4]
+            img = img[h // 4 : 3 * h // 4, w // 4 : 3 * w // 4]
             print(float(cv2.Laplacian(img, cv2.CV_64F).var()))
     else:
         raise SystemExit(f"unknown operation: {op}")

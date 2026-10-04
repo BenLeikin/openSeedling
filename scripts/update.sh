@@ -245,6 +245,16 @@ fi
 ok "running and answering on port $PORT"
 
 # ---- 6. record it in git --------------------------------------------------
+commit_msg() {   # "openSeedling 39: Formatting and project hygiene", from pyproject + CHANGELOG
+  local ver title
+  ver="$(grep -m1 '^version' "$APP/pyproject.toml" 2>/dev/null | cut -d'"' -f2)"
+  title="$(grep -m1 "^## $ver " "$APP/CHANGELOG.md" 2>/dev/null | sed 's/^## [^:]*: //')"
+  if [[ -n "$ver" && -n "$title" ]]; then
+    printf 'openSeedling %s: %s\n\nInstalled from %s on %s' "$ver" "$title" "$(basename "$ZIP")" "$(hostname)"
+  else
+    printf 'Install %s on %s' "$(basename "$ZIP")" "$(hostname)"
+  fi
+}
 if [[ $GIT -eq 1 ]]; then
   (
     cd "$APP"
@@ -255,7 +265,7 @@ if [[ $GIT -eq 1 ]]; then
     if ! git diff --cached --quiet; then
       git -c user.name="$(git config user.name || echo "$USER")" \
           -c user.email="$(git config user.email || echo "$USER@$(hostname)")" \
-          commit -q -m "Install $(basename "$ZIP") on $(hostname)" \
+          commit -q -m "$(commit_msg)" \
         && echo "    ok: committed in $APP as $(git rev-parse --short HEAD)"
     fi
   ) || note "installed, but the git commit failed; run 'git status' in $APP"

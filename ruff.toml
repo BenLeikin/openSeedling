@@ -8,8 +8,13 @@
 #   B904  "raise ... from" inside validators adds noise without value here
 #   B905  zip() without strict= (all zips are over equal-length lists)
 target-version = "py311"
+line-length = 100
 exclude = ["venv", "timelapse", "timelapse_archive"]
 
 [lint]
 select = ["E", "F", "W", "B"]
 ignore = ["E402", "E501", "E701", "E702", "E731", "E741", "B904", "B905"]
+
+[format]
+# ruff format: one style for every Python file (line length set above)
+quote-style = "double"

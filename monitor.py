@@ -34,12 +34,12 @@ report_state = {"generating": False}
 # is meaningful for a probe and meaningless for humidity. A value under the
 # threshold is passed through untouched, so ordinary drift is never filtered.
 SENSOR_JUMP = {
-    "probe:":    0.08,   # volts
-    "temp:soil": 2.0,    # Celsius; a real soil change is slower than this
-    "temp:air":  2.5,    # Celsius
-    "humidity":  6.0,    # percent
-    "pressure":  2.0,    # hPa
-    "canopy:":   5.0,    # percent of tray area
+    "probe:": 0.08,  # volts
+    "temp:soil": 2.0,  # Celsius; a real soil change is slower than this
+    "temp:air": 2.5,  # Celsius
+    "humidity": 6.0,  # percent
+    "pressure": 2.0,  # hPa
+    "canopy:": 5.0,  # percent of tray area
 }
 # Deliberately absent: lux. It legitimately steps by thousands the moment the
 # light switches or a capture raises brightness, and the DLI integration needs
@@ -90,7 +90,7 @@ def reading_filtered(key, snap=None):
     return (val if val is not None else raw), ts
 
 
-_filter_verdict = {}    # sensor -> "steady" | "spike" | "step" | "trend"
+_filter_verdict = {}  # sensor -> "steady" | "spike" | "step" | "trend"
 
 
 def gather_report_data():
@@ -106,7 +106,7 @@ def gather_report_data():
     pcal = cfg.get("probe_cal") or {}
     pnames = cfg.get("probe_names") or {}
     canopy, probes, soiltemp, env = {}, {}, {}, {}
-    probe_txt = {}          # tray id -> moisture text, for the per-setup view
+    probe_txt = {}  # tray id -> moisture text, for the per-setup view
     trays_cfg = cfg.get("trays") or {}
     snap = db.latest()
     stf = water.latest_soil_temp_f(snap)
@@ -114,9 +114,8 @@ def gather_report_data():
         if k.startswith("canopy:"):
             tid = k[7:]
             if tid not in setups_mod.camera_trays(cfg):
-                continue                  # an old reading from a tray it no longer sees
-            label = ((trays_cfg.get(tid) or {}).get("label")
-                     or f"Tray {tid}")
+                continue  # an old reading from a tray it no longer sees
+            label = (trays_cfg.get(tid) or {}).get("label") or f"Tray {tid}"
             canopy[label] = round(v, 1)
         elif k.startswith("probe:"):
             t = k[6:]
@@ -129,9 +128,11 @@ def gather_report_data():
             flag = water.probe_cal_flag(fv, tcal)
             note = ""
             if flag:
-                note = (" (reading beyond the wet anchor - recalibrate wet)"
-                        if flag == "below_wet"
-                        else " (reading beyond the dry anchor - recalibrate dry)")
+                note = (
+                    " (reading beyond the wet anchor - recalibrate wet)"
+                    if flag == "below_wet"
+                    else " (reading beyond the dry anchor - recalibrate dry)"
+                )
             elif approx:
                 note = " (approx)"
             nm = base + note
@@ -139,8 +140,9 @@ def gather_report_data():
                 probes[nm] = pm
             else:
                 probes[nm] = round(v, 3)
-            probe_txt[t] = (f"{pm}%" if pm is not None
-                            else f"{round(v, 3)} V, not calibrated") + note
+            probe_txt[t] = (
+                f"{pm}%" if pm is not None else f"{round(v, 3)} V, not calibrated"
+            ) + note
         elif k.startswith("temp:soil"):
             label = "Soil" if k == "temp:soil" else f"Soil {k.split('_')[-1]}"
             soiltemp[label] = status_mod.temp_out(v)
@@ -179,13 +181,13 @@ def gather_report_data():
             if v.get("archived"):
                 bits.append(f"TRANSPLANTED {v['archived']}")
             elif spr and sown:
-                bits.append(f"sprouted in {(spr - sown).days}d, "
-                            f"{(now.date() - spr).days}d old")
+                bits.append(f"sprouted in {(spr - sown).days}d, {(now.date() - spr).days}d old")
             elif spr:
                 bits.append(f"sprouted {v['sprouted']}")
             elif sown:
-                bits.append(f"sown {v['planted']} ({(now.date() - sown).days}d ago, "
-                            "not yet sprouted)")
+                bits.append(
+                    f"sown {v['planted']} ({(now.date() - sown).days}d ago, not yet sprouted)"
+                )
             if v.get("count"):
                 bits.append(f"({v['count']} seeds)")
             if v.get("notes"):
@@ -210,9 +212,10 @@ def gather_report_data():
         seed = (h.get("seed") or "").strip()
         if not seed or not h.get("planted"):
             continue
-        g = germ.setdefault(seed, {"sown": 0, "up": 0, "days": [],
-                                   "seeds": 0, "sources": set(),
-                                   "died": 0, "moved": 0})
+        g = germ.setdefault(
+            seed,
+            {"sown": 0, "up": 0, "days": [], "seeds": 0, "sources": set(), "died": 0, "moved": 0},
+        )
         g["sown"] += 1
         g["seeds"] += int(h.get("count") or 0)
         if h.get("source"):
@@ -234,9 +237,18 @@ def gather_report_data():
             seed = (v.get("seed") or "").strip()
             if not seed or not v.get("planted"):
                 continue
-            g = germ.setdefault(seed, {"sown": 0, "up": 0, "days": [],
-                                       "seeds": 0, "sources": set(),
-                                       "died": 0, "moved": 0})
+            g = germ.setdefault(
+                seed,
+                {
+                    "sown": 0,
+                    "up": 0,
+                    "days": [],
+                    "seeds": 0,
+                    "sources": set(),
+                    "died": 0,
+                    "moved": 0,
+                },
+            )
             g["sown"] += 1
             g["seeds"] += int(v.get("count") or 0)
             if v.get("source"):
@@ -271,43 +283,73 @@ def gather_report_data():
         "date": now.strftime("%Y-%m-%d %H:%M"),
         "days_running": None,
         "location": f"lat {cfg['latitude']}, lon {cfg['longitude']} ({cfg['timezone']})",
-        "light": {"phase": "day" if bright > 0 else "night", "brightness": bright,
-                  "on": st["on"].strftime("%H:%M") if st.get("on") else "?",
-                  "off": st["off"].strftime("%H:%M") if st.get("off") else "?",
-                  "capture_brightness": cfg.get("capture_brightness")},
-        "grid": {"rows": grid.get("rows"), "cols": grid.get("cols"),
-                 "names": grid.get("names") or {}},
+        "light": {
+            "phase": "day" if bright > 0 else "night",
+            "brightness": bright,
+            "on": st["on"].strftime("%H:%M") if st.get("on") else "?",
+            "off": st["off"].strftime("%H:%M") if st.get("off") else "?",
+            "capture_brightness": cfg.get("capture_brightness"),
+        },
+        "grid": {
+            "rows": grid.get("rows"),
+            "cols": grid.get("cols"),
+            "names": grid.get("names") or {},
+        },
         "canopy": canopy,
         "probe_moisture": probes,
         "soil_temp_f": soiltemp,
         "environment": env,
-        "fan": (f"{'on' if hardware.fan_state['on'] else 'off'}"
-                + (f" at {hardware.fan_state['speed']}% ({hardware.fan_state['reason']})"
-                   if hardware.fan_state["on"] else f" ({hardware.fan_state['reason']})")
-                + f", mode {cfg.get('fan_mode', 'auto')}") if hardware.FAN_HW else None,
+        "fan": (
+            f"{'on' if hardware.fan_state['on'] else 'off'}"
+            + (
+                f" at {hardware.fan_state['speed']}% ({hardware.fan_state['reason']})"
+                if hardware.fan_state["on"]
+                else f" ({hardware.fan_state['reason']})"
+            )
+            + f", mode {cfg.get('fan_mode', 'auto')}"
+        )
+        if hardware.FAN_HW
+        else None,
         "pressure_trend": pressure_tendency(),
-        "light_metrics": {"ppfd": setups_mod.ppfd_from_lux((snap.get("lux") or (None, None))[1]),
-                          "dli": (setups_mod.dli_today(_cam["lux"], setups_mod.setup_k(_cam))
-                                  if _cam.get("lux") else None),
-                          "dli_target": list(setups_mod.setup_band(_cam)),
-                          "photo_setup": _cam.get("name") if len(setups_mod.setups(cfg)) > 1 else None,
-                          "setups": [{"name": st.get("name"),
-                                      "dli": (setups_mod.dli_today(st["lux"], setups_mod.setup_k(st))
-                                              if st.get("lux") else None),
-                                      "band": list(setups_mod.setup_band(st))}
-                                     for st in setups_mod.setups(cfg)]},
+        "light_metrics": {
+            "ppfd": setups_mod.ppfd_from_lux((snap.get("lux") or (None, None))[1]),
+            "dli": (
+                setups_mod.dli_today(_cam["lux"], setups_mod.setup_k(_cam))
+                if _cam.get("lux")
+                else None
+            ),
+            "dli_target": list(setups_mod.setup_band(_cam)),
+            "photo_setup": _cam.get("name") if len(setups_mod.setups(cfg)) > 1 else None,
+            "setups": [
+                {
+                    "name": st.get("name"),
+                    "dli": (
+                        setups_mod.dli_today(st["lux"], setups_mod.setup_k(st))
+                        if st.get("lux")
+                        else None
+                    ),
+                    "band": list(setups_mod.setup_band(st)),
+                }
+                for st in setups_mod.setups(cfg)
+            ],
+        },
         "planting": planting,
         "germination": germ_out,
         "units": {"temp": status_mod.temp_unit(), "press": status_mod.press_unit()},
         "float": flabel,
         "reservoir": water.reservoir_state(),
         # pump_state is keyed by tray; sum across trays, latest detail wins
-        "pump_today_s": round(sum(s["today_seconds"]
-                                  for s in hardware.pump_state.values()), 1),
-        "pump_last": next((s["last_detail"] for s in
-                           sorted(hardware.pump_state.values(),
-                                  key=lambda s: s["last_run"], reverse=True)
-                           if s["last_detail"]), "none"),
+        "pump_today_s": round(sum(s["today_seconds"] for s in hardware.pump_state.values()), 1),
+        "pump_last": next(
+            (
+                s["last_detail"]
+                for s in sorted(
+                    hardware.pump_state.values(), key=lambda s: s["last_run"], reverse=True
+                )
+                if s["last_detail"]
+            ),
+            "none",
+        ),
         "notes": cfg.get("ai_notes", ""),
         # every reading under the setup it is in; worked out from the setups
         # as they are now, so a new assignment is in the next report
@@ -323,8 +365,11 @@ def _setup_light(cfg, stp, state, now):
         return None
     out = {"fixture": setups_mod.light_label(which, cfg)}
     if which == "main":
-        out["schedule"] = (f"{state['on'].strftime('%H:%M')}-{state['off'].strftime('%H:%M')}"
-                           if state.get("on") and state.get("off") else "?")
+        out["schedule"] = (
+            f"{state['on'].strftime('%H:%M')}-{state['off'].strftime('%H:%M')}"
+            if state.get("on") and state.get("off")
+            else "?"
+        )
         out["now"] = round(state.get("brightness") or 0)
         ov = cfg.get("light_override", "auto")
         out["mode"] = "follows its schedule" if ov == "auto" else f"held {ov} by hand"
@@ -355,7 +400,11 @@ def report_by_setup(cfg, state, snap, now, probe_txt, floats, planting_by_tray):
 
     def reading(key, v):
         if key.startswith("temp:soil"):
-            label = "soil temperature" if key == "temp:soil" else f"soil temperature {key.split('_')[-1]}"
+            label = (
+                "soil temperature"
+                if key == "temp:soil"
+                else f"soil temperature {key.split('_')[-1]}"
+            )
             return label, f"{status_mod.temp_out(v)}{status_mod.temp_unit()}"
         if key == "temp:air":
             return "air", f"{status_mod.temp_out(v)}{status_mod.temp_unit()}"
@@ -367,15 +416,24 @@ def report_by_setup(cfg, state, snap, now, probe_txt, floats, planting_by_tray):
             return f"light sensor {key}", f"{round(v)} lx"
         return None
 
-    groups = {st.get("id") or st.get("name"): {
-        "name": st.get("name"), "light": _setup_light(cfg, st, state, now),
-        "photo": bool(st.get("camera")) or len(sts) == 1,
-        "fan": bool(st.get("fan")) or len(sts) == 1,
-        "reservoir": bool(st.get("reservoir")) or len(sts) == 1,
-        "heat": bool(st.get("heat")) or len(sts) == 1,
-        "band": list(setups_mod.setup_band(st)),
-        "light_sensor": st.get("lux") or None, "ppfd": None, "lux": None, "dli": None,
-        "trays": [], "readings": {}} for st in sts}
+    groups = {
+        st.get("id") or st.get("name"): {
+            "name": st.get("name"),
+            "light": _setup_light(cfg, st, state, now),
+            "photo": bool(st.get("camera")) or len(sts) == 1,
+            "fan": bool(st.get("fan")) or len(sts) == 1,
+            "reservoir": bool(st.get("reservoir")) or len(sts) == 1,
+            "heat": bool(st.get("heat")) or len(sts) == 1,
+            "band": list(setups_mod.setup_band(st)),
+            "light_sensor": st.get("lux") or None,
+            "ppfd": None,
+            "lux": None,
+            "dli": None,
+            "trays": [],
+            "readings": {},
+        }
+        for st in sts
+    }
     shared = {"trays": [], "readings": {}}
 
     def group_of(stp):
@@ -392,18 +450,24 @@ def report_by_setup(cfg, state, snap, now, probe_txt, floats, planting_by_tray):
             g["dli"] = setups_mod.dli_today(key, setups_mod.setup_k(stp))
     for tid in sorted(str(t) for t in trays_cfg):
         t = trays_cfg.get(tid) or {}
-        entry = {"label": t.get("label") or f"Tray {tid}", "id": tid,
-                 "moisture": probe_txt.get(tid),
-                 "canopy": (round(snap[f"canopy:{tid}"][1], 1)
-                            if f"canopy:{tid}" in snap and tid in cam_trays else None),
-                 "float": floats.get(tid),
-                 "planting": planting_by_tray.get(tid) or []}
+        entry = {
+            "label": t.get("label") or f"Tray {tid}",
+            "id": tid,
+            "moisture": probe_txt.get(tid),
+            "canopy": (
+                round(snap[f"canopy:{tid}"][1], 1)
+                if f"canopy:{tid}" in snap and tid in cam_trays
+                else None
+            ),
+            "float": floats.get(tid),
+            "planting": planting_by_tray.get(tid) or [],
+        }
         group_of(setups_mod.tray_setup(cfg, tid))["trays"].append(entry)
     for key, (_ts, v) in sorted(snap.items()):
         if key.startswith(("probe:", "canopy:", "float:")):
-            continue                      # reported with their tray
+            continue  # reported with their tray
         if any(key == stp.get("lux") for stp in sts):
-            continue                      # reported as the setup's light sensor
+            continue  # reported as the setup's light sensor
         r = reading(key, v)
         if r:
             owners = setups_mod.sensor_setups(cfg, key)
@@ -412,19 +476,33 @@ def report_by_setup(cfg, state, snap, now, probe_txt, floats, planting_by_tray):
             for stp in owners:
                 others = [o.get("name") for o in owners if o is not stp]
                 group_of(stp)["readings"][r[0]] = r[1] + (
-                    f" (same sensor as {', '.join(others)})" if others else "")
-    return {"setups": list(groups.values()), "shared": shared,
-            "photo_setup_known": cam is not None or len(sts) == 1,
-            # take_photo raises the light only when the camera's setup is on
-            # the main light; otherwise the photo is at whatever it was
-            "capture_brightness": (cfg.get("capture_brightness")
-                                   if camera_mod.light_for_photo(cfg) else None),
-            "fan": ((f"{'on' if hardware.fan_state['on'] else 'off'}"
-                     + (f" at {hardware.fan_state['speed']}% ({hardware.fan_state['reason']})"
-                        if hardware.fan_state["on"] else f" ({hardware.fan_state['reason']})")
-                     + f", mode {cfg.get('fan_mode', 'auto')}") if hardware.FAN_HW else None),
-            "reservoir": water.reservoir_state(),
-            "heat": heat_mod.status(cfg)}
+                    f" (same sensor as {', '.join(others)})" if others else ""
+                )
+    return {
+        "setups": list(groups.values()),
+        "shared": shared,
+        "photo_setup_known": cam is not None or len(sts) == 1,
+        # take_photo raises the light only when the camera's setup is on
+        # the main light; otherwise the photo is at whatever it was
+        "capture_brightness": (
+            cfg.get("capture_brightness") if camera_mod.light_for_photo(cfg) else None
+        ),
+        "fan": (
+            (
+                f"{'on' if hardware.fan_state['on'] else 'off'}"
+                + (
+                    f" at {hardware.fan_state['speed']}% ({hardware.fan_state['reason']})"
+                    if hardware.fan_state["on"]
+                    else f" ({hardware.fan_state['reason']})"
+                )
+                + f", mode {cfg.get('fan_mode', 'auto')}"
+            )
+            if hardware.FAN_HW
+            else None
+        ),
+        "reservoir": water.reservoir_state(),
+        "heat": heat_mod.status(cfg),
+    }
 
 
 def run_report(reason="daily"):
@@ -442,17 +520,21 @@ def run_report(reason="daily"):
             cfg = dict(config.settings)
         if not ai_report.have_key():
             return {"ok": False, "error": "no API key on the controller"}
-        photos = sorted(p for p in camera_mod.TIMELAPSE_DIR.glob("*.jpg")
-                        if not p.name.startswith("_"))
+        photos = sorted(
+            p for p in camera_mod.TIMELAPSE_DIR.glob("*.jpg") if not p.name.startswith("_")
+        )
         # prefer scheduled frames: a manual (_m) capture can be off-schedule
         # and dark; fall back to manual only when nothing else exists
         sched = [p for p in photos if not p.stem.endswith("_m")]
         photo = (sched or photos)[-1] if photos else None
         with config.settings_lock:
             _flat_on = config.settings.get("timelapse_flatten", True)
-        result = ai_report.generate(photo, gather_report_data(),
-                                    crop=None if _flat_on else camera_mod.crop_box(),
-                                    model=cfg.get("ai_model"))
+        result = ai_report.generate(
+            photo,
+            gather_report_data(),
+            crop=None if _flat_on else camera_mod.crop_box(),
+            model=cfg.get("ai_model"),
+        )
         result["reason"] = reason
         try:
             config.atomic_write_text(AI_REPORT_PATH, json.dumps(result, indent=2))
@@ -462,43 +544,59 @@ def run_report(reason="daily"):
             rep = result.get("report") or {}
             summary = rep.get("summary") or "Daily report ready."
             health = rep.get("overall_health")
-            tag = {"good": "seedling", "watch": "eyes",
-                   "problem": "warning"}.get(health, "seedling")
+            tag = {"good": "seedling", "watch": "eyes", "problem": "warning"}.get(
+                health, "seedling"
+            )
             notify.send("Garden report", summary, tags=tag)
             # Discord: same summary as a colour-coded embed with key details
             fields = []
             g = rep.get("germination") or {}
             if g.get("sprouted") is not None and g.get("total_cells") is not None:
-                fields.append({"name": "Germination",
-                               "value": f"{g['sprouted']}/{g['total_cells']}",
-                               "inline": True})
+                fields.append(
+                    {
+                        "name": "Germination",
+                        "value": f"{g['sprouted']}/{g['total_cells']}",
+                        "inline": True,
+                    }
+                )
             if rep.get("growth_stage"):
-                fields.append({"name": "Stage", "value": rep["growth_stage"],
-                               "inline": True})
+                fields.append({"name": "Stage", "value": rep["growth_stage"], "inline": True})
             if (rep.get("light") or {}).get("assessment"):
-                fields.append({"name": "Light", "value": rep["light"]["assessment"],
-                               "inline": True})
+                fields.append(
+                    {"name": "Light", "value": rep["light"]["assessment"], "inline": True}
+                )
             if (rep.get("water") or {}).get("assessment"):
-                fields.append({"name": "Water", "value": rep["water"]["assessment"],
-                               "inline": True})
+                fields.append(
+                    {"name": "Water", "value": rep["water"]["assessment"], "inline": True}
+                )
             recs = rep.get("recommendations") or []
             if recs:
-                fields.append({"name": "Recommendations",
-                               "value": "\n".join("\u2022 " + str(r) for r in recs[:4]),
-                               "inline": False})
+                fields.append(
+                    {
+                        "name": "Recommendations",
+                        "value": "\n".join("\u2022 " + str(r) for r in recs[:4]),
+                        "inline": False,
+                    }
+                )
             sp = rep.get("species") or []
-            named = [f"{s.get('cell', '?')}: {s.get('guess')}"
-                     + (f" ({s.get('confidence')})" if s.get('confidence') else "")
-                     for s in sp if s.get('guess') and s.get('guess') != 'unsure']
+            named = [
+                f"{s.get('cell', '?')}: {s.get('guess')}"
+                + (f" ({s.get('confidence')})" if s.get("confidence") else "")
+                for s in sp
+                if s.get("guess") and s.get("guess") != "unsure"
+            ]
             if named:
-                fields.append({"name": "Species (guesses)",
-                               "value": "\n".join(named[:10]), "inline": False})
-            discord_alert.send("\U0001F331 Garden report", summary,
-                               level=(health or "info"), fields=fields)
+                fields.append(
+                    {"name": "Species (guesses)", "value": "\n".join(named[:10]), "inline": False}
+                )
+            discord_alert.send(
+                "\U0001f331 Garden report", summary, level=(health or "info"), fields=fields
+            )
         try:
-            db.log_event("ai_report",
-                         reason + (": ok" if result.get("ok")
-                                   else ": " + str(result.get("error"))[:80]))
+            db.log_event(
+                "ai_report",
+                reason + (": ok" if result.get("ok") else ": " + str(result.get("error"))[:80]),
+            )
         except Exception:
             pass
         return result
@@ -516,14 +614,15 @@ def _kernel_clock_synced():
     unavailable (off-Linux, restricted container)."""
     try:
         import ctypes
+
         libc = ctypes.CDLL(None, use_errno=True)
-        buf = ctypes.create_string_buffer(512)   # struct timex; modes=0 only reads
+        buf = ctypes.create_string_buffer(512)  # struct timex; modes=0 only reads
         state = libc.adjtimex(buf)
     except Exception:
         return None
     if state < 0:
         return None
-    return state != 5                            # 5 = TIME_ERROR: not synchronized
+    return state != 5  # 5 = TIME_ERROR: not synchronized
 
 
 def clock_synced():
@@ -556,12 +655,17 @@ def report_loop():
         try:
             with config.settings_lock:
                 cfg = dict(config.settings)
-            if (cfg.get("ai_enabled") and cfg.get("camera_enabled")
-                    and ai_report.have_key() and clock_synced()):
+            if (
+                cfg.get("ai_enabled")
+                and cfg.get("camera_enabled")
+                and ai_report.have_key()
+                and clock_synced()
+            ):
                 tz = ZoneInfo(cfg["timezone"])
                 now = datetime.now(tz)
-                target = (int(cfg.get("ai_report_hour", 8)) * 60
-                          + int(cfg.get("ai_report_minute", 0)))
+                target = int(cfg.get("ai_report_hour", 8)) * 60 + int(
+                    cfg.get("ai_report_minute", 0)
+                )
                 nowmin = now.hour * 60 + now.minute
                 if not primed:
                     # first pass (on a synced clock): if we're already past
@@ -592,7 +696,7 @@ def memory_readings():
         mi = {}
         for line in open("/proc/meminfo"):
             k, v = line.split(":", 1)
-            mi[k] = int(v.split()[0])            # kB
+            mi[k] = int(v.split()[0])  # kB
         out["sys:mem_free"] = round(mi["MemAvailable"] / 1024, 1)
         if mi.get("SwapTotal"):
             out["sys:swap"] = round((mi["SwapTotal"] - mi.get("SwapFree", 0)) / 1024, 1)
@@ -684,7 +788,7 @@ def validate_readings(readings):
 
 # sensor -> last-seen unix ts; touched only by the sample thread via run_alerts
 _seen_sensors = {}
-SEEN_TTL = 3 * 86400    # a sensor silent this long is treated as removed
+SEEN_TTL = 3 * 86400  # a sensor silent this long is treated as removed
 
 
 # binary sensors are legitimately constant for days; a flatline there means
@@ -730,15 +834,19 @@ def sensor_health(cfg, snap=None, max_age=60):
             vals = db.recent_values(key, n=24, max_age=48 * 3600)
         except Exception:
             vals = []
-        verdict = (water._probe_verdict.get(key[6:], "steady")
-                   if key.startswith("probe:") else "steady")
+        verdict = (
+            water._probe_verdict.get(key[6:], "steady") if key.startswith("probe:") else "steady"
+        )
         if key.startswith(NON_STUCK_PREFIXES):
-            vals = vals[:1]      # binary sensors are meant to sit still
+            vals = vals[:1]  # binary sensors are meant to sit still
         score, grade, why = quality.health(
-            vals, age_s=age,
+            vals,
+            age_s=age,
             cadence_s=cap if key.startswith("canopy:") else cadence,
-            rejects=_reject_counts.get(key, 0), verdict=verdict,
-            noise_ref=0.01 if key.startswith("probe:") else None)
+            rejects=_reject_counts.get(key, 0),
+            verdict=verdict,
+            noise_ref=0.01 if key.startswith("probe:") else None,
+        )
         if _reject_last.get(key) and not any("implausible" in w for w in why):
             why.append(_reject_last[key])
         out[key] = {"score": score, "grade": grade, "why": why}
@@ -765,8 +873,10 @@ def run_alerts(readings):
             "dli_high": cfg.get("alert_dli_high", 0),
             "dli_target": setups_mod.dli_target(cfg),
         }
-        acfg["setups"] = [{"id": st.get("id"), "name": st.get("name"),
-                           "band": setups_mod.setup_band(st)} for st in setups_mod.setups(cfg)]
+        acfg["setups"] = [
+            {"id": st.get("id"), "name": st.get("name"), "band": setups_mod.setup_band(st)}
+            for st in setups_mod.setups(cfg)
+        ]
         # The rules judge filtered values: a lone bad reading should not fire a
         # soil-temperature or humidity alert, and the sustain window cannot help
         # when the excursion lasts longer than one sample. Charts and the DLI
@@ -774,7 +884,7 @@ def run_alerts(readings):
         snap = dict(readings)
         for key in list(snap):
             if sensor_jump(key) is None or key.startswith("probe:"):
-                continue          # probes are handled by their own filter below
+                continue  # probes are handled by their own filter below
             fv, _ = reading_filtered(key)
             if fv is not None:
                 snap[key] = fv
@@ -784,20 +894,21 @@ def run_alerts(readings):
         # once per evening and a mid-morning low total can't false-alarm
         with config.state_lock:
             off_t = config.state.get("off")
-        if off_t is not None and (cfg.get("alert_dli_low")
-                                  or cfg.get("alert_dli_high")):
+        if off_t is not None and (cfg.get("alert_dli_low") or cfg.get("alert_dli_high")):
             now_dt = datetime.now(off_t.tzinfo)
             if off_t <= now_dt <= off_t + timedelta(minutes=45):
                 multi = setups_mod.setups(cfg)
-                vals = {st.get("id"): setups_mod.dli_today(st["lux"], setups_mod.setup_k(st))
-                        for st in multi if st.get("lux")}
+                vals = {
+                    st.get("id"): setups_mod.dli_today(st["lux"], setups_mod.setup_k(st))
+                    for st in multi
+                    if st.get("lux")
+                }
                 if len(multi) == 1:
                     d = next(iter(vals.values()), None)
                     if d is not None:
                         snap["_dli"] = d
                 else:
-                    snap["_dli_setups"] = {i: v for i, v in vals.items()
-                                           if v is not None}
+                    snap["_dli_setups"] = {i: v for i, v in vals.items() if v is not None}
 
         # tray moisture as percentages, using each tray's calibration
         pcal = cfg.get("probe_cal") or {}
@@ -808,10 +919,11 @@ def run_alerts(readings):
             if not k.startswith("probe:"):
                 continue
             t = k[6:]
-            fv, _ = water.probe_volts_filtered(t)      # transient-rejected, not raw
-            pct, approx = water.probe_moisture_any(fv if fv is not None else v,
-                                             pcal.get(t) or {}, stf)
-            if pct is not None and not approx:      # only alert on real calibration
+            fv, _ = water.probe_volts_filtered(t)  # transient-rejected, not raw
+            pct, approx = water.probe_moisture_any(
+                fv if fv is not None else v, pcal.get(t) or {}, stf
+            )
+            if pct is not None and not approx:  # only alert on real calibration
                 moist[names.get(t) or f"Soil moisture {t}"] = pct
         snap["_moisture"] = moist
 
@@ -824,23 +936,36 @@ def run_alerts(readings):
         # was; the sustain window absorbs a wifi blip, repeated failures do not
         # the plug is worth alerting on whether it is the main light or the
         # third fixture: either way a dead plug means a light stuck on or off
-        spd = (camera_mod.usb_link_speed(cfg.get("usb_device", "/dev/video0"))
-               if cfg.get("camera_enabled") and cfg.get("camera_backend", "rpicam") == "usb" else None)
-        snap["_camera_slow_link"] = (f"{spd:g} Mbit/s" if spd is not None and spd < 480 else "")
+        spd = (
+            camera_mod.usb_link_speed(cfg.get("usb_device", "/dev/video0"))
+            if cfg.get("camera_enabled") and cfg.get("camera_backend", "rpicam") == "usb"
+            else None
+        )
+        snap["_camera_slow_link"] = f"{spd:g} Mbit/s" if spd is not None and spd < 480 else ""
         free = camera_mod.disk_free_gb()
-        snap["_disk_low"] = (f"{free:.1f} GB free on the SD card"
-                             + (" (photos have stopped)" if free < camera_mod.MIN_FREE_GB else "")
-                             if free < camera_mod.LOW_FREE_GB else "")
-        snap["_plug_failed"] = (light_mod.kasa_state["error"]
-                                if (light_mod.light_backend(cfg) == "kasa"
-                                    and cfg.get("plug_use", "light") == "light"
-                                    and light_mod.kasa_state["fails"] >= 2) else "")
+        snap["_disk_low"] = (
+            f"{free:.1f} GB free on the SD card"
+            + (" (photos have stopped)" if free < camera_mod.MIN_FREE_GB else "")
+            if free < camera_mod.LOW_FREE_GB
+            else ""
+        )
+        snap["_plug_failed"] = (
+            light_mod.kasa_state["error"]
+            if (
+                light_mod.light_backend(cfg) == "kasa"
+                and cfg.get("plug_use", "light") == "light"
+                and light_mod.kasa_state["fails"] >= 2
+            )
+            else ""
+        )
         # the heat mat: held off by its own safety rules, or its plug failing
         hs = heat_mod.status(cfg)
         snap["_heat_fault"] = ""
         if hs["use"] and hs["mode"] != "off":
             if light_mod.kasa_state["fails"] >= 2:
-                snap["_heat_fault"] = "the plug is not responding: " + str(light_mod.kasa_state["error"])
+                snap["_heat_fault"] = "the plug is not responding: " + str(
+                    light_mod.kasa_state["error"]
+                )
             elif hs["fault"]:
                 snap["_heat_fault"] = hs["fault"]
 
@@ -851,19 +976,19 @@ def run_alerts(readings):
         now_ts = time.time()
         for k in readings:
             _seen_sensors[k] = now_ts
-        for k in [k for k, t in _seen_sensors.items()
-                  if now_ts - t > SEEN_TTL]:
+        for k in [k for k, t in _seen_sensors.items() if now_ts - t > SEEN_TTL]:
             _seen_sensors.pop(k, None)
         snap["_stale"] = sorted(set(_seen_sensors) - set(readings))
         # reporting on time but not measuring: invisible to the stale check
-        snap["_stuck"] = stuck_sensors(
-            max(1, int(cfg.get("sample_interval_min", 5))) * 60)
+        snap["_stuck"] = stuck_sensors(max(1, int(cfg.get("sample_interval_min", 5))) * 60)
 
         for action, key, title, message, level in alerts.check_all(
-                snap, acfg, "C" if cfg.get("units") == "metric" else "F"):
+            snap, acfg, "C" if cfg.get("units") == "metric" else "F"
+        ):
             prefix = {"fire": "", "remind": "Still: ", "clear": "Resolved: "}[action]
-            discord_alert.send(prefix + title, message,
-                               level="good" if action == "clear" else level)
+            discord_alert.send(
+                prefix + title, message, level="good" if action == "clear" else level
+            )
             log.info(f"alert {action}: {key}")
     except Exception as e:
         log.error(f"alert check error: {e}")
@@ -888,15 +1013,15 @@ def live_loop():
             time.sleep(5)
             continue
         try:
-            vals = {k: v for k, v in sensors.read_live().items()
-                    if k in LIVE_KEYS}
+            vals = {k: v for k, v in sensors.read_live().items() if k in LIVE_KEYS}
             if vals:
                 live_readings.update(ts=time.time(), values=vals)
                 # push only on a change worth seeing, so a still room does not
                 # wake every open page every few seconds
-                moved = any(k not in last or abs(v - last[k]) >
-                            max(0.05, abs(last[k]) * 0.002)
-                            for k, v in vals.items())
+                moved = any(
+                    k not in last or abs(v - last[k]) > max(0.05, abs(last[k]) * 0.002)
+                    for k, v in vals.items()
+                )
                 if moved:
                     last = dict(vals)
                     status_mod.publish("live")
@@ -922,7 +1047,7 @@ def pressure_tendency():
 
     def value_at(hours_ago):
         target = now_ts - hours_ago * 3600
-        best, bestd = None, 3600      # accept within an hour of the target
+        best, bestd = None, 3600  # accept within an hour of the target
         for ts, v in pts:
             d = abs(ts - target)
             if d < bestd:
@@ -933,8 +1058,11 @@ def pressure_tendency():
     if p3 is None:
         return None
     d3 = round(now_v - p3, 1)
-    out = {"now": round(now_v, 1), "change_3h": d3,
-           "change_24h": round(now_v - p24, 1) if p24 is not None else None}
+    out = {
+        "now": round(now_v, 1),
+        "change_3h": d3,
+        "change_24h": round(now_v - p24, 1) if p24 is not None else None,
+    }
     # conventional 3-hour tendency bands
     if d3 <= -6:
         words, arrow = "falling rapidly - expect a change", "down"
@@ -959,6 +1087,7 @@ def _soil_f_lookup(snap, hours):
     the logged history. A probe point from last Tuesday is corrected for
     last Tuesday's soil, not today's."""
     import bisect
+
     key = next((k for k in snap if k.startswith("temp:soil")), None)
     hist = db.series(key, hours + 1) if key else []
     times = [t for t, _ in hist]
@@ -967,12 +1096,13 @@ def _soil_f_lookup(snap, hours):
         if not times:
             return default
         i = bisect.bisect_left(times, ts)
-        best = min((j for j in (i - 1, i) if 0 <= j < len(times)),
-                   key=lambda j: abs(times[j] - ts))
+        best = min((j for j in (i - 1, i) if 0 <= j < len(times)), key=lambda j: abs(times[j] - ts))
         if abs(times[best] - ts) > 3600:
             return default
         return hist[best][1] * 9 / 5 + 32
+
     return at
+
 
 # Imported last: these modules import this one, and their import-time
 # code runs only after everything above is defined. Their names are

@@ -28,6 +28,7 @@ preserved, so `journalctl -u growlight -p warning` shows only what matters.
 GROWLIGHT_LOG_LEVEL overrides the level (default info); GROWLIGHT_LOG_FILE
 additionally writes a rotating file, for running outside systemd.
 """
+
 import logging
 import logging.handlers
 import os
@@ -46,8 +47,11 @@ class _JournalFormatter(logging.Formatter):
     """
 
     def __init__(self, with_time):
-        fmt = ("%(asctime)s %(levelname)-8s %(name)s: %(message)s" if with_time
-               else "%(levelname)-8s %(name)s: %(message)s")
+        fmt = (
+            "%(asctime)s %(levelname)-8s %(name)s: %(message)s"
+            if with_time
+            else "%(levelname)-8s %(name)s: %(message)s"
+        )
         super().__init__(fmt, datefmt="%Y-%m-%d %H:%M:%S")
 
 
@@ -64,8 +68,7 @@ def setup(level=None, logfile=None, force=False):
     logger.propagate = False
 
     # under systemd the journal timestamps every line already
-    under_systemd = bool(os.environ.get("JOURNAL_STREAM")
-                         or os.environ.get("INVOCATION_ID"))
+    under_systemd = bool(os.environ.get("JOURNAL_STREAM") or os.environ.get("INVOCATION_ID"))
     stream = logging.StreamHandler(sys.stderr)
     stream.setFormatter(_JournalFormatter(not under_systemd))
     logger.addHandler(stream)
@@ -73,8 +76,7 @@ def setup(level=None, logfile=None, force=False):
     path = logfile or os.environ.get("GROWLIGHT_LOG_FILE")
     if path:
         try:
-            fh = logging.handlers.RotatingFileHandler(
-                path, maxBytes=1_000_000, backupCount=3)
+            fh = logging.handlers.RotatingFileHandler(path, maxBytes=1_000_000, backupCount=3)
             fh.setFormatter(_JournalFormatter(True))
             logger.addHandler(fh)
         except OSError as e:

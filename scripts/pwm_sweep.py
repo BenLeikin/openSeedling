@@ -19,11 +19,12 @@ If the top reads about 5V instead of 10V, the board's range pads are bridged
 for the 0-5V setting. If it barely moves, the supply is not 12V or the PWM pin
 is wrong.
 """
+
 import argparse
 import time
 
 # Same defaults the app uses, so a sweep here matches what the service will do.
-DEFAULT_PIN = 19        # BCM; physical pin 35, hardware PWM channel 1
+DEFAULT_PIN = 19  # BCM; physical pin 35, hardware PWM channel 1
 DEFAULT_HZ = 1000
 
 
@@ -38,23 +39,27 @@ def channel_for(pin):
 
 def main():
     ap = argparse.ArgumentParser(description="Sweep the light PWM for testing")
-    ap.add_argument("--pin", type=int, default=DEFAULT_PIN,
-                    help=f"BCM pin (default {DEFAULT_PIN}, physical 35)")
+    ap.add_argument(
+        "--pin", type=int, default=DEFAULT_PIN, help=f"BCM pin (default {DEFAULT_PIN}, physical 35)"
+    )
     ap.add_argument("--hz", type=int, default=DEFAULT_HZ)
     ap.add_argument("--step", type=int, default=10, help="percent per step")
-    ap.add_argument("--hold", type=float, default=None,
-                    help="hold one duty percent until interrupted")
-    ap.add_argument("--auto", action="store_true",
-                    help="ramp up and down continuously instead of pausing")
-    ap.add_argument("--dwell", type=float, default=1.5,
-                    help="seconds per step in --auto mode")
+    ap.add_argument(
+        "--hold", type=float, default=None, help="hold one duty percent until interrupted"
+    )
+    ap.add_argument(
+        "--auto", action="store_true", help="ramp up and down continuously instead of pausing"
+    )
+    ap.add_argument("--dwell", type=float, default=1.5, help="seconds per step in --auto mode")
     args = ap.parse_args()
 
     try:
         from rpi_hardware_pwm import HardwarePWM
     except ImportError:
-        raise SystemExit("rpi-hardware-pwm is not installed in this interpreter; "
-                         "run it with ~/growlight/venv/bin/python")
+        raise SystemExit(
+            "rpi-hardware-pwm is not installed in this interpreter; "
+            "run it with ~/growlight/venv/bin/python"
+        )
 
     ch = channel_for(args.pin)
     try:
@@ -64,18 +69,17 @@ def main():
             f"could not open PWM channel {ch} for GPIO{args.pin}: {e}\n"
             "Check that the overlay is enabled in /boot/firmware/config.txt:\n"
             "  dtoverlay=pwm-2chan,pin=18,func=2,pin2=19,func2=2\n"
-            "and that the growlight service is stopped.")
+            "and that the growlight service is stopped."
+        )
 
-    print(f"GPIO{args.pin} (physical {'12' if ch == 0 else '35'}), "
-          f"PWM channel {ch} at {args.hz}Hz")
+    print(f"GPIO{args.pin} (physical {'12' if ch == 0 else '35'}), PWM channel {ch} at {args.hz}Hz")
     print("Measure VOUT against the converter's GND.\n")
     pwm.start(0)
     try:
         if args.hold is not None:
             duty = max(0.0, min(100.0, args.hold))
             pwm.change_duty_cycle(duty)
-            print(f"holding {duty:.0f}% -- expect about {duty/10:.1f}V. "
-                  "Ctrl-C to stop.")
+            print(f"holding {duty:.0f}% -- expect about {duty / 10:.1f}V. Ctrl-C to stop.")
             while True:
                 time.sleep(1)
 
@@ -88,14 +92,14 @@ def main():
             while True:
                 for d in steps + steps[::-1][1:]:
                     pwm.change_duty_cycle(d)
-                    print(f"  {d:3d}%  expect ~{d/10:4.1f}V", flush=True)
+                    print(f"  {d:3d}%  expect ~{d / 10:4.1f}V", flush=True)
                     time.sleep(args.dwell)
         else:
             print("press Enter to advance, Ctrl-C to stop\n")
             for d in steps:
                 pwm.change_duty_cycle(d)
                 try:
-                    input(f"  {d:3d}%  expect ~{d/10:4.1f}V   [Enter] ")
+                    input(f"  {d:3d}%  expect ~{d / 10:4.1f}V   [Enter] ")
                 except EOFError:
                     time.sleep(args.dwell)
             print("\nsweep complete")
@@ -108,8 +112,7 @@ def main():
             pwm.stop()
         except Exception:
             pass
-        print("PWM set to 0 and released. "
-              "Start the service again: sudo systemctl start growlight")
+        print("PWM set to 0 and released. Start the service again: sudo systemctl start growlight")
 
 
 if __name__ == "__main__":

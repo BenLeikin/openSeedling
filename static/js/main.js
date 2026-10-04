@@ -13,6 +13,17 @@ import * as m_live from './live.js';
 import * as m_buddy from './buddy.js';
 import * as m_cards from './cards.js';
 
-for (const m of [m_light, m_setups, m_photos, m_charts, m_trays, m_devices, m_grid, m_live, m_buddy, m_cards]) {
+for (const m of [
+  m_light,
+  m_setups,
+  m_photos,
+  m_charts,
+  m_trays,
+  m_devices,
+  m_grid,
+  m_live,
+  m_buddy,
+  m_cards
+]) {
   if (typeof m.start === 'function') m.start();
 }

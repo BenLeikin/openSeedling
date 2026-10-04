@@ -15,6 +15,7 @@ Needs Playwright with Chromium (pip install playwright; playwright install
 chromium). Without it every test is skipped and the run still exits 0, so it
 is harmless on the Pi, which does not run it.
 """
+
 import json
 import math
 import os
@@ -53,27 +54,74 @@ def free_port():
 # ---------------------------------------------------------------------------
 # a throwaway app with test settings and a day of readings
 
+
 def make_app():
     work = Path(tempfile.mkdtemp(prefix="openseedling-ui-"))
     app = work / "app"
-    shutil.copytree(REPO, app, ignore=shutil.ignore_patterns(
-        ".git", "venv", "__pycache__", "timelapse", "timelapse_archive", "growlight.db*",
-        "config.json", ".env", ".secret", "ai_report.json", "*.jpg", "*.mp4", "*.log"))
+    shutil.copytree(
+        REPO,
+        app,
+        ignore=shutil.ignore_patterns(
+            ".git",
+            "venv",
+            "__pycache__",
+            "timelapse",
+            "timelapse_archive",
+            "growlight.db*",
+            "config.json",
+            ".env",
+            ".secret",
+            "ai_report.json",
+            "*.jpg",
+            "*.mp4",
+            "*.log",
+        ),
+    )
     cfg = {
-        "trays": {"1": {"label": "Seedling 1", "rows": 3, "cols": 4, "cells": {}},
-                  "2": {"label": "Seedling 2", "rows": 3, "cols": 4, "cells": {}},
-                  "3": {"label": "Transplants", "rows": 4, "cols": 5, "cells": {
-                      f"{c}{r}": {"seed": "Fatalii", "planted": "2026-09-20"}
-                      for c in "ABCDE" for r in range(1, 5)}}},
+        "trays": {
+            "1": {"label": "Seedling 1", "rows": 3, "cols": 4, "cells": {}},
+            "2": {"label": "Seedling 2", "rows": 3, "cols": 4, "cells": {}},
+            "3": {
+                "label": "Transplants",
+                "rows": 4,
+                "cols": 5,
+                "cells": {
+                    f"{c}{r}": {"seed": "Fatalii", "planted": "2026-09-20"}
+                    for c in "ABCDE"
+                    for r in range(1, 5)
+                },
+            },
+        },
         "setups": [
-            {"id": "t", "name": "Transplants", "light": "main", "lux": "lux", "trays": ["3"],
-             "sensors": ["humidity", "temp:air", "pressure"], "fan": True, "camera": True,
-             "dli_low": 12, "dli_high": 15},
-            {"id": "s", "name": "Seedlings", "light": "second", "lux": "", "trays": ["1", "2"],
-             "sensors": ["humidity", "temp:air", "pressure", "temp:soil"], "heat": True,
-             "dli_low": 8, "dli_high": 10}],
-        "plug_use": "heat", "light2_on": True, "schedule_mode": "fixed",
-        "fixed_on": "07:00", "fixed_off": "19:00",
+            {
+                "id": "t",
+                "name": "Transplants",
+                "light": "main",
+                "lux": "lux",
+                "trays": ["3"],
+                "sensors": ["humidity", "temp:air", "pressure"],
+                "fan": True,
+                "camera": True,
+                "dli_low": 12,
+                "dli_high": 15,
+            },
+            {
+                "id": "s",
+                "name": "Seedlings",
+                "light": "second",
+                "lux": "",
+                "trays": ["1", "2"],
+                "sensors": ["humidity", "temp:air", "pressure", "temp:soil"],
+                "heat": True,
+                "dli_low": 8,
+                "dli_high": 10,
+            },
+        ],
+        "plug_use": "heat",
+        "light2_on": True,
+        "schedule_mode": "fixed",
+        "fixed_on": "07:00",
+        "fixed_off": "19:00",
     }
     (app / "config.json").write_text(json.dumps(cfg))
     seed = r"""
@@ -96,16 +144,22 @@ for t, k, v in rows:
     db.log_reading(k, v, ts=t)
 """
     env = dict(os.environ, PYTHONPATH=str(FAKEHW))
-    subprocess.run([sys.executable, "-c", seed], cwd=app, env=env, check=True,
-                   capture_output=True, timeout=120)
+    subprocess.run(
+        [sys.executable, "-c", seed], cwd=app, env=env, check=True, capture_output=True, timeout=120
+    )
     return work, app
 
 
 def start(app, port):
     env = dict(os.environ, PYTHONPATH=str(FAKEHW), GROWLIGHT_HTTP_PORT=str(port))
     log = open(app / "ui-test.log", "w")
-    proc = subprocess.Popen([sys.executable, "-u", "growlight.py"], cwd=app, env=env,
-                            stdout=log, stderr=subprocess.STDOUT)
+    proc = subprocess.Popen(
+        [sys.executable, "-u", "growlight.py"],
+        cwd=app,
+        env=env,
+        stdout=log,
+        stderr=subprocess.STDOUT,
+    )
     base = f"http://127.0.0.1:{port}"
     for _ in range(120):
         try:
@@ -125,6 +179,7 @@ def saved(app):
 # ---------------------------------------------------------------------------
 # tests
 
+
 def open_all(page):
     page.evaluate("()=>document.querySelectorAll('details').forEach(d=>d.open=true)")
 
@@ -138,7 +193,7 @@ def settings_round_trip(page, base, app):
     open_all(page)
     spec = page.evaluate("()=>JSON.parse(document.getElementById('formspec').textContent)")
     before = saved(app)
-    want = {}               # key -> value we typed (as the form holds it)
+    want = {}  # key -> value we typed (as the form holds it)
     for k, s in spec.items():
         el = page.locator(f"#cfgform [name='{k}']")
         if el.count() == 0:
@@ -151,23 +206,38 @@ def settings_round_trip(page, base, app):
         elif kind == "choice":
             opts = [o for o in el.evaluate("e=>[...e.options].map(o=>o.value)") if o != str(cur)]
             pick = {"light_backend": "dim", "plug_use": "heat", "units": "imperial"}.get(k)
-            want[k] = pick if pick and pick != str(cur) or k == "units" else (opts[0] if opts else cur)
+            want[k] = (
+                pick if pick and pick != str(cur) or k == "units" else (opts[0] if opts else cur)
+            )
             if k == "units":
-                want[k] = "imperial"         # temperatures below are typed in F
+                want[k] = "imperial"  # temperatures below are typed in F
         elif kind == "time":
             want[k] = "06:15"
         elif kind == "secret":
             want[k] = "pw-test"
         elif kind == "text":
-            want[k] = {"timezone": "America/Denver", "roi": "0.1,0.1,0.8,0.8",
-                       "usb_device": "/dev/video2", "kasa_host": "10.0.0.5",
-                       "kasa_user": "tester", "heat_sensor": "temp:soil"}.get(k, cur)
+            want[k] = {
+                "timezone": "America/Denver",
+                "roi": "0.1,0.1,0.8,0.8",
+                "usb_device": "/dev/video2",
+                "kasa_host": "10.0.0.5",
+                "kasa_user": "tester",
+                "heat_sensor": "temp:soil",
+            }.get(k, cur)
         elif kind == "tempF":
-            want[k] = {"heat_target_f": "80", "heat_max_f": "90",
-                       "soil_temp_low_f": "79", "soil_temp_high_f": "84"}[k]
+            want[k] = {
+                "heat_target_f": "80",
+                "heat_max_f": "90",
+                "soil_temp_low_f": "79",
+                "soil_temp_high_f": "84",
+            }[k]
         else:
             lo, hi = s["min"], s["max"]
-            step = 1 if kind == "int" else (float(s["step"]) if s.get("step") not in (None, "any") else 0.5)
+            step = (
+                1
+                if kind == "int"
+                else (float(s["step"]) if s.get("step") not in (None, "any") else 0.5)
+            )
             try:
                 c = float(cur)
             except ValueError:
@@ -178,11 +248,17 @@ def settings_round_trip(page, base, app):
             want[k] = str(int(v)) if kind == "int" else str(round(v, 4))
         val = want[k]
         if kind == "bool":
-            el.evaluate("(e,v)=>{e.checked=v;e.dispatchEvent(new Event('change',{bubbles:true}))}", val)
+            el.evaluate(
+                "(e,v)=>{e.checked=v;e.dispatchEvent(new Event('change',{bubbles:true}))}", val
+            )
         elif tag == "select":
-            el.evaluate("(e,v)=>{e.value=v;e.dispatchEvent(new Event('change',{bubbles:true}))}", str(val))
+            el.evaluate(
+                "(e,v)=>{e.value=v;e.dispatchEvent(new Event('change',{bubbles:true}))}", str(val)
+            )
         else:
-            el.evaluate("(e,v)=>{e.value=v;e.dispatchEvent(new Event('input',{bubbles:true}))}", str(val))
+            el.evaluate(
+                "(e,v)=>{e.value=v;e.dispatchEvent(new Event('input',{bubbles:true}))}", str(val)
+            )
     page.locator("#cfgform button[type=submit]").click()
     page.wait_for_timeout(2500)
     msg = page.inner_text("#msg")
@@ -202,10 +278,14 @@ def settings_round_trip(page, base, app):
         else:
             ok = str(got) == str(v)
         if not ok:
-            (stored_wrong if got != before.get(k) else silent).append(f"{k}: typed {v!r}, stored {got!r}")
-    check(not stored_wrong and not silent,
-          f"all {len(want)} Settings fields save as typed ({msg!r}; wrong: {stored_wrong[:3]}; "
-          f"not saved: {silent[:3]})")
+            (stored_wrong if got != before.get(k) else silent).append(
+                f"{k}: typed {v!r}, stored {got!r}"
+            )
+    check(
+        not stored_wrong and not silent,
+        f"all {len(want)} Settings fields save as typed ({msg!r}; wrong: {stored_wrong[:3]}; "
+        f"not saved: {silent[:3]})",
+    )
     # the form after a reload shows what was stored
     page.goto(base + "/")
     page.wait_for_timeout(2500)
@@ -216,7 +296,7 @@ def settings_round_trip(page, base, app):
         kind = spec[k]["kind"]
         cur = el.evaluate("e=>e.type==='checkbox'?e.checked:e.value")
         if kind == "secret":
-            ok = cur == ""                        # never sent back to the page
+            ok = cur == ""  # never sent back to the page
         elif kind == "bool":
             ok = cur is v
         elif kind in ("int", "float", "tempF"):
@@ -225,8 +305,11 @@ def settings_round_trip(page, base, app):
             ok = str(cur) == str(v)
         if not ok:
             shown_wrong.append(f"{k}: stored {v!r}, form shows {cur!r}")
-    check(not shown_wrong, f"after a reload the form shows every stored value, and never the "
-                           f"plug password ({shown_wrong[:3]})")
+    check(
+        not shown_wrong,
+        f"after a reload the form shows every stored value, and never the "
+        f"plug password ({shown_wrong[:3]})",
+    )
 
 
 def edit_survives_update(page, base, app):
@@ -235,55 +318,79 @@ def edit_survives_update(page, base, app):
     page.goto(base + "/")
     page.wait_for_timeout(2500)
     open_all(page)
-    page.evaluate("()=>{const e=document.querySelector('#cfgform [name=dim_below_min]');"
-                  "e.value=e.value==='hold'?'cycle':'hold';e.dispatchEvent(new Event('change',{bubbles:true}))}")
+    page.evaluate(
+        "()=>{const e=document.querySelector('#cfgform [name=dim_below_min]');"
+        "e.value=e.value==='hold'?'cycle':'hold';e.dispatchEvent(new Event('change',{bubbles:true}))}"
+    )
     typed = page.evaluate("()=>document.querySelector('#cfgform [name=dim_below_min]').value")
-    for _ in range(3):        # each change through the API pushes a new status
-        page.evaluate("()=>fetch('/api/fan',{method:'POST',headers:{'Content-Type':'application/json'},"
-                      "body:JSON.stringify({mode:'auto'})})")
+    for _ in range(3):  # each change through the API pushes a new status
+        page.evaluate(
+            "()=>fetch('/api/fan',{method:'POST',headers:{'Content-Type':'application/json'},"
+            "body:JSON.stringify({mode:'auto'})})"
+        )
         page.wait_for_timeout(1200)
     now = page.evaluate("()=>document.querySelector('#cfgform [name=dim_below_min]').value")
-    check(now == typed and "Unsaved" in page.inner_text("#msg"),
-          f"an unsaved edit is kept while new statuses arrive ({typed!r} -> {now!r})")
+    check(
+        now == typed and "Unsaved" in page.inner_text("#msg"),
+        f"an unsaved edit is kept while new statuses arrive ({typed!r} -> {now!r})",
+    )
 
 
 def rejected_field(page, base, app):
     page.goto(base + "/")
     page.wait_for_timeout(2500)
     open_all(page)
-    page.evaluate("()=>{const e=document.querySelector('#cfgform [name=video_fps]');"
-                  "e.value='500';e.dispatchEvent(new Event('input',{bubbles:true}))}")
-    page.evaluate("()=>document.querySelectorAll('#cfgform details.fgroup').forEach(d=>d.open=false)")
+    page.evaluate(
+        "()=>{const e=document.querySelector('#cfgform [name=video_fps]');"
+        "e.value='500';e.dispatchEvent(new Event('input',{bubbles:true}))}"
+    )
+    page.evaluate(
+        "()=>document.querySelectorAll('#cfgform details.fgroup').forEach(d=>d.open=false)"
+    )
     page.locator("#cfgform button[type=submit]").click()
     page.wait_for_timeout(2000)
     msg = page.inner_text("#msg")
-    opened = page.evaluate("()=>document.querySelector('#cfgform [name=video_fps]').closest('details.fgroup').open")
-    marked = page.evaluate("()=>document.querySelector('#cfgform [name=video_fps]').getAttribute('aria-invalid')")
-    check("Video speed" in msg and opened and marked == "true" and saved(app).get("video_fps") != 500,
-          f"a bad value in a closed section is refused, named by its label, its section opened "
-          f"and the field outlined ({msg[:60]!r})")
+    opened = page.evaluate(
+        "()=>document.querySelector('#cfgform [name=video_fps]').closest('details.fgroup').open"
+    )
+    marked = page.evaluate(
+        "()=>document.querySelector('#cfgform [name=video_fps]').getAttribute('aria-invalid')"
+    )
+    check(
+        "Video speed" in msg and opened and marked == "true" and saved(app).get("video_fps") != 500,
+        f"a bad value in a closed section is refused, named by its label, its section opened "
+        f"and the field outlined ({msg[:60]!r})",
+    )
 
 
 def metric_temperature(page, base, app):
     page.goto(base + "/")
     page.wait_for_timeout(2500)
     open_all(page)
-    page.evaluate("()=>{const u=document.querySelector('#cfgform [name=units]');u.value='metric';"
-                  "u.dispatchEvent(new Event('change',{bubbles:true}))}")
+    page.evaluate(
+        "()=>{const u=document.querySelector('#cfgform [name=units]');u.value='metric';"
+        "u.dispatchEvent(new Event('change',{bubbles:true}))}"
+    )
     page.locator("#cfgform button[type=submit]").click()
     page.wait_for_timeout(2000)
     page.goto(base + "/")
     page.wait_for_timeout(2500)
     open_all(page)
-    page.evaluate("()=>{const t=document.querySelector('#cfgform [name=heat_target_f]');t.value='30';"
-                  "t.dispatchEvent(new Event('input',{bubbles:true}))}")
+    page.evaluate(
+        "()=>{const t=document.querySelector('#cfgform [name=heat_target_f]');t.value='30';"
+        "t.dispatchEvent(new Event('input',{bubbles:true}))}"
+    )
     page.locator("#cfgform button[type=submit]").click()
     page.wait_for_timeout(2000)
     got = saved(app).get("heat_target_f")
-    check(got is not None and abs(float(got) - 86.0) < 0.06,
-          f"with metric units a 30 C heat mat target is stored as 86 F ({got})")
-    page.evaluate("()=>{const u=document.querySelector('#cfgform [name=units]');u.value='imperial';"
-                  "u.dispatchEvent(new Event('change',{bubbles:true}))}")
+    check(
+        got is not None and abs(float(got) - 86.0) < 0.06,
+        f"with metric units a 30 C heat mat target is stored as 86 F ({got})",
+    )
+    page.evaluate(
+        "()=>{const u=document.querySelector('#cfgform [name=units]');u.value='imperial';"
+        "u.dispatchEvent(new Event('change',{bubbles:true}))}"
+    )
     page.locator("#cfgform button[type=submit]").click()
     page.wait_for_timeout(1500)
 
@@ -297,23 +404,28 @@ def setups_by_main_save(page, base, app):
     page.locator("#cfgform button[type=submit]").click()
     page.wait_for_timeout(2000)
     s = [x for x in saved(app)["setups"] if x["name"] == "Seedlings"][0]
-    check(s["dli_low"] == 9 and s["dli_high"] == 13,
-          "a Setups edit is saved by the main Save button too")
+    check(
+        s["dli_low"] == 9 and s["dli_high"] == 13,
+        "a Setups edit is saved by the main Save button too",
+    )
 
 
 def charts(page, base):
     page.goto(base + "/")
     page.wait_for_timeout(3500)
-    page.locator("#setuptabs button", has_text="Seedlings").click()   # the heat mat's tab
+    page.locator("#setuptabs button", has_text="Seedlings").click()  # the heat mat's tab
     page.wait_for_timeout(1500)
     page.locator("#chartgrid").scroll_into_view_if_needed()
     page.wait_for_timeout(500)
     sections = page.evaluate("""()=>Object.fromEntries([...document.querySelectorAll('#chartgrid .csection')]
         .map(s=>[s.querySelector('h3').textContent,[...s.querySelectorAll('.ccard')].map(c=>c.textContent.slice(0,40))]))""")
     flat = json.dumps(sections)
-    check("Heat mat power" in json.dumps(sections.get("Soil", [])) and "Device" in sections
-          and "Memory free" in flat,
-          f"Heat mat power charts with Soil, memory under Device ({list(sections)})")
+    check(
+        "Heat mat power" in json.dumps(sections.get("Soil", []))
+        and "Device" in sections
+        and "Memory free" in flat,
+        f"Heat mat power charts with Soil, memory under Device ({list(sections)})",
+    )
     sized = page.evaluate("""()=>[...document.querySelectorAll('svg.cmini')].every(s=>{
         const r=s.getBoundingClientRect(),vb=s.getAttribute('viewBox').split(' ').map(Number);
         return Math.abs(vb[2]-r.width)<=1&&Math.abs(vb[3]-r.height)<=1;})""")
@@ -322,16 +434,24 @@ def charts(page, base):
         const rows={};[...g.children].forEach(c=>{const r=c.getBoundingClientRect();
           (rows[Math.round(r.top)]=rows[Math.round(r.top)]||[]).push(Math.round(r.width));});
         return {w:g.clientWidth, rows:Object.values(rows)};})""")
-    even = all(max(r) - min(r) <= 2 and abs(sum(r) + 10 * (len(r) - 1) - g["w"]) <= 4
-               for g in rows for r in g["rows"])
+    even = all(
+        max(r) - min(r) <= 2 and abs(sum(r) + 10 * (len(r) - 1) - g["w"]) <= 4
+        for g in rows
+        for r in g["rows"]
+    )
     check(even, f"each chart row fills the width with equal charts ({[g['rows'] for g in rows]})")
     first = page.locator("svg.cmini").first
     bb = first.bounding_box()
     page.mouse.move(bb["x"] + bb["width"] * 0.6, bb["y"] + bb["height"] * 0.5)
     page.wait_for_timeout(300)
-    shown = page.evaluate("()=>[...document.querySelectorAll('svg.cmini .hvl')].filter(e=>e.style.display!=='none').length")
+    shown = page.evaluate(
+        "()=>[...document.querySelectorAll('svg.cmini .hvl')].filter(e=>e.style.display!=='none').length"
+    )
     total = page.evaluate("()=>document.querySelectorAll('svg.cmini').length")
-    check(shown == total and total > 2, f"hovering one chart shows the same moment on all ({shown} of {total})")
+    check(
+        shown == total and total > 2,
+        f"hovering one chart shows the same moment on all ({shown} of {total})",
+    )
 
 
 def phone(pw, base):
@@ -343,7 +463,10 @@ def phone(pw, base):
     page.goto(base + "/")
     page.wait_for_timeout(3000)
     w = page.evaluate("()=>document.documentElement.scrollWidth")
-    check(w <= 390 and not errs, f"on a phone the page is no wider than the screen ({w} px; errors {errs[:1]})")
+    check(
+        w <= 390 and not errs,
+        f"on a phone the page is no wider than the screen ({w} px; errors {errs[:1]})",
+    )
     b.close()
 
 
@@ -356,17 +479,23 @@ def screen(pw, base, app):
     page.goto(base + "/screen")
     page.wait_for_timeout(2500)
     h = page.evaluate("()=>document.documentElement.scrollHeight")
-    check(h <= 1024 and not errs, f"the touchscreen summary fits 600x1024 without scrolling ({h} px)")
+    check(
+        h <= 1024 and not errs, f"the touchscreen summary fits 600x1024 without scrolling ({h} px)"
+    )
     page.click('.seg[data-ctl="fan"] button[data-v="off"]')
     page.wait_for_timeout(1500)
-    check(saved(app).get("fan_mode") == "off" and "Off" in page.inner_text("#fan"),
-          "a tap on the summary's fan Off is saved and shown")
+    check(
+        saved(app).get("fan_mode") == "off" and "Off" in page.inner_text("#fan"),
+        "a tap on the summary's fan Off is saved and shown",
+    )
     page.click('.seg[data-ctl="fan"] button[data-v="auto"]')
     page.wait_for_timeout(800)
     page.click("a.btn")
     page.wait_for_timeout(2500)
-    check(page.locator(".kioskback").count() == 1,
-          "the summary's Full dashboard has a way back to the summary")
+    check(
+        page.locator(".kioskback").count() == 1,
+        "the summary's Full dashboard has a way back to the summary",
+    )
     b.close()
 
 
@@ -374,8 +503,10 @@ def main():
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
-        skip("every UI test (Playwright is not installed: pip install playwright; "
-             "playwright install chromium)")
+        skip(
+            "every UI test (Playwright is not installed: pip install playwright; "
+            "playwright install chromium)"
+        )
         print(f"\n{results['pass']} passed, {results['fail']} failed, {results['skip']} skipped")
         return 0
     work, app = make_app()
@@ -387,12 +518,14 @@ def main():
             page = b.new_context(viewport={"width": 1400, "height": 1000}).new_page()
             errs = []
             page.on("pageerror", lambda e: errs.append(str(e)))
-            for name, fn in (("Settings", lambda: settings_round_trip(page, base, app)),
-                             ("Unsaved edits", lambda: edit_survives_update(page, base, app)),
-                             ("Refused values", lambda: rejected_field(page, base, app)),
-                             ("Units", lambda: metric_temperature(page, base, app)),
-                             ("Setups", lambda: setups_by_main_save(page, base, app)),
-                             ("Charts", lambda: charts(page, base))):
+            for name, fn in (
+                ("Settings", lambda: settings_round_trip(page, base, app)),
+                ("Unsaved edits", lambda: edit_survives_update(page, base, app)),
+                ("Refused values", lambda: rejected_field(page, base, app)),
+                ("Units", lambda: metric_temperature(page, base, app)),
+                ("Setups", lambda: setups_by_main_save(page, base, app)),
+                ("Charts", lambda: charts(page, base)),
+            ):
                 print(name)
                 try:
                     fn()

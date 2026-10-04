@@ -51,8 +51,7 @@ def thumb(name):
 def frame(name):
     """One stored photo at full resolution, framed like its thumbnail: the
     timelapse player shows this once it stops on a frame."""
-    if (Path(name).name != name or not name.endswith(".jpg")
-            or name.startswith((".", "_"))):
+    if Path(name).name != name or not name.endswith(".jpg") or name.startswith((".", "_")):
         return ("no such photo", 404)
     path = camera_mod.TIMELAPSE_DIR / name
     if not path.is_file():
@@ -61,14 +60,17 @@ def frame(name):
         cfg = dict(config.settings)
     tag = camera_mod.frame_etag(path, cfg)
     if request.if_none_match.contains(tag):
-        resp = Response(status=304)     # unchanged: skip the warp entirely
+        resp = Response(status=304)  # unchanged: skip the warp entirely
     else:
         try:
             data, raw = camera_mod.frame_view(path, cfg)
         except Exception as e:
             return (f"frame failed: {e}", 500)
-        resp = (send_file(raw, mimetype="image/jpeg") if raw is not None
-                else Response(data, mimetype="image/jpeg"))
+        resp = (
+            send_file(raw, mimetype="image/jpeg")
+            if raw is not None
+            else Response(data, mimetype="image/jpeg")
+        )
     resp.set_etag(tag)
     # revalidate each time: moving the corners or the crop reframes it
     resp.headers["Cache-Control"] = "no-cache"
@@ -103,23 +105,34 @@ def update_grid():
         # stale tab or stray save can't move a locked grid; you must unlock
         # first (which leaves the geometry untouched).
         if cur_locked:
+
             def _same(a, b):
                 try:
-                    return all(abs(p[i] - q[i]) < 1e-9
-                               for p, q in zip(a, b) for i in (0, 1))
+                    return all(abs(p[i] - q[i]) < 1e-9 for p, q in zip(a, b) for i in (0, 1))
                 except Exception:
                     return False
-            geom_changed = (not _same(corners, cur.get("corners", [])) or
-                            rows != cur.get("rows") or cols != cur.get("cols"))
+
+            geom_changed = (
+                not _same(corners, cur.get("corners", []))
+                or rows != cur.get("rows")
+                or cols != cur.get("cols")
+            )
             if geom_changed:
                 return jsonify(error="grid is locked; unlock before editing"), 409
-        config.settings["grid"] = {"corners": corners, "rows": rows, "cols": cols,
-                            "names": names, "show": show, "locked": locked}
+        config.settings["grid"] = {
+            "corners": corners,
+            "rows": rows,
+            "cols": cols,
+            "names": names,
+            "show": show,
+            "locked": locked,
+        }
         config.save_config()
     # audit trail so a future revert can be traced to who/when/what
     try:
-        db.log_event("grid", f"saved corners[0]={corners[0]} "
-                             f"rows={rows} cols={cols} locked={locked}")
+        db.log_event(
+            "grid", f"saved corners[0]={corners[0]} rows={rows} cols={cols} locked={locked}"
+        )
     except Exception:
         pass
     log.info(f"grid saved: corners[0]={corners[0]} rows={rows} cols={cols} locked={locked}")
@@ -136,11 +149,15 @@ def detect_grid():
     if not helper.exists():
         return jsonify(ok=False, error="Detector not installed."), 200
     try:
-        r = subprocess.run(camera_mod.oom_first([sys.executable, str(helper), str(latest)]),
-                           capture_output=True, timeout=60)
+        r = subprocess.run(
+            camera_mod.oom_first([sys.executable, str(helper), str(latest)]),
+            capture_output=True,
+            timeout=60,
+        )
         out = r.stdout.decode(errors="replace").strip()
-        return jsonify(json.loads(out) if out else
-                       {"ok": False, "error": "Detector returned nothing."}), 200
+        return jsonify(
+            json.loads(out) if out else {"ok": False, "error": "Detector returned nothing."}
+        ), 200
     except Exception as e:
         return jsonify(ok=False, error=f"Detector error: {e}"), 200
 
@@ -159,8 +176,9 @@ def api_reset_timelapse():
     data = request.get_json(silent=True) or {}
     if not data.get("confirm"):
         count, _, _ = camera_mod.photo_inventory()
-        return jsonify(ok=False, needs_confirm=True, photos=count,
-                       error=f"{count} photos would be archived"), 200
+        return jsonify(
+            ok=False, needs_confirm=True, photos=count, error=f"{count} photos would be archived"
+        ), 200
     stamp = datetime.now(ZoneInfo(config.settings["timezone"])).strftime("%Y%m%d_%H%M%S")
     dest = camera_mod.ARCHIVE_DIR / stamp
     dest.mkdir(parents=True, exist_ok=True)
@@ -190,8 +208,7 @@ def api_reset_timelapse():
                 log.error(f"clear {prefix} failed: {e}")
     with camera_mod.render_lock:
         camera_mod.render.update(state="idle", frames=0, msg="", started=None, elapsed=None)
-    log.info(f"timelapse reset: {moved} photos archived to {dest}, "
-          f"{cleared} readings cleared")
+    log.info(f"timelapse reset: {moved} photos archived to {dest}, {cleared} readings cleared")
     return jsonify(ok=True, archived=moved, cleared=cleared, path=str(dest))
 
 
@@ -243,8 +260,9 @@ def api_capture():
     with config.state_lock:
         on_t, off_t = config.state["on"], config.state["off"]
     if on_t is not None and off_t is not None and on_t <= now <= off_t:
-        threading.Thread(target=camera_mod.record_growth, args=(path, cfg, now),
-                         daemon=True).start()
+        threading.Thread(
+            target=camera_mod.record_growth, args=(path, cfg, now), daemon=True
+        ).start()
     return jsonify(ok=True, photo=path.name)
 
 
@@ -275,24 +293,39 @@ def api_preview():
             # camera reads a different part of its sensor in each mode: the
             # old 1280x720 preview showed a wider 16:9 view than the 4:3
             # photos, so what you aligned was not what got captured.
-            ok, err = camera_mod._usb_capture(cfg_snapshot, tmp,
-                                   int(cfg_snapshot.get("usb_width", 2048)),
-                                   int(cfg_snapshot.get("usb_height", 1536)),
-                                   warmup=2)
+            ok, err = camera_mod._usb_capture(
+                cfg_snapshot,
+                tmp,
+                int(cfg_snapshot.get("usb_width", 2048)),
+                int(cfg_snapshot.get("usb_height", 1536)),
+                warmup=2,
+            )
             if not ok:
                 camera_mod._camera_fail(err)
                 return jsonify(ok=False, error=err), 200
             # rotation only: the corners are dragged on the unflattened scene
             camera_mod._rotate_file(tmp, int(cfg_snapshot.get("cam_rotate", 0)))
         else:
-            cmd = ["rpicam-still", "-n", "-o", str(tmp), "-t", "500",
-                   "--width", str(pw), "--height", str(ph)]
+            cmd = [
+                "rpicam-still",
+                "-n",
+                "-o",
+                str(tmp),
+                "-t",
+                "500",
+                "--width",
+                str(pw),
+                "--height",
+                str(ph),
+            ]
             r = subprocess.run(camera_mod.oom_first(cmd), capture_output=True, timeout=20)
             if r.returncode != 0:
-                camera_mod._camera_fail(camera_mod.killed_msg(r, "the preview")
-                                        or r.stderr.decode(errors="replace")[-150:] or "preview failed")
-                return jsonify(ok=False,
-                               error="camera error; check the log"), 200
+                camera_mod._camera_fail(
+                    camera_mod.killed_msg(r, "the preview")
+                    or r.stderr.decode(errors="replace")[-150:]
+                    or "preview failed"
+                )
+                return jsonify(ok=False, error="camera error; check the log"), 200
         tmp.replace(camera_mod.PREVIEW_PATH)  # atomic, so a half-written frame is never served
         camera_mod._camera_ok()
     except Exception as e:
@@ -302,8 +335,9 @@ def api_preview():
         camera_mod.capture_lock.release()
     # sharpness rides along so the align view doubles as a focus aid; the
     # number is only comparable between frames of the same scene and light
-    return jsonify(ok=True, ts=int(time.time()),
-                   sharpness=camera_mod.sharpness_score(camera_mod.PREVIEW_PATH))
+    return jsonify(
+        ok=True, ts=int(time.time()), sharpness=camera_mod.sharpness_score(camera_mod.PREVIEW_PATH)
+    )
 
 
 @routes.app.route("/api/camera_modes")
@@ -314,13 +348,17 @@ def api_camera_modes():
     with config.settings_lock:
         dev = config.settings.get("usb_device", "/dev/video0")
     try:
-        r = subprocess.run(["v4l2-ctl", "-d", dev, "--list-formats-ext"],
-                           capture_output=True, timeout=10)
+        r = subprocess.run(
+            ["v4l2-ctl", "-d", dev, "--list-formats-ext"], capture_output=True, timeout=10
+        )
         modes = camera_mod.parse_mjpeg_modes(r.stdout.decode(errors="replace"))
     except Exception as e:
         return jsonify(ok=False, error=str(e), modes=[])
-    return jsonify(ok=bool(modes), modes=[f"{w}x{h}" for w, h in modes],
-                   error=None if modes else "no MJPEG modes reported")
+    return jsonify(
+        ok=bool(modes),
+        modes=[f"{w}x{h}" for w, h in modes],
+        error=None if modes else "no MJPEG modes reported",
+    )
 
 
 @routes.app.route("/preview.jpg")
@@ -334,8 +372,12 @@ def preview_img():
 def video():
     if not camera_mod.VIDEO_PATH.exists():
         return "no video rendered yet", 404
-    return send_file(camera_mod.VIDEO_PATH, mimetype="video/mp4", as_attachment=True,
-                     download_name="grow_timelapse.mp4")
+    return send_file(
+        camera_mod.VIDEO_PATH,
+        mimetype="video/mp4",
+        as_attachment=True,
+        download_name="grow_timelapse.mp4",
+    )
 
 
 @routes.app.route("/api/focus_sweep", methods=["POST"])
@@ -358,8 +400,9 @@ def api_focus_sweep():
     with camera_mod.focus_lock:
         if camera_mod.focus_state["running"]:
             return jsonify(ok=False, error="a focus sweep is already running"), 200
-        camera_mod.focus_state.update(running=True, step=0, total=0, best=None,
-                           error="", cancel=False)
+        camera_mod.focus_state.update(
+            running=True, step=0, total=0, best=None, error="", cancel=False
+        )
     threading.Thread(target=camera_mod.run_focus_sweep, daemon=True).start()
     return jsonify(ok=True, started=True, estimate_seconds=90)
 
@@ -377,8 +420,12 @@ def frame_context():
     snap_keys = db.latest()
     # first DS18B20 key, whatever its serial suffix is
     soil_key = next((k for k in snap_keys if k.startswith("temp:soil")), None)
-    for key, label in ((soil_key, "soil_c"), ("temp:air", "air_c"),
-                       ("humidity", "humidity"), ("lux", "lux")):
+    for key, label in (
+        (soil_key, "soil_c"),
+        ("temp:air", "air_c"),
+        ("humidity", "humidity"),
+        ("lux", "lux"),
+    ):
         if not key:
             continue
         v = db.reading_near(key, ts, window=1800)
@@ -395,12 +442,15 @@ def cropped_image():
         return ("no photo yet", 404)
     roi = camera_mod.crop_box()
     if not roi:
-        return ("no crop set", 404)     # the page falls back to the full frame
+        return ("no crop set", 404)  # the page falls back to the full frame
     key = (str(latest), latest.stat().st_mtime, roi)
     with camera_mod._rect_lock:
         if camera_mod._crop_cache["key"] == key:
-            return Response(camera_mod._crop_cache["bytes"], mimetype="image/jpeg",
-                            headers={"Cache-Control": "no-store"})
+            return Response(
+                camera_mod._crop_cache["bytes"],
+                mimetype="image/jpeg",
+                headers={"Cache-Control": "no-store"},
+            )
     try:
         r = camera_mod.imgtool(["crop", latest, "-", json.dumps(list(roi)), "--q", 88])
         if r.returncode != 0 or not r.stdout:
@@ -408,8 +458,7 @@ def cropped_image():
         data = r.stdout
         with camera_mod._rect_lock:
             camera_mod._crop_cache.update(key=key, bytes=data)
-        return Response(data, mimetype="image/jpeg",
-                        headers={"Cache-Control": "no-store"})
+        return Response(data, mimetype="image/jpeg", headers={"Cache-Control": "no-store"})
     except Exception as e:
         return (f"crop failed: {e}", 500)
 
@@ -431,22 +480,37 @@ def rectified_image():
     if not corners or len(corners) != 4:
         # nothing to rectify against; the page falls back to the raw frame
         return ("no grid corners set", 404)
-    key = (str(latest), latest.stat().st_mtime,
-           json.dumps([corners, grid.get("rows"), grid.get("cols")]))
+    key = (
+        str(latest),
+        latest.stat().st_mtime,
+        json.dumps([corners, grid.get("rows"), grid.get("cols")]),
+    )
     with camera_mod._rect_lock:
         if camera_mod._rect_cache["key"] == key:
-            return Response(camera_mod._rect_cache["bytes"], mimetype="image/jpeg",
-                            headers={"Cache-Control": "no-store"})
+            return Response(
+                camera_mod._rect_cache["bytes"],
+                mimetype="image/jpeg",
+                headers={"Cache-Control": "no-store"},
+            )
     try:
         # photos are stored already rotated
-        r = camera_mod.imgtool(["rectify", latest, "-", json.dumps(corners),
-                                int(grid.get("cols", 4)), int(grid.get("rows", 4)), "--q", 85])
+        r = camera_mod.imgtool(
+            [
+                "rectify",
+                latest,
+                "-",
+                json.dumps(corners),
+                int(grid.get("cols", 4)),
+                int(grid.get("rows", 4)),
+                "--q",
+                85,
+            ]
+        )
         if r.returncode != 0 or not r.stdout:
             return (f"rectify failed: {camera_mod._imgtool_err(r)}", 500)
         data = r.stdout
         with camera_mod._rect_lock:
             camera_mod._rect_cache.update(key=key, bytes=data)
-        return Response(data, mimetype="image/jpeg",
-                        headers={"Cache-Control": "no-store"})
+        return Response(data, mimetype="image/jpeg", headers={"Cache-Control": "no-store"})
     except Exception as e:
         return (f"rectify failed: {e}", 500)

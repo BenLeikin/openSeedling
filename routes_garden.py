@@ -57,20 +57,38 @@ def probe_cal_set():
     # force means store it: the checks become advice, not a veto. They still
     # come back in the response so the reason is on record.
     if problems and not force:
-        return jsonify(ok=False, tray=tray, point=point, volts=live,
-                       spread=spread, drift=drift, problems=problems,
-                       notes=notes, can_force=True,
-                       error="not stored: " + problems[0])
+        return jsonify(
+            ok=False,
+            tray=tray,
+            point=point,
+            volts=live,
+            spread=spread,
+            drift=drift,
+            problems=problems,
+            notes=notes,
+            can_force=True,
+            error="not stored: " + problems[0],
+        )
 
     with config.settings_lock:
         cal = config.settings.setdefault("probe_cal", {})
         cal.setdefault(tray, {})[point] = live
         config.save_config()
-    db.log_event("probe", f"tray {tray} {point} anchor set to {live:.4f}V"
-                          + (" (forced)" if problems else ""))
-    return jsonify(ok=True, tray=tray, point=point, volts=live, spread=spread,
-                   drift=drift, problems=problems, notes=notes,
-                   forced=bool(problems))
+    db.log_event(
+        "probe",
+        f"tray {tray} {point} anchor set to {live:.4f}V" + (" (forced)" if problems else ""),
+    )
+    return jsonify(
+        ok=True,
+        tray=tray,
+        point=point,
+        volts=live,
+        spread=spread,
+        drift=drift,
+        problems=problems,
+        notes=notes,
+        forced=bool(problems),
+    )
 
 
 @routes.app.route("/api/float")
@@ -86,9 +104,11 @@ def probe_tempcomp():
     data = request.get_json(silent=True) or {}
     tray = str(data.get("tray", ""))
     if tray not in sensors.PROBE_CHANNELS:
-        return jsonify(ok=False,
-                       error=f"no probe wired for tray {tray} "
-                             f"(probes: {', '.join(sorted(sensors.PROBE_CHANNELS))})"), 200
+        return jsonify(
+            ok=False,
+            error=f"no probe wired for tray {tray} "
+            f"(probes: {', '.join(sorted(sensors.PROBE_CHANNELS))})",
+        ), 200
     try:
         hours = max(6, min(720, int(data.get("hours", 48))))
     except (TypeError, ValueError):
@@ -97,8 +117,9 @@ def probe_tempcomp():
     if not res.get("ok"):
         return jsonify(res), 200
     if res["span"] < 5:
-        res["warning"] = (f"soil temp only varied {res['span']}F; "
-                          "the estimate is weak until it swings more")
+        res["warning"] = (
+            f"soil temp only varied {res['span']}F; the estimate is weak until it swings more"
+        )
     if data.get("apply"):
         with config.settings_lock:
             cal = config.settings.setdefault("probe_cal", {}).setdefault(tray, {})
@@ -133,8 +154,7 @@ def api_planting_end():
             return jsonify(ok=False, error="no such cell"), 404
         rec = dict(v)
     today = datetime.now(ZoneInfo(config.settings.get("timezone", "UTC"))).date().isoformat()
-    pid = db.add_planting({"tray": tray, "cell": cell, "ended": today,
-                           "outcome": outcome, **rec})
+    pid = db.add_planting({"tray": tray, "cell": cell, "ended": today, "outcome": outcome, **rec})
     with config.settings_lock:
         cells = config.settings["trays"][tray].setdefault("cells", {})
         cells.pop(cell, None)
@@ -177,10 +197,11 @@ def api_planting_restore():
             return jsonify(ok=False, error=f"tray {tray} no longer exists"), 409
         cells = t.setdefault("cells", {})
         if cells.get(cell):
-            return jsonify(ok=False,
-                           error=f"{cell} has been replanted; clear it first"), 409
-        cells[cell] = {k: row.get(k) or "" for k in
-                       ("seed", "equipment", "planted", "sprouted", "source", "notes")}
+            return jsonify(ok=False, error=f"{cell} has been replanted; clear it first"), 409
+        cells[cell] = {
+            k: row.get(k) or ""
+            for k in ("seed", "equipment", "planted", "sprouted", "source", "notes")
+        }
         cells[cell]["count"] = row.get("count") or 0
         cells[cell]["archived"] = ""
         config.save_config()
@@ -227,20 +248,27 @@ def api_trays():
             count = 0
         # which fields this cell shows; display-only, so an empty equipment
         # row can be hidden on the cells that will never have one
-        _fields = ("seed", "equipment", "planted", "sprouted",
-                   "source", "count", "notes")
-        hide = [f for f in (v.get("hide") or [])
-                if f in _fields or (f.startswith("!") and f[1:] in _fields)][:14]
-        if (seed or equip or planted or sprouted or archived or hide
-                or source or notes or count):
-            clean[cid] = {"seed": seed, "equipment": equip, "planted": planted,
-                          "sprouted": sprouted, "archived": archived,
-                          "source": source, "count": count, "notes": notes,
-                          "hide": hide}
+        _fields = ("seed", "equipment", "planted", "sprouted", "source", "count", "notes")
+        hide = [
+            f
+            for f in (v.get("hide") or [])
+            if f in _fields or (f.startswith("!") and f[1:] in _fields)
+        ][:14]
+        if seed or equip or planted or sprouted or archived or hide or source or notes or count:
+            clean[cid] = {
+                "seed": seed,
+                "equipment": equip,
+                "planted": planted,
+                "sprouted": sprouted,
+                "archived": archived,
+                "source": source,
+                "count": count,
+                "notes": notes,
+                "hide": hide,
+            }
     with config.settings_lock:
         trays = config.settings.setdefault("trays", {})
-        t = trays.setdefault(tray, {"label": f"Tray {tray}", "rows": 4,
-                                    "cols": 3, "cells": {}})
+        t = trays.setdefault(tray, {"label": f"Tray {tray}", "rows": 4, "cols": 3, "cells": {}})
         t["cells"] = clean
         if label is not None:
             t["label"] = str(label).strip()[:40] or f"Tray {tray}"
@@ -290,8 +318,12 @@ def api_tray_layout():
                 return jsonify(ok=False, error="keep at least one tray"), 200
             filled = len(trays[tray].get("cells") or {})
             if filled and not data.get("confirm"):
-                return jsonify(ok=False, needs_confirm=True, filled=filled,
-                               error=f"tray {tray} has {filled} filled cells"), 200
+                return jsonify(
+                    ok=False,
+                    needs_confirm=True,
+                    filled=filled,
+                    error=f"tray {tray} has {filled} filled cells",
+                ), 200
             trays.pop(tray)
             config.save_config()
             return jsonify(ok=True, removed=tray)
@@ -312,9 +344,12 @@ def api_tray_layout():
         cells = t.get("cells") or {}
         dropped = sorted(c for c in cells if c not in keep)
         if dropped and not data.get("confirm"):
-            return jsonify(ok=False, needs_confirm=True, dropped=dropped,
-                           error=f"{len(dropped)} filled cells fall outside "
-                                 f"a {cols}x{rows} grid"), 200
+            return jsonify(
+                ok=False,
+                needs_confirm=True,
+                dropped=dropped,
+                error=f"{len(dropped)} filled cells fall outside a {cols}x{rows} grid",
+            ), 200
         t["rows"], t["cols"] = rows, cols
         t["cells"] = {k: v for k, v in cells.items() if k in keep}
         if "label" in data:
@@ -329,9 +364,10 @@ def pump_test():
     data = request.get_json(silent=True) or {}
     tray = str(data.get("tray", "1"))
     if tray not in hardware.PUMP_PINS:
-        return jsonify(ok=False,
-                       error=f"no pump wired for tray {tray} "
-                             f"(pumps: {', '.join(sorted(hardware.PUMP_PINS))})"), 200
+        return jsonify(
+            ok=False,
+            error=f"no pump wired for tray {tray} (pumps: {', '.join(sorted(hardware.PUMP_PINS))})",
+        ), 200
     if tray not in hardware._pumps:
         return jsonify(ok=False, error=f"pump {tray} hardware not available"), 200
     try:
@@ -340,11 +376,13 @@ def pump_test():
         secs = 3.0
     force = bool(data.get("force", False))
     if data.get("until_full"):
-        threading.Thread(target=lambda: water.run_pump_until_full(tray, "fill", force),
-                         daemon=True).start()
+        threading.Thread(
+            target=lambda: water.run_pump_until_full(tray, "fill", force), daemon=True
+        ).start()
         return jsonify(ok=True, started=True, mode="fill", tray=tray)
-    threading.Thread(target=lambda: water.run_pump(tray, secs, "manual", force),
-                     daemon=True).start()
+    threading.Thread(
+        target=lambda: water.run_pump(tray, secs, "manual", force), daemon=True
+    ).start()
     return jsonify(ok=True, started=True, mode="timed", tray=tray)
 
 
@@ -361,8 +399,11 @@ def api_auto_water():
     want = bool(data.get("enabled"))
     # which trays: the ones asked for (a setup's trays), else every pump tray
     asked = data.get("trays")
-    trays_ = sorted({str(t) for t in asked} & set(hardware.PUMP_PINS)) if isinstance(asked, list) \
+    trays_ = (
+        sorted({str(t) for t in asked} & set(hardware.PUMP_PINS))
+        if isinstance(asked, list)
         else sorted(hardware.PUMP_PINS)
+    )
     if not trays_:
         return jsonify(ok=False, error="none of these trays has a pump"), 200
     with config.settings_lock:
@@ -376,9 +417,13 @@ def api_auto_water():
         return jsonify(ok=True, enabled=False, armed=left)
     blockers = {t: w for t, w in water.auto_water_blockers().items() if t in trays_}
     if blockers:
-        return jsonify(ok=False, enabled=False, blockers=blockers,
-                       error="Auto-watering needs a calibrated probe and a "
-                             "float switch on every tray it waters."), 200
+        return jsonify(
+            ok=False,
+            enabled=False,
+            blockers=blockers,
+            error="Auto-watering needs a calibrated probe and a "
+            "float switch on every tray it waters.",
+        ), 200
     armed = sorted(cur | set(trays_))
     with config.settings_lock:
         config.settings["auto_water_trays"], config.settings["auto_water"] = armed, True

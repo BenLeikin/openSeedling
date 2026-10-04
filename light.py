@@ -18,13 +18,18 @@ import sensors
 import config
 import hardware
 
-LOOP_SECONDS  = 30
+LOOP_SECONDS = 30
 
 # light response sweep: brightness % -> measured lux, so the dashboard can show
 # what the driver actually delivers (PWM dimming is rarely linear)
-sweep_state = {"running": False, "pct": 0, "error": "", "started": 0.0,
-               "cancel": False}   # cancel is a request; running means the
-                                  # worker thread is still holding the light
+sweep_state = {
+    "running": False,
+    "pct": 0,
+    "error": "",
+    "started": 0.0,
+    "cancel": False,
+}  # cancel is a request; running means the
+# worker thread is still holding the light
 sweep_lock = threading.Lock()
 
 
@@ -46,16 +51,22 @@ def kasa_conf(cfg=None):
     if cfg is None:
         with config.settings_lock:
             cfg = dict(config.settings)
-    return (KASA_HOST_ENV or str(cfg.get("kasa_host") or "").strip(),
-            KASA_USER_ENV or str(cfg.get("kasa_user") or "").strip(),
-            KASA_PASS_ENV or str(cfg.get("kasa_pass") or ""))
-KASA_ON_AT = 1.0        # brightness above this percent means "on"
+    return (
+        KASA_HOST_ENV or str(cfg.get("kasa_host") or "").strip(),
+        KASA_USER_ENV or str(cfg.get("kasa_user") or "").strip(),
+        KASA_PASS_ENV or str(cfg.get("kasa_pass") or ""),
+    )
 
-kasa_state = {"on": None,        # last state we believe the plug is in
-              "ok": None,        # last command succeeded?
-              "error": "",       # human-readable last failure
-              "fails": 0,        # consecutive failures
-              "last_ok": 0.0}
+
+KASA_ON_AT = 1.0  # brightness above this percent means "on"
+
+kasa_state = {
+    "on": None,  # last state we believe the plug is in
+    "ok": None,  # last command succeeded?
+    "error": "",  # human-readable last failure
+    "fails": 0,  # consecutive failures
+    "last_ok": 0.0,
+}
 _kasa_lock = threading.Lock()
 _kasa_loop = None
 _kasa_dev = None
@@ -72,8 +83,7 @@ def _kasa_run(coro, timeout=12):
     global _kasa_loop
     if _kasa_loop is None:
         _kasa_loop = asyncio.new_event_loop()
-        threading.Thread(target=_kasa_loop.run_forever, daemon=True,
-                         name="kasa").start()
+        threading.Thread(target=_kasa_loop.run_forever, daemon=True, name="kasa").start()
     fut = asyncio.run_coroutine_threadsafe(coro, _kasa_loop)
     return fut.result(timeout=timeout)
 
@@ -82,6 +92,7 @@ async def _kasa_connect(host, user, password):
     """Connect to one plug. Credentials only when the device needs them:
     legacy models (HS103 and friends) reject the authenticated path."""
     from kasa import Device, DeviceConfig, Credentials
+
     if user or password:
         cfg = DeviceConfig(host=host, credentials=Credentials(user, password))
         return await Device.connect(config=cfg)
@@ -114,20 +125,18 @@ def kasa_apply(on, retries=1):
     global _kasa_dev
     if not kasa_conf()[0]:
         with _kasa_lock:
-            kasa_state.update(ok=False,
-                              error="no smart plug configured (Settings > Smart plug)")
+            kasa_state.update(ok=False, error="no smart plug configured (Settings > Smart plug)")
         return False
     last = ""
     for attempt in range(retries + 1):
         try:
             actual = _kasa_run(_kasa_set(on))
             with _kasa_lock:
-                kasa_state.update(on=actual, ok=True, error="", fails=0,
-                                  last_ok=time.time())
+                kasa_state.update(on=actual, ok=True, error="", fails=0, last_ok=time.time())
             return True
         except Exception as e:
             last = f"{type(e).__name__}: {e}"[:200]
-            _kasa_dev = None          # force a reconnect on the next attempt
+            _kasa_dev = None  # force a reconnect on the next attempt
             if attempt < retries:
                 time.sleep(1.5)
     with _kasa_lock:
@@ -263,7 +272,8 @@ def _dither_loop():
             if lit > 0:
                 set_brightness_raw(raw)
                 if _dither_wake.wait(lit):
-                    _dither_wake.clear(); continue   # target changed; restart
+                    _dither_wake.clear()
+                    continue  # target changed; restart
             set_brightness_raw(0)
             if _dither_wake.wait(DITHER_PERIOD_S - lit):
                 _dither_wake.clear()
@@ -284,7 +294,7 @@ def set_brightness_raw(percent):
     """
     percent = max(0.0, min(100.0, percent))
     if hardware.SHUTTING_DOWN.is_set() and percent > 0:
-        return                        # shutting down: dark writes only
+        return  # shutting down: dark writes only
     with config.settings_lock:
         cfg = dict(config.settings)
     mode = light_backend(cfg)
@@ -297,7 +307,7 @@ def set_brightness_raw(percent):
     # while it runs rather than adding its light to the calibration.
     l2 = light2_fixture(cfg)
     if sweep_state["running"] and sweep_state.get("target") == "second":
-        l2_level = float(sweep_state.get("l2_raw") or 0.0)   # raw: under test
+        l2_level = float(sweep_state.get("l2_raw") or 0.0)  # raw: under test
     elif l2 is None or sweep_state["running"]:
         l2_level = 0.0
     else:
@@ -311,7 +321,7 @@ def set_brightness_raw(percent):
         hardware.pwm.change_duty_cycle(100.0 - percent)
     else:
         panel = percent if mode == "pwm" else (l2_level if l2 == "pwm" else 0.0)
-        hardware.pwm.change_duty_cycle(panel)                              # MOSFET panel
+        hardware.pwm.change_duty_cycle(panel)  # MOSFET panel
         if hardware.pwm2 is not None:
             dim = percent if mode == "dim" else (l2_level if l2 == "dim" else 0.0)
             # the dim line: 0% duty is full brightness, so dark is 100
@@ -332,7 +342,7 @@ light2_state = {"level": 0.0, "why": "off"}
 
 
 def light2_fixture(cfg=None):
-    """"pwm" or "dim" for the second light, or None when it cannot run.
+    """ "pwm" or "dim" for the second light, or None when it cannot run.
 
     It takes the fixture the main light is NOT on, and needs both hardware
     PWM channels: with one channel the pin is already the main light's.
@@ -448,10 +458,14 @@ def light2_cfg(cfg):
     """cfg seen as the second light: its own curve and calibration table in
     the places the main light's calibration code reads, so the same mapping
     code serves both fixtures."""
-    return dict(cfg, light_curve=cfg.get("light2_curve"),
-                light_linear=cfg.get("light2_linear"),
-                light_linear_on=cfg.get("light2_linear_on", False),
-                light_floor_pct=0, dim_below_min="hold")
+    return dict(
+        cfg,
+        light_curve=cfg.get("light2_curve"),
+        light_linear=cfg.get("light2_linear"),
+        light_linear_on=cfg.get("light2_linear_on", False),
+        light_floor_pct=0,
+        dim_below_min="hold",
+    )
 
 
 def lux_key_for_light(light, cfg=None):
@@ -493,8 +507,10 @@ def build_linear_table(points):
     lo = pts[0][1]
     hi = max(l for _, l in pts)
     if hi - lo < 50:
-        raise ValueError("the light barely changed across the sweep; is the "
-                         "sensor under the fixture and the right backend set?")
+        raise ValueError(
+            "the light barely changed across the sweep; is the "
+            "sensor under the fixture and the right backend set?"
+        )
     # normalise and force monotonic
     norm, run = [], 0.0
     for p, l in pts:
@@ -516,7 +532,7 @@ def build_linear_table(points):
         if target <= 0:
             return 0.0
         if target <= min_f:
-            return min_raw          # the lowest level that is actually lit
+            return min_raw  # the lowest level that is actually lit
         for k in range(max(1, first_lit or 1), len(norm)):
             p1, f1 = norm[k]
             if f1 >= target:
@@ -540,13 +556,17 @@ def build_linear_table(points):
     # where light first appears, and where it stops increasing
     cutoff = next((p for p, f in norm if f > 0.01), pts[-1][0])
     sat = next((p for p, f in norm if f >= 0.99), pts[-1][0])
-    info = {"mapping": LINEAR_MAPPING,
-            "cutoff_raw": round(cutoff, 1), "saturation_raw": round(sat, 1),
-            "peak_lux": round(hi, 0), "dark_lux": round(lo, 1),
-            # the dimmest the fixture goes before cutting out, as a share of
-            # full: below this the dashboard cannot ask for less light
-            "min_output_pct": round(min_f * 100, 1),
-            "points": len(pts)}
+    info = {
+        "mapping": LINEAR_MAPPING,
+        "cutoff_raw": round(cutoff, 1),
+        "saturation_raw": round(sat, 1),
+        "peak_lux": round(hi, 0),
+        "dark_lux": round(lo, 1),
+        # the dimmest the fixture goes before cutting out, as a share of
+        # full: below this the dashboard cannot ask for less light
+        "min_output_pct": round(min_f * 100, 1),
+        "points": len(pts),
+    }
     return table, info
 
 
@@ -556,7 +576,7 @@ def set_plug(percent):
     with _kasa_lock:
         believed = kasa_state["on"]
     if believed is want and kasa_state["ok"]:
-        return                          # already there; don't poll the plug
+        return  # already there; don't poll the plug
     kasa_apply(want)
 
 
@@ -569,7 +589,7 @@ def _stop_pwm(channel, mode):
     """
     try:
         if mode == "dim":
-            channel.change_duty_cycle(100.0)    # keep it pulled down
+            channel.change_duty_cycle(100.0)  # keep it pulled down
         else:
             channel.stop()
     except Exception as e:
@@ -629,8 +649,7 @@ def _clock(day, tz, hhmm, fallback="06:00"):
         h, m = int(h), int(m)
     except (ValueError, AttributeError):
         h, m = int(fallback[:2]), int(fallback[3:])
-    return datetime(day.year, day.month, day.day,
-                    max(0, min(23, h)), max(0, min(59, m)), tzinfo=tz)
+    return datetime(day.year, day.month, day.day, max(0, min(23, h)), max(0, min(59, m)), tzinfo=tz)
 
 
 def sun_window(cfg, day, tz):
@@ -653,15 +672,14 @@ def sun_window(cfg, day, tz):
         # no sunrise to report. Fixed and duration schedules do not need one;
         # stand in noon +/- 6 h so they still run and the chart still draws.
         noon = datetime(day.year, day.month, day.day, 12, tzinfo=tz)
-        s = {"sunrise": noon - timedelta(hours=6),
-             "sunset": noon + timedelta(hours=6)}
+        s = {"sunrise": noon - timedelta(hours=6), "sunset": noon + timedelta(hours=6)}
     mode = cfg.get("schedule_mode", "solar")
 
     if mode == "fixed":
         on_time = _clock(day, tz, cfg.get("fixed_on"), "06:00")
         off_time = _clock(day, tz, cfg.get("fixed_off"), "20:00")
         if off_time <= on_time:
-            off_time += timedelta(days=1)      # window crosses midnight
+            off_time += timedelta(days=1)  # window crosses midnight
     elif mode == "duration":
         try:
             hours = float(cfg.get("duration_hours", 14))
@@ -691,8 +709,7 @@ def ramp_floor(cfg=None):
             cfg = dict(config.settings)
     if linear_table(cfg) and cfg.get("dim_below_min", "hold") != "cycle":
         try:
-            return max(0.0, float((cfg.get("light_linear") or {})
-                                  .get("min_output_pct") or 0))
+            return max(0.0, float((cfg.get("light_linear") or {}).get("min_output_pct") or 0))
         except (TypeError, ValueError):
             return 0.0
     try:
@@ -705,7 +722,7 @@ def brightness_for(cfg, now, on_time, off_time):
     if now <= on_time or now >= off_time:
         return 0.0
     mx = float(cfg["max_bright"])
-    lo = min(ramp_floor(cfg), mx)          # never above the ceiling itself
+    lo = min(ramp_floor(cfg), mx)  # never above the ceiling itself
     ramp = timedelta(minutes=cfg["ramp_min"])
     full_start, full_end = on_time + ramp, off_time - ramp
 
@@ -727,9 +744,18 @@ def brightness_for(cfg, now, on_time, off_time):
 
 # the only settings that move the light window; anything else (a planting-map
 # edit, a saved light curve) must not trigger a recompute or a log line
-SCHED_KEYS = ("latitude", "longitude", "timezone", "schedule_mode",
-              "fixed_on", "fixed_off", "duration_hours", "duration_end",
-              "sunrise_offset_min", "sunset_offset_min")
+SCHED_KEYS = (
+    "latitude",
+    "longitude",
+    "timezone",
+    "schedule_mode",
+    "fixed_on",
+    "fixed_off",
+    "duration_hours",
+    "duration_end",
+    "sunrise_offset_min",
+    "sunset_offset_min",
+)
 
 
 # ---- lightning (an easter egg) -------------------------------------------
@@ -765,7 +791,7 @@ def _flash(level_pct):
     when one is configured and the main pin otherwise.
     """
     if hardware.SHUTTING_DOWN.is_set() and level_pct > 0:
-        return                        # shutting down: dark writes only
+        return  # shutting down: dark writes only
     ch = hardware.pwm2 if hardware.pwm2 is not None else hardware.pwm
     ch.change_duty_cycle(100.0 - max(0.0, min(100.0, level_pct)))
 
@@ -778,38 +804,47 @@ def _storm(seconds, style):
     to a halt.
     """
     import random
+
     end = time.time() + seconds
     with config.state_lock:
         restore = float(config.state.get("brightness") or 0)
-    _dither_stop()           # the storm owns the light for now
+    _dither_stop()  # the storm owns the light for now
     try:
         while time.time() < end and not _lightning_stop.is_set():
             kind = style
             if style == "storm":
                 r = random.random()
-                kind = "sheet" if r < .5 else "strike" if r < .9 else "flicker"
-            if kind == "sheet":              # cloud to cloud: no sharp edges
+                kind = "sheet" if r < 0.5 else "strike" if r < 0.9 else "flicker"
+            if kind == "sheet":  # cloud to cloud: no sharp edges
                 top = random.uniform(45, 80)
                 for i in range(14):
-                    _flash(top * (i + 1) / 14); time.sleep(0.012)
-                time.sleep(random.uniform(.05, .12))
+                    _flash(top * (i + 1) / 14)
+                    time.sleep(0.012)
+                time.sleep(random.uniform(0.05, 0.12))
                 for i in range(28):
-                    _flash(top * (1 - (i + 1) / 28)); time.sleep(0.018)
-            elif kind == "flicker":          # storm overhead
+                    _flash(top * (1 - (i + 1) / 28))
+                    time.sleep(0.018)
+            elif kind == "flicker":  # storm overhead
                 for _ in range(random.randint(6, 16)):
                     _flash(random.uniform(40, 100))
-                    time.sleep(random.uniform(.05, .11))
-                    _flash(0); time.sleep(random.uniform(.03, .12))
-            else:                            # a stroke: leader, return, restrikes
-                if random.random() < .6:
-                    _flash(random.uniform(10, 25)); time.sleep(.06)
-                    _flash(0); time.sleep(random.uniform(.02, .06))
-                _flash(100); time.sleep(random.uniform(.06, .13))
+                    time.sleep(random.uniform(0.05, 0.11))
+                    _flash(0)
+                    time.sleep(random.uniform(0.03, 0.12))
+            else:  # a stroke: leader, return, restrikes
+                if random.random() < 0.6:
+                    _flash(random.uniform(10, 25))
+                    time.sleep(0.06)
+                    _flash(0)
+                    time.sleep(random.uniform(0.02, 0.06))
+                _flash(100)
+                time.sleep(random.uniform(0.06, 0.13))
                 for _ in range(random.randint(1, 4)):
-                    _flash(0); time.sleep(random.uniform(.03, .09))
+                    _flash(0)
+                    time.sleep(random.uniform(0.03, 0.09))
                     _flash(random.uniform(55, 95))
-                    time.sleep(random.uniform(.05, .10))
-                _flash(15); time.sleep(random.uniform(.05, .15))
+                    time.sleep(random.uniform(0.05, 0.10))
+                _flash(15)
+                time.sleep(random.uniform(0.05, 0.15))
             _flash(0)
             # never sleep past the end: a long gap would otherwise hold the
             # light for seconds after the storm was meant to stop
@@ -823,10 +858,10 @@ def _storm(seconds, style):
             lightning_state.update(running=False, until=0.0, style="")
         try:
             set_brightness(restore)  # back where the schedule had it, dithering
-                                     # included if that is what it needs
+            # included if that is what it needs
         except Exception:
             pass
-        config.wake.set()                  # and let the loop take over again
+        config.wake.set()  # and let the loop take over again
         db.log_event("light", "lightning finished")
 
 
@@ -843,25 +878,30 @@ def control_loop():
             key = (now.date(), tuple(cfg.get(k) for k in SCHED_KEYS))
             if key != seen:
                 sunrise, sunset, on_time, off_time = sun_window(cfg, now.date(), tz)
-                seen = key          # only once it worked, so a failure retries
-                log.info(f"{now.date()}: on {on_time:%H:%M}, off {off_time:%H:%M} "
-                      f"({cfg['latitude']}, {cfg['longitude']}, {cfg['timezone']})")
+                seen = key  # only once it worked, so a failure retries
+                log.info(
+                    f"{now.date()}: on {on_time:%H:%M}, off {off_time:%H:%M} "
+                    f"({cfg['latitude']}, {cfg['longitude']}, {cfg['timezone']})"
+                )
             # the second light first, so the write below carries its new level
             if light2_fixture(cfg):
                 lv, why = light2_level(cfg, now)
                 light2_state.update(level=round(lv, 2), why=why)
             else:
-                light2_state.update(level=0.0,
-                                    why="off" if not cfg.get("light2_on")
-                                    else "needs both PWM channels")
+                light2_state.update(
+                    level=0.0, why="off" if not cfg.get("light2_on") else "needs both PWM channels"
+                )
             b = brightness_for(cfg, now, on_time, off_time)
             ov = cfg.get("light_override", "auto")
             if ov == "on":
                 b = max(0, min(100, int(cfg.get("manual_bright", cfg["max_bright"]))))
             elif ov == "off":
                 b = 0
-            if (not camera_mod.capturing and not sweep_state["running"]
-                    and not lightning_state["running"]):
+            if (
+                not camera_mod.capturing
+                and not sweep_state["running"]
+                and not lightning_state["running"]
+            ):
                 # a capture, a sweep or a storm each own the light while running;
                 # writing the scheduled level here would fight them
                 set_brightness(b)
@@ -872,19 +912,28 @@ def control_loop():
             elif mode == "off":
                 hardware.set_fan(0, "manual")
             else:
-                fon, foff = setups_mod.setup_window(cfg, setups_mod.setup_with(cfg, "fan") or {"light": "main"},
-                                         on_time, off_time)
+                fon, foff = setups_mod.setup_window(
+                    cfg, setups_mod.setup_with(cfg, "fan") or {"light": "main"}, on_time, off_time
+                )
                 want, why = hardware.fan_should_run(cfg, now, fon, foff)
                 hardware.set_fan(cfg.get("fan_auto_speed", 70) if want else 0, why)
             with config.state_lock:
                 l2_now = light2_state["level"]
-                changed = (round(config.state.get("light2_level", -1), 1) != round(l2_now, 1)
-                           or round(config.state.get("brightness") or -1, 1) != round(b, 1)
-                           or config.state.get("override") != ov
-                           or config.state.get("on") != on_time)
-                config.state.update(brightness=b, on=on_time, off=off_time,
-                             sunrise=sunrise, sunset=sunset, override=ov,
-                             light2_level=l2_now)
+                changed = (
+                    round(config.state.get("light2_level", -1), 1) != round(l2_now, 1)
+                    or round(config.state.get("brightness") or -1, 1) != round(b, 1)
+                    or config.state.get("override") != ov
+                    or config.state.get("on") != on_time
+                )
+                config.state.update(
+                    brightness=b,
+                    on=on_time,
+                    off=off_time,
+                    sunrise=sunrise,
+                    sunset=sunset,
+                    override=ov,
+                    light2_level=l2_now,
+                )
             # only when something moved: this loop runs every 30 seconds and during
             # a ramp every pass changes brightness, but a steady day should not
             # push an identical status to every open browser twice a minute
@@ -914,7 +963,8 @@ def _curve_lux(pts, raw_pct):
         return pts[-1][1]
     for i in range(1, len(pts)):
         if pts[i][0] >= raw_pct:
-            x0, y0 = pts[i - 1]; x1, y1 = pts[i]
+            x0, y0 = pts[i - 1]
+            x1, y1 = pts[i]
             return y1 if x1 == x0 else y0 + (y1 - y0) * (raw_pct - x0) / (x1 - x0)
     return pts[-1][1]
 
@@ -926,7 +976,7 @@ def run_light_sweep(step=5, settle=2.0, linearize=False, target="main"):
     is restored at the end whatever happens."""
     points = []
     before = 0
-    _dither_stop()           # nothing else may move the light mid-measurement
+    _dither_stop()  # nothing else may move the light mid-measurement
     try:
         with config.state_lock:
             before = config.state.get("brightness") or 0
@@ -942,9 +992,9 @@ def run_light_sweep(step=5, settle=2.0, linearize=False, target="main"):
                 sweep_state["l2_raw"] = pct
                 set_brightness_raw(0)
             else:
-                set_brightness_raw(pct)           # raw: measure the real fixture
-            time.sleep(settle)                    # let the sensor integrate
-            if sweep_state["cancel"]:             # cancelled while settling
+                set_brightness_raw(pct)  # raw: measure the real fixture
+            time.sleep(settle)  # let the sensor integrate
+            if sweep_state["cancel"]:  # cancelled while settling
                 break
             lux = (sensors.read_all() or {}).get(key)
             if lux is None:
@@ -956,10 +1006,11 @@ def run_light_sweep(step=5, settle=2.0, linearize=False, target="main"):
         sweep_state["error"] = str(e)
     finally:
         try:
-            set_brightness(before)                # always hand the light back
+            set_brightness(before)  # always hand the light back
         except Exception as e:
-            log.error(f"light not restored after the sweep ({e}); it is left "
-                      f"at the sweep's last level")
+            log.error(
+                f"light not restored after the sweep ({e}); it is left at the sweep's last level"
+            )
         complete = points and points[-1][0] == 100 and not sweep_state["error"]
         if complete:
             lin = None
@@ -972,26 +1023,32 @@ def run_light_sweep(step=5, settle=2.0, linearize=False, target="main"):
             pre = "light2" if target == "second" else "light"
             with config.settings_lock:
                 config.settings[f"{pre}_curve"] = {
-                    "ts": int(time.time()), "step": step,
-                    "settle": settle, "points": points, "sensor": key,
+                    "ts": int(time.time()),
+                    "step": step,
+                    "settle": settle,
+                    "points": points,
+                    "sensor": key,
                 }
                 if lin:
                     config.settings[f"{pre}_linear"] = lin
                     config.settings[f"{pre}_linear_on"] = True
                 config.save_config()
             if lin:
-                db.log_event("light", f"linear calibration built: light from "
-                             f"{lin['cutoff_raw']}%, full by "
-                             f"{lin['saturation_raw']}% raw")
-            log.info(f"light sweep: {len(points)} points, "
-                  f"peak {max(p[1] for p in points):.0f} lx")
+                db.log_event(
+                    "light",
+                    f"linear calibration built: light from "
+                    f"{lin['cutoff_raw']}%, full by "
+                    f"{lin['saturation_raw']}% raw",
+                )
+            log.info(f"light sweep: {len(points)} points, peak {max(p[1] for p in points):.0f} lx")
         elif points:
             log.warning(f"light sweep stopped at {points[-1][0]}%; keeping previous curve")
         with sweep_lock:
             sweep_state["running"] = False
             sweep_state["cancel"] = False
             sweep_state["l2_raw"] = 0.0
-        config.wake.set()                                # control loop resumes at once
+        config.wake.set()  # control loop resumes at once
+
 
 # Imported last: these modules import this one, and their import-time
 # code runs only after everything above is defined. Their names are

@@ -23,8 +23,10 @@ import setups as setups_mod
 import monitor
 
 TIMELAPSE_DIR = Path(__file__).with_name("timelapse")
-PREVIEW_PATH = Path(__file__).with_name("preview.jpg")  # alignment viewfinder; not a timelapse frame
-THUMB_DIR     = TIMELAPSE_DIR / "thumbs"
+PREVIEW_PATH = Path(__file__).with_name(
+    "preview.jpg"
+)  # alignment viewfinder; not a timelapse frame
+THUMB_DIR = TIMELAPSE_DIR / "thumbs"
 # ----------------------------------------------------------------------------
 
 TIMELAPSE_DIR.mkdir(exist_ok=True)
@@ -36,8 +38,7 @@ camera = {"last_ok": None, "fails": 0, "last_err": "", "last_err_ts": None}
 # focus sweep: walk focus_absolute, score each frame's sharpness, pin the best.
 # Replaces guessing focus values over SSH (a guessed 68 produced a week of
 # blurry photos). step counts down as coarse then fine passes run.
-focus_state = {"running": False, "step": 0, "total": 0, "best": None,
-               "error": "", "cancel": False}
+focus_state = {"running": False, "step": 0, "total": 0, "best": None, "error": "", "cancel": False}
 focus_lock = threading.Lock()
 
 
@@ -51,10 +52,17 @@ def _camera_fail(err):
         camera["fails"] += 1
         camera["last_err"] = str(err)[:200]
         camera["last_err_ts"] = time.time()
-capturing = False   # capture thread holds the light; control loop defers
+
+
+capturing = False  # capture thread holds the light; control loop defers
 capture_lock = threading.Lock()  # serialize camera access (manual vs scheduled)
-render = {"state": "idle", "msg": "", "frames": 0,
-          "started": None, "elapsed": None}   # idle|running|done|error
+render = {
+    "state": "idle",
+    "msg": "",
+    "frames": 0,
+    "started": None,
+    "elapsed": None,
+}  # idle|running|done|error
 render_lock = threading.Lock()
 VIDEO_PATH = TIMELAPSE_DIR / "timelapse.mp4"
 ARCHIVE_DIR = Path(__file__).with_name("timelapse_archive")
@@ -76,8 +84,7 @@ def crop_box(cfg=None):
 def crop_filter(roi):
     """The same crop as an ffmpeg filter, sized to even pixel counts."""
     x, y, w, h = roi
-    return (f"crop=trunc(iw*{w:.4f}/2)*2:trunc(ih*{h:.4f}/2)*2:"
-            f"trunc(iw*{x:.4f}):trunc(ih*{y:.4f})")
+    return f"crop=trunc(iw*{w:.4f}/2)*2:trunc(ih*{h:.4f}/2)*2:trunc(iw*{x:.4f}):trunc(ih*{y:.4f})"
 
 
 def crop_array(img, roi):
@@ -98,11 +105,16 @@ def parse_roi(s):
     if len(parts) != 4:
         raise ValueError("need four numbers")
     x, y, w, h = parts
-    if not (0 <= x < 1 and 0 <= y < 1 and 0.05 <= w <= 1 and 0.05 <= h <= 1
-            and x + w <= 1.001 and y + h <= 1.001):
+    if not (
+        0 <= x < 1
+        and 0 <= y < 1
+        and 0.05 <= w <= 1
+        and 0.05 <= h <= 1
+        and x + w <= 1.001
+        and y + h <= 1.001
+    ):
         raise ValueError("out of range")
     return x, y, w, h
-
 
 
 def oom_first(cmd):
@@ -116,8 +128,12 @@ def oom_first(cmd):
     helper dies instead, the job fails and is logged, and the controller keeps
     running. Raising one's own score needs no privilege.
     """
-    return (["sh", "-c", 'echo 1000 > /proc/self/oom_score_adj 2>/dev/null; exec "$@"',
-             "oom-first"] + [str(c) for c in cmd])
+    return [
+        "sh",
+        "-c",
+        'echo 1000 > /proc/self/oom_score_adj 2>/dev/null; exec "$@"',
+        "oom-first",
+    ] + [str(c) for c in cmd]
 
 
 def imgtool(args, timeout=120):
@@ -126,8 +142,11 @@ def imgtool(args, timeout=120):
     OpenCV costs about 40 MB once imported and never returns it; run here it
     is freed when the job ends, and oom_first makes the job, not the
     controller, the kernel's choice if memory runs out."""
-    return subprocess.run(oom_first([sys.executable, str(IMGTOOL)] + [str(a) for a in args]),
-                          capture_output=True, timeout=timeout)
+    return subprocess.run(
+        oom_first([sys.executable, str(IMGTOOL)] + [str(a) for a in args]),
+        capture_output=True,
+        timeout=timeout,
+    )
 
 
 def _imgtool_err(r):
@@ -139,9 +158,12 @@ def _imgtool_err(r):
 def killed_msg(r, what):
     """Name an out-of-memory kill instead of reporting "no output"."""
     if r.returncode in (-9, 137):
-        return (f"{what} was killed by the kernel for running out of memory; "
-                "a smaller camera mode needs less (see Settings, Camera, Camera modes)")
+        return (
+            f"{what} was killed by the kernel for running out of memory; "
+            "a smaller camera mode needs less (see Settings, Camera, Camera modes)"
+        )
     return None
+
 
 _thumb_lock = threading.Lock()
 
@@ -162,48 +184,83 @@ def make_thumb(photo_path, cfg=None, dst_dir=None):
     if dst.exists():
         return
     with _thumb_lock:
-        if dst.exists():                 # made while this call waited
+        if dst.exists():  # made while this call waited
             return
         _make_thumb(photo_path, cfg, dst)
 
 
 def _make_thumb(photo_path, cfg, dst):
-    part = dst.with_name(dst.name + ".part")     # not *.jpg: never listed
+    part = dst.with_name(dst.name + ".part")  # not *.jpg: never listed
     if cfg is None:
         with config.settings_lock:
             cfg = dict(config.settings)
-    grid = (cfg.get("grid") or {})
+    grid = cfg.get("grid") or {}
     corners = grid.get("corners")
     if cfg.get("timelapse_flatten", True) and corners and len(corners) == 4:
         try:
             # a 640 px thumbnail does not need all 8 megapixels decoded
-            r = imgtool(["rectify", photo_path, part, json.dumps(corners),
-                         int(grid.get("cols", 4)), int(grid.get("rows", 4)),
-                         "--max-w", 640, "--min-side", 1280, "--q", 82])
+            r = imgtool(
+                [
+                    "rectify",
+                    photo_path,
+                    part,
+                    json.dumps(corners),
+                    int(grid.get("cols", 4)),
+                    int(grid.get("rows", 4)),
+                    "--max-w",
+                    640,
+                    "--min-side",
+                    1280,
+                    "--q",
+                    82,
+                ]
+            )
             if r.returncode == 0 and part.exists() and part.stat().st_size:
                 os.replace(part, dst)
                 return
-            log.error(f"thumb rectify failed for {photo_path.name} ({_imgtool_err(r)}); plain scale")
+            log.error(
+                f"thumb rectify failed for {photo_path.name} ({_imgtool_err(r)}); plain scale"
+            )
         except Exception as e:
             log.error(f"thumb rectify failed for {photo_path.name} ({e}); plain scale")
     roi = crop_box(cfg)
     vf = (crop_filter(roi) + "," if roi else "") + "scale=640:-2"
     try:
         r = subprocess.run(
-            oom_first(["ffmpeg", "-loglevel", "error", "-y", "-i", str(photo_path),
-                       "-vf", vf, "-q:v", "7", "-f", "mjpeg", str(part)]),
-            capture_output=True, timeout=120)
+            oom_first(
+                [
+                    "ffmpeg",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-i",
+                    str(photo_path),
+                    "-vf",
+                    vf,
+                    "-q:v",
+                    "7",
+                    "-f",
+                    "mjpeg",
+                    str(part),
+                ]
+            ),
+            capture_output=True,
+            timeout=120,
+        )
         if r.returncode == 0 and part.exists() and part.stat().st_size:
             os.replace(part, dst)
         else:
-            log.error(f"thumbnail error for {photo_path.name}: "
-                      f"{(r.stderr or b'').decode(errors='replace')[-200:] or 'no output'}")
+            log.error(
+                f"thumbnail error for {photo_path.name}: "
+                f"{(r.stderr or b'').decode(errors='replace')[-200:] or 'no output'}"
+            )
     except Exception as e:
         log.error(f"thumbnail error for {photo_path.name}: {e}")
     finally:
         part.unlink(missing_ok=True)
 
-_frame_lock = threading.Lock()   # one full-size warp at a time on a 512 MB board
+
+_frame_lock = threading.Lock()  # one full-size warp at a time on a 512 MB board
 
 
 def frame_view(photo_path, cfg=None):
@@ -229,10 +286,20 @@ def frame_view(photo_path, cfg=None):
     if not flatten and not roi:
         return None, photo_path
     with _frame_lock:
-        if flatten:                      # quality as /rectified.jpg
-            r = imgtool(["rectify", photo_path, "-", json.dumps(corners),
-                         int(grid.get("cols", 4)), int(grid.get("rows", 4)), "--q", 85])
-        else:                            # quality as /photo/cropped.jpg
+        if flatten:  # quality as /rectified.jpg
+            r = imgtool(
+                [
+                    "rectify",
+                    photo_path,
+                    "-",
+                    json.dumps(corners),
+                    int(grid.get("cols", 4)),
+                    int(grid.get("rows", 4)),
+                    "--q",
+                    85,
+                ]
+            )
+        else:  # quality as /photo/cropped.jpg
             r = imgtool(["crop", photo_path, "-", json.dumps(list(roi)), "--q", 88])
     if r.returncode != 0 or not r.stdout:
         raise ValueError(_imgtool_err(r))
@@ -242,15 +309,23 @@ def frame_view(photo_path, cfg=None):
 def frame_etag(photo_path, cfg):
     """Changes whenever what frame_view would return changes."""
     grid = cfg.get("grid") or {}
-    key = json.dumps([photo_path.name, photo_path.stat().st_mtime,
-                      bool(cfg.get("timelapse_flatten", True)), grid.get("corners"),
-                      grid.get("cols"), grid.get("rows"), cfg.get("roi")])
+    key = json.dumps(
+        [
+            photo_path.name,
+            photo_path.stat().st_mtime,
+            bool(cfg.get("timelapse_flatten", True)),
+            grid.get("corners"),
+            grid.get("cols"),
+            grid.get("rows"),
+            cfg.get("roi"),
+        ]
+    )
     return hashlib.sha1(key.encode()).hexdigest()[:20]
+
 
 def photo_inventory():
     # leading underscore marks render scratch, which is not a captured photo
-    photos = sorted(p for p in TIMELAPSE_DIR.glob("*.jpg")
-                    if not p.name.startswith("_"))
+    photos = sorted(p for p in TIMELAPSE_DIR.glob("*.jpg") if not p.name.startswith("_"))
     if not photos:
         return 0, None, None
     latest = photos[-1]
@@ -266,10 +341,8 @@ def photo_inventory():
 # and colour shift between shots and the per-cell analysis moves with them.
 USB_AUTO_GROUPS = {
     "usb_auto_focus": ("focus_automatic_continuous", 1, 0, ("focus_absolute",)),
-    "usb_auto_exposure_on": ("auto_exposure", 3, 1,
-                             ("exposure_time_absolute", "gain")),
-    "usb_auto_white_balance": ("white_balance_automatic", 1, 0,
-                               ("white_balance_temperature",)),
+    "usb_auto_exposure_on": ("auto_exposure", 3, 1, ("exposure_time_absolute", "gain")),
+    "usb_auto_white_balance": ("white_balance_automatic", 1, 0, ("white_balance_temperature",)),
 }
 
 
@@ -285,7 +358,7 @@ def _usb_apply_controls(cfg, dev):
         auto = bool(cfg.get(flag, False))
         autos.append(f"{ctrl}={on_val if auto else off_val}")
         if auto:
-            continue                      # let the camera decide these
+            continue  # let the camera decide these
         for dep in dependents:
             val = cfg.get("usb_" + dep)
             if val not in (None, ""):
@@ -300,8 +373,7 @@ def _usb_apply_controls(cfg, dev):
         args = []
         for c in group:
             args += ["-c", c]
-        subprocess.run(["v4l2-ctl", "-d", dev] + args,
-                       capture_output=True, timeout=10)
+        subprocess.run(["v4l2-ctl", "-d", dev] + args, capture_output=True, timeout=10)
 
 
 def _usb_capture(cfg, out_path, width, height, warmup=None):
@@ -323,9 +395,15 @@ def _usb_capture(cfg, out_path, width, height, warmup=None):
     # the camera's worst-case frame size (16 MB at 3264x2448) from memory the
     # kernel cannot take from its contiguous pool, and four of those is what
     # ran the Pi out of memory. Frames are kept one at a time anyway.
-    cmd = ["v4l2-ctl", "-d", dev,
-           "--set-fmt-video=width=%d,height=%d,pixelformat=MJPG" % (width, height),
-           "--stream-mmap=2", "--stream-count=%d" % n, "--stream-to=%s" % tmp]
+    cmd = [
+        "v4l2-ctl",
+        "-d",
+        dev,
+        "--set-fmt-video=width=%d,height=%d,pixelformat=MJPG" % (width, height),
+        "--stream-mmap=2",
+        "--stream-count=%d" % n,
+        "--stream-to=%s" % tmp,
+    ]
     try:
         r = subprocess.run(oom_first(cmd), capture_output=True, timeout=60)
     except subprocess.TimeoutExpired:
@@ -337,8 +415,9 @@ def _usb_capture(cfg, out_path, width, height, warmup=None):
         if oom:
             log.warning(oom)
             return False, oom
-        return False, (r.stderr.decode(errors="replace")[-200:].strip()
-                       or "v4l2-ctl returned no frames")
+        return False, (
+            r.stderr.decode(errors="replace")[-200:].strip() or "v4l2-ctl returned no frames"
+        )
     # The stream is n JPEGs back to back; keep the last, which is the settled one.
     try:
         data = tmp.read_bytes()
@@ -396,13 +475,13 @@ def _rotate_file(path, degrees):
     _postprocess_file(path, {"cam_rotate": degrees})
 
 
-
 def light_for_photo(cfg):
     """Whether a photo sets the main light to capture_brightness."""
     if not cfg.get("capture_set_light", False):
         return False
     cam = setups_mod.setup_with(cfg, "camera")
     return cam is None or cam.get("light") == "main"
+
 
 def take_photo(cfg, now, manual=False):
     """Capture one frame. `manual` tags the filename with an _m suffix so the
@@ -424,9 +503,9 @@ def take_photo(cfg, now, manual=False):
         cw = int(cfg.get("cam_width", 4608))
         ch = int(cfg.get("cam_height", 2592))
         if cfg.get("camera_backend", "rpicam") == "usb":
-            ok, err = _usb_capture(cfg, fname,
-                                   int(cfg.get("usb_width", 2048)),
-                                   int(cfg.get("usb_height", 1536)))
+            ok, err = _usb_capture(
+                cfg, fname, int(cfg.get("usb_width", 2048)), int(cfg.get("usb_height", 1536))
+            )
             if ok:
                 _postprocess_file(fname, cfg)
                 make_thumb(fname, cfg)
@@ -439,8 +518,18 @@ def take_photo(cfg, now, manual=False):
 
         # Full frame always: the view crop is applied when photos are shown,
         # so it can be changed or cleared later without losing any image.
-        cmd = ["rpicam-still", "-n", "-o", str(fname), "-t", "2000",
-               "--width", str(cw), "--height", str(ch)]
+        cmd = [
+            "rpicam-still",
+            "-n",
+            "-o",
+            str(fname),
+            "-t",
+            "2000",
+            "--width",
+            str(cw),
+            "--height",
+            str(ch),
+        ]
         r = subprocess.run(oom_first(cmd), capture_output=True, timeout=90)
         if r.returncode != 0:
             err = killed_msg(r, "rpicam-still") or r.stderr.decode(errors="replace")[-300:]
@@ -473,19 +562,27 @@ def record_growth(path, cfg, now):
     # only the trays the camera's setup covers: the grid spans those, left to
     # right, and nothing else is in the frame to measure
     mine = set(setups_mod.camera_trays(cfg))
-    trays = [{"id": tid, "cols": int((t or {}).get("cols", 3))}
-             for tid, t in sorted((cfg.get("trays") or {}).items()) if tid in mine]
-    payload = {"corners": grid["corners"],
-               "rows": grid.get("rows", 4), "cols": grid.get("cols", 4),
-               "trays": trays,
-               "rectify": bool(cfg.get("cam_rectify", True)),
-               # the file is rotated at capture time, so analysis must not
-               # rotate it a second time
-               "rotate": 0}
+    trays = [
+        {"id": tid, "cols": int((t or {}).get("cols", 3))}
+        for tid, t in sorted((cfg.get("trays") or {}).items())
+        if tid in mine
+    ]
+    payload = {
+        "corners": grid["corners"],
+        "rows": grid.get("rows", 4),
+        "cols": grid.get("cols", 4),
+        "trays": trays,
+        "rectify": bool(cfg.get("cam_rectify", True)),
+        # the file is rotated at capture time, so analysis must not
+        # rotate it a second time
+        "rotate": 0,
+    }
     try:
-        r = subprocess.run(oom_first([sys.executable, str(GROWTH_SCRIPT), str(path),
-                                      json.dumps(payload)]),
-                           capture_output=True, timeout=120)
+        r = subprocess.run(
+            oom_first([sys.executable, str(GROWTH_SCRIPT), str(path), json.dumps(payload)]),
+            capture_output=True,
+            timeout=120,
+        )
         if killed_msg(r, "canopy analysis"):
             log.warning(killed_msg(r, "canopy analysis"))
         out = json.loads((r.stdout or b"{}").decode(errors="replace") or "{}")
@@ -499,7 +596,6 @@ def record_growth(path, cfg, now):
     readings = monitor.validate_readings(out.get("readings") or {})
     if readings:
         db.log_many(list(readings.items()), ts=int(now.timestamp()))
-
 
 
 def capture_window(cfg):
@@ -534,6 +630,7 @@ def canopy_due_since(cfg, now=None):
         return None
     return on_time.timestamp()
 
+
 def capture_loop():
     last_shot = None
     while True:
@@ -554,10 +651,18 @@ def _capture_tick(last_shot):
     # Not while a capture is running, nor for a file under 10 s old: that
     # photo may still be being written or rotated, and take_photo makes
     # its own thumbnail once it is done.
-    missing = None if capturing else next(
-        (p for p in sorted(TIMELAPSE_DIR.glob("*.jpg"))
-         if not (THUMB_DIR / p.name).exists()
-         and time.time() - p.stat().st_mtime > 10), None)
+    missing = (
+        None
+        if capturing
+        else next(
+            (
+                p
+                for p in sorted(TIMELAPSE_DIR.glob("*.jpg"))
+                if not (THUMB_DIR / p.name).exists() and time.time() - p.stat().st_mtime > 10
+            ),
+            None,
+        )
+    )
     if missing:
         make_thumb(missing)
     with config.settings_lock:
@@ -567,8 +672,7 @@ def _capture_tick(last_shot):
         now = datetime.now(tz)
         on_time, off_time = capture_window(cfg)
         in_day = on_time is not None and on_time <= now <= off_time
-        due = (last_shot is None or
-               now - last_shot >= timedelta(minutes=cfg["capture_interval_min"]))
+        due = last_shot is None or now - last_shot >= timedelta(minutes=cfg["capture_interval_min"])
         if time.time() - _pruned_check[0] > 3600:
             _pruned_check[0] = time.time()
             if disk_free_gb() < LOW_FREE_GB:
@@ -580,8 +684,10 @@ def _capture_tick(last_shot):
             last_shot = now
             if time.time() - _disk_warned[0] > 3600:
                 _disk_warned[0] = time.time()
-                log.warning(f"photo skipped: only {disk_free_gb():.1f} GB free "
-                            f"(photos stop below {MIN_FREE_GB} GB)")
+                log.warning(
+                    f"photo skipped: only {disk_free_gb():.1f} GB free "
+                    f"(photos stop below {MIN_FREE_GB} GB)"
+                )
         elif in_day and due:
             last_shot = now
             with capture_lock:
@@ -605,7 +711,7 @@ def usb_link_speed(dev):
     try:
         node = SYSFS_V4L / Path(dev).name / "device"
         p = node.resolve()
-        for _ in range(4):                  # interface dir -> device dir with "speed"
+        for _ in range(4):  # interface dir -> device dir with "speed"
             sp = p / "speed"
             if sp.exists():
                 return float(sp.read_text().strip())
@@ -615,9 +721,9 @@ def usb_link_speed(dev):
     return None
 
 
-MIN_FREE_GB = 1.0          # stop taking photos below this much free space
-LOW_FREE_GB = 3.0          # alert below this, and start removing archived runs
-PRUNE_TARGET_GB = 4.0      # removing archived runs stops once this much is free
+MIN_FREE_GB = 1.0  # stop taking photos below this much free space
+LOW_FREE_GB = 3.0  # alert below this, and start removing archived runs
+PRUNE_TARGET_GB = 4.0  # removing archived runs stops once this much is free
 _disk_warned = [0.0]
 
 
@@ -641,16 +747,18 @@ def prune_archives(free_fn=None):
         return removed
     while runs and free_fn() < PRUNE_TARGET_GB:
         if len(runs) == 1 and free_fn() >= MIN_FREE_GB:
-            break                        # the newest archive stays unless it is that or the photos
+            break  # the newest archive stays unless it is that or the photos
         if removed == [] and free_fn() >= LOW_FREE_GB:
-            break                        # only start below the alert level
+            break  # only start below the alert level
         old = runs.pop(0)
         n = sum(1 for _ in old.glob("*.jpg"))
         mb = sum(f.stat().st_size for f in old.rglob("*") if f.is_file()) / 1e6
         shutil.rmtree(old, ignore_errors=True)
         removed.append(old.name)
-        msg = (f"removed archived timelapse {old.name} ({n} photos, {mb:.0f} MB): "
-               f"the SD card was low on space")
+        msg = (
+            f"removed archived timelapse {old.name} ({n} photos, {mb:.0f} MB): "
+            f"the SD card was low on space"
+        )
         log.warning(msg)
         try:
             db.log_event("disk", msg)
@@ -663,10 +771,11 @@ def disk_free_gb(path=None):
     try:
         return shutil.disk_usage(path or TIMELAPSE_DIR).free / 1e9
     except Exception:
-        return 1e9          # unknown: do not block photos on a failed check
+        return 1e9  # unknown: do not block photos on a failed check
 
 
 # ----------------------------- video render -----------------------------
+
 
 def _flatten_frames_to(dest, frames, cfg):
     """Write rectified copies of `frames` into `dest`, numbered in order.
@@ -687,9 +796,19 @@ def _flatten_frames_to(dest, frames, cfg):
     listfile = dest / "frames.txt"
     listfile.write_text("\n".join(str(f) for f in frames) + "\n")
     try:
-        r = imgtool(["flatten", dest, listfile, json.dumps(corners),
-                     int(grid.get("cols", 4)), int(grid.get("rows", 4)), "--q", 88],
-                    timeout=4 * 3600)
+        r = imgtool(
+            [
+                "flatten",
+                dest,
+                listfile,
+                json.dumps(corners),
+                int(grid.get("cols", 4)),
+                int(grid.get("rows", 4)),
+                "--q",
+                88,
+            ],
+            timeout=4 * 3600,
+        )
     finally:
         listfile.unlink(missing_ok=True)
     if r.returncode != 0:
@@ -700,13 +819,17 @@ def _flatten_frames_to(dest, frames, cfg):
 
 def render_worker():
     import time as _t
+
     t0 = _t.monotonic()
-    frames = sorted(p for p in TIMELAPSE_DIR.glob("*.jpg")
-                    if not p.name.startswith("_"))
+    frames = sorted(p for p in TIMELAPSE_DIR.glob("*.jpg") if not p.name.startswith("_"))
     with render_lock:
-        render.update(state="running", frames=len(frames),
-                      started=datetime.now(ZoneInfo(config.settings["timezone"])).isoformat(),
-                      elapsed=None, msg=f"Rendering {len(frames)} frames...")
+        render.update(
+            state="running",
+            frames=len(frames),
+            started=datetime.now(ZoneInfo(config.settings["timezone"])).isoformat(),
+            elapsed=None,
+            msg=f"Rendering {len(frames)} frames...",
+        )
     flat_dir = None
     try:
         with config.settings_lock:
@@ -727,28 +850,55 @@ def render_worker():
         # +faststart second pass rewrites the whole file in memory and is
         # what tips the box over). We add faststart as a cheap remux after.
         fps = max(1.0, float(cfg_r.get("video_fps", 8)))
-        r = subprocess.run(oom_first(
-            ["ffmpeg", "-loglevel", "error", "-y",
-             "-framerate", f"{fps:g}", "-pattern_type", "glob",
-             "-i", src_glob,
-             # JPEG stills are full-range (yuvj420p/pc); browsers render that as
-             # black. Remap to limited-range yuv420p and tag it. Height is forced
-             # to a multiple of 16 (-16, not -2): a non-mod16 height makes the
-             # encoder signal a crop that some hardware decoders render as black.
-             "-vf", vf,
-             # crf 20, not 24: ultrafast turns off adaptive quantization and
-             # deblocking, so at 24 fine leaf and soil texture smeared. Same
-             # preset, so encode time and memory stay the same; files grow.
-             "-c:v", "libx264", "-preset", "ultrafast",
-             "-crf", "20", "-threads", "1",
-             "-pix_fmt", "yuv420p", "-color_range", "tv",
-             # Fully specify the colour metadata (BT.601, matching the JPEG
-             # source). An unspecified matrix makes some hardware decoders
-             # (VLC's, browsers') render the video as black.
-             "-colorspace", "smpte170m", "-color_primaries", "smpte170m",
-             "-color_trc", "smpte170m",
-             str(tmp)]),
-            capture_output=True, timeout=3600)
+        r = subprocess.run(
+            oom_first(
+                [
+                    "ffmpeg",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-framerate",
+                    f"{fps:g}",
+                    "-pattern_type",
+                    "glob",
+                    "-i",
+                    src_glob,
+                    # JPEG stills are full-range (yuvj420p/pc); browsers render that as
+                    # black. Remap to limited-range yuv420p and tag it. Height is forced
+                    # to a multiple of 16 (-16, not -2): a non-mod16 height makes the
+                    # encoder signal a crop that some hardware decoders render as black.
+                    "-vf",
+                    vf,
+                    # crf 20, not 24: ultrafast turns off adaptive quantization and
+                    # deblocking, so at 24 fine leaf and soil texture smeared. Same
+                    # preset, so encode time and memory stay the same; files grow.
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "ultrafast",
+                    "-crf",
+                    "20",
+                    "-threads",
+                    "1",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-color_range",
+                    "tv",
+                    # Fully specify the colour metadata (BT.601, matching the JPEG
+                    # source). An unspecified matrix makes some hardware decoders
+                    # (VLC's, browsers') render the video as black.
+                    "-colorspace",
+                    "smpte170m",
+                    "-color_primaries",
+                    "smpte170m",
+                    "-color_trc",
+                    "smpte170m",
+                    str(tmp),
+                ]
+            ),
+            capture_output=True,
+            timeout=3600,
+        )
         # Faststart as a stream-copy remux: no re-encode, trivial memory.
         if r.returncode == 0 and tmp.exists():
             # Remux beside the finished video, then swap it in with one
@@ -756,9 +906,24 @@ def render_worker():
             # old file instead of a half-written one.
             part = VIDEO_PATH.with_name("timelapse.part.mp4")
             r2 = subprocess.run(
-                oom_first(["ffmpeg", "-loglevel", "error", "-y", "-i", str(tmp),
-                           "-c", "copy", "-movflags", "+faststart", str(part)]),
-                capture_output=True, timeout=600)
+                oom_first(
+                    [
+                        "ffmpeg",
+                        "-loglevel",
+                        "error",
+                        "-y",
+                        "-i",
+                        str(tmp),
+                        "-c",
+                        "copy",
+                        "-movflags",
+                        "+faststart",
+                        str(part),
+                    ]
+                ),
+                capture_output=True,
+                timeout=600,
+            )
             tmp.unlink(missing_ok=True)
             if r2.returncode == 0 and part.exists():
                 os.replace(part, VIDEO_PATH)
@@ -769,8 +934,11 @@ def render_worker():
         if r.returncode == 0 and VIDEO_PATH.exists():
             mb = VIDEO_PATH.stat().st_size / 1e6
             with render_lock:
-                render.update(state="done", elapsed=round(dt, 1),
-                              msg=f"{len(frames)} frames at {fps:g} fps, {mb:.1f} MB, {dt:.0f}s")
+                render.update(
+                    state="done",
+                    elapsed=round(dt, 1),
+                    msg=f"{len(frames)} frames at {fps:g} fps, {mb:.1f} MB, {dt:.0f}s",
+                )
             try:
                 db.kv_set("video_fps_rendered", fps)
             except Exception:
@@ -778,16 +946,15 @@ def render_worker():
         else:
             err = r.stderr.decode(errors="replace")[-200:]
             with render_lock:
-                render.update(state="error", elapsed=round(dt, 1),
-                              msg=err or "ffmpeg failed")
+                render.update(state="error", elapsed=round(dt, 1), msg=err or "ffmpeg failed")
     except Exception as e:
         with render_lock:
-            render.update(state="error", elapsed=round(_t.monotonic() - t0, 1),
-                          msg=str(e))
+            render.update(state="error", elapsed=round(_t.monotonic() - t0, 1), msg=str(e))
     finally:
         if flat_dir and flat_dir.exists():
             # scratch only: the SD card cannot afford a second copy of the set
             import shutil
+
             shutil.rmtree(flat_dir, ignore_errors=True)
 
 
@@ -805,14 +972,14 @@ _thumbs_lock = threading.Lock()
 
 def rebuild_thumbs_async():
     """Regenerate every thumbnail in the background, one rebuild at a time."""
+
     def work():
         if not _thumbs_lock.acquire(blocking=False):
-            return                     # one already running; it reads settings fresh
+            return  # one already running; it reads settings fresh
         try:
             with config.settings_lock:
                 cfg = dict(config.settings)
-            photos = [p for p in sorted(TIMELAPSE_DIR.glob("*.jpg"))
-                      if not p.name.startswith("_")]
+            photos = [p for p in sorted(TIMELAPSE_DIR.glob("*.jpg")) if not p.name.startswith("_")]
             # Build each new thumbnail beside the old ones and swap it in, so
             # the scrubber's frame list never empties while this runs.
             tmp = THUMB_DIR / "_rebuild"
@@ -826,15 +993,18 @@ def rebuild_thumbs_async():
                     keep.add(ph.name)
             for old in THUMB_DIR.glob("*.jpg"):
                 if old.name not in keep:
-                    old.unlink(missing_ok=True)     # its photo is gone
+                    old.unlink(missing_ok=True)  # its photo is gone
             shutil.rmtree(tmp, ignore_errors=True)
             # thumbnails are cached by browsers for a year under their name;
             # a new version in the URL is what makes them fetch the new ones
             db.kv_set("thumbs_version", int(time.time()))
-            log.info(f"rebuilt {len(photos)} thumbnails "
-                     f"({'flattened' if cfg.get('timelapse_flatten', True) else 'raw'})")
+            log.info(
+                f"rebuilt {len(photos)} thumbnails "
+                f"({'flattened' if cfg.get('timelapse_flatten', True) else 'raw'})"
+            )
         finally:
             _thumbs_lock.release()
+
     threading.Thread(target=work, daemon=True, name="thumbs").start()
 
 
@@ -876,23 +1046,27 @@ def run_focus_sweep():
         cfg = dict(config.settings)
     dev = cfg.get("usb_device", "/dev/video0")
     tmp = Path(__file__).with_name("_focus_probe.jpg")
-    results = []          # (focus, score)
+    results = []  # (focus, score)
     global capturing
     try:
         with capture_lock:
-            capturing = True                  # control loop leaves the light alone
+            capturing = True  # control loop leaves the light alone
             if light_for_photo(cfg):
                 light_mod.set_brightness(cfg.get("capture_brightness", 100))
             # manual focus must be active or focus_absolute writes are rejected
-            subprocess.run(["v4l2-ctl", "-d", dev,
-                            "-c", "focus_automatic_continuous=0"],
-                           capture_output=True, timeout=10)
+            subprocess.run(
+                ["v4l2-ctl", "-d", dev, "-c", "focus_automatic_continuous=0"],
+                capture_output=True,
+                timeout=10,
+            )
 
             def score_at(fv):
-                subprocess.run(["v4l2-ctl", "-d", dev,
-                                "-c", f"focus_absolute={int(fv)}"],
-                               capture_output=True, timeout=10)
-                time.sleep(0.6)               # lens travel time
+                subprocess.run(
+                    ["v4l2-ctl", "-d", dev, "-c", f"focus_absolute={int(fv)}"],
+                    capture_output=True,
+                    timeout=10,
+                )
+                time.sleep(0.6)  # lens travel time
                 ok, err = _usb_capture(cfg, tmp, 1280, 720, warmup=3)
                 if not ok:
                     raise RuntimeError(err or "capture failed")
@@ -914,8 +1088,9 @@ def run_focus_sweep():
                 with focus_lock:
                     focus_state["step"] = done
             best = max(results, key=lambda r: r[1])[0]
-            for fv in range(max(0, best - fine_span + fine_step),
-                            min(1023, best + fine_span), fine_step):
+            for fv in range(
+                max(0, best - fine_span + fine_step), min(1023, best + fine_span), fine_step
+            ):
                 if focus_state["cancel"]:
                     return
                 if any(r[0] == fv for r in results):
@@ -930,11 +1105,12 @@ def run_focus_sweep():
                 config.settings["usb_auto_focus"] = False
                 config.save_config()
             with focus_lock:
-                focus_state["best"] = {"focus": int(best),
-                                       "score": round(best_score, 1),
-                                       "tested": len(results)}
-            log.info(f"focus sweep: best {best} "
-                  f"(score {best_score:.0f}, {len(results)} points)")
+                focus_state["best"] = {
+                    "focus": int(best),
+                    "score": round(best_score, 1),
+                    "tested": len(results),
+                }
+            log.info(f"focus sweep: best {best} (score {best_score:.0f}, {len(results)} points)")
             db.log_event("camera", f"focus sweep pinned focus_absolute={best}")
     except Exception as e:
         with focus_lock:
@@ -946,7 +1122,7 @@ def run_focus_sweep():
         with focus_lock:
             focus_state["running"] = False
             focus_state["cancel"] = False
-        config.wake.set()                            # control loop restores the light
+        config.wake.set()  # control loop restores the light
 
 
 _rect_cache = {"key": None, "bytes": None}

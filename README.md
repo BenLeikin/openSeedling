@@ -307,7 +307,13 @@ and sensor smoothing), **Camera**, **Setups**, **Trays**, **Alerts**, and
   units, Setups, charts, the phone layout and the touchscreen summary are
   checked by what happens on screen, not by how the code is written. Without
   Playwright it skips and exits 0.
-- `ruff check .` lints the Python with the rules in `ruff.toml`.
+- `ruff check .` lints the Python with the rules in `ruff.toml`; `ruff format`
+  formats it. Prettier formats the JavaScript and CSS (`.prettierrc.json`).
+  `pre-commit install` runs all four on every commit
+  (`.pre-commit-config.yaml`).
+- The version is in `pyproject.toml` and heads `CHANGELOG.md`; the installer
+  commits each update as "openSeedling <version>: <changelog heading>". A
+  `REMOVED` file in an update zip lists files the installer deletes.
 - The dashboard's scripts are ES modules (`static/js/`, entered through
   `main.js`): each imports what it uses and exports what it offers, so a
   missing or renamed function is an error at load, not a silent global. A

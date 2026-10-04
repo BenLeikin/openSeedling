@@ -56,8 +56,10 @@ def update_ai_settings():
         if "ai_notes" in data:
             config.settings["ai_notes"] = str(data["ai_notes"])[:1000]
         config.save_config()
-        out = {k: config.settings[k] for k in
-               ("ai_enabled", "ai_notify", "ai_report_hour", "ai_report_minute", "ai_notes")}
+        out = {
+            k: config.settings[k]
+            for k in ("ai_enabled", "ai_notify", "ai_report_hour", "ai_report_minute", "ai_notes")
+        }
     return jsonify(ok=True, **out)
 
 
@@ -89,15 +91,17 @@ def build_backup(include_secrets=False):
 
     stamp = datetime.now(ZoneInfo(config.settings.get("timezone", "UTC")))
     name = f"openseedling-backup-{stamp:%Y%m%d-%H%M}.tar.gz"
-    notes = [f"OpenSeedling backup taken {stamp:%Y-%m-%d %H:%M %Z}",
-             "",
-             "growlight.db   readings, hourly rollups, events, planting history",
-             "config.json    every setting, calibration and the planting map",
-             ".env           pin overrides and secrets (only if requested)",
-             "",
-             "To restore: stop the service, copy these back into the app",
-             "directory, then start it again.",
-             ""]
+    notes = [
+        f"OpenSeedling backup taken {stamp:%Y-%m-%d %H:%M %Z}",
+        "",
+        "growlight.db   readings, hourly rollups, events, planting history",
+        "config.json    every setting, calibration and the planting map",
+        ".env           pin overrides and secrets (only if requested)",
+        "",
+        "To restore: stop the service, copy these back into the app",
+        "directory, then start it again.",
+        "",
+    ]
 
     with tempfile.TemporaryDirectory() as tmp:
         dbcopy = Path(tmp) / "growlight.db"
@@ -105,7 +109,7 @@ def build_backup(include_secrets=False):
         try:
             dst = sqlite3.connect(str(dbcopy))
             with dst:
-                src.backup(dst)          # consistent against a live writer
+                src.backup(dst)  # consistent against a live writer
             ok = dst.execute("PRAGMA integrity_check").fetchone()[0]
             dst.close()
         finally:
@@ -140,10 +144,15 @@ def api_backup():
     except Exception as e:
         log.error(f"backup failed: {e}")
         return jsonify(ok=False, error=str(e)[:200]), 500
-    db.log_event("backup", f"downloaded {name} ({len(blob)/1024:.0f} KB)")
-    return Response(blob, mimetype="application/gzip", headers={
-        "Content-Disposition": f'attachment; filename="{name}"',
-        "Content-Length": str(len(blob))})
+    db.log_event("backup", f"downloaded {name} ({len(blob) / 1024:.0f} KB)")
+    return Response(
+        blob,
+        mimetype="application/gzip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{name}"',
+            "Content-Length": str(len(blob)),
+        },
+    )
 
 
 @routes.app.route("/api/purge_series", methods=["POST"])
@@ -199,25 +208,23 @@ def series_all():
         _cam_t = set(setups_mod.camera_trays(dict(config.settings)))
     for k in snap.keys():
         if k.startswith("canopy:") and k[7:] not in _cam_t:
-            continue                      # a tray the camera no longer watches
-        if (k.startswith("float:") or k.startswith("reservoir:")):
-            continue                      # binary states aren't charted
-        if (k.startswith("dry:") or k.startswith("growth")
-                or k.startswith("moisture:")):
-            continue                      # retired per-cell camera series
+            continue  # a tray the camera no longer watches
+        if k.startswith("float:") or k.startswith("reservoir:"):
+            continue  # binary states aren't charted
+        if k.startswith("dry:") or k.startswith("growth") or k.startswith("moisture:"):
+            continue  # retired per-cell camera series
         if not camera_on and k.startswith("canopy:"):
-            continue                      # camera vision paused; hide its series
+            continue  # camera vision paused; hide its series
         pts = db.series(k, hours)
         if k.startswith("probe:"):
             cal = pcal.get(k[6:]) or {}
             if (cal.get("temp_comp") or {}).get("coeff"):
                 soil_at = monitor._soil_f_lookup(snap, hours)
-                pts = [[ts, water.compensated_volts(v, cal, soil_at(ts, stf))]
-                       for ts, v in pts]
+                pts = [[ts, water.compensated_volts(v, cal, soil_at(ts, stf))] for ts, v in pts]
         out[k] = pts
     k = setups_mod.lux_k()
     if k and "lux" in out:
-        cf = setups_mod.canopy_factor()      # charted at canopy, matching the chips
+        cf = setups_mod.canopy_factor()  # charted at canopy, matching the chips
         out["ppfd"] = [[ts, round(v * cf / k, 1)] for ts, v in out["lux"]]
     return jsonify(hours=hours, series=out)
 

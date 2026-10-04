@@ -11,8 +11,8 @@ from applog import log
 
 import config
 
-GPIO_PIN      = 18   # hardware PWM channel 0. Only 18 or 19 can do hardware
-                     # PWM; GROWLIGHT_LIGHT_PIN picks between them.
+GPIO_PIN = 18  # hardware PWM channel 0. Only 18 or 19 can do hardware
+# PWM; GROWLIGHT_LIGHT_PIN picks between them.
 try:
     GPIO_PIN = int(os.environ.get("GROWLIGHT_LIGHT_PIN", GPIO_PIN))
 except ValueError:
@@ -28,22 +28,23 @@ except ValueError:
 #   dtoverlay=pwm-2chan,pin=18,func=2,pin2=19,func2=2
 GPIO_PIN2 = None
 try:
-    _p2 = (os.environ.get("GROWLIGHT_DIM_PIN")
-           or os.environ.get("GROWLIGHT_LIGHT2_PIN") or "").strip()
+    _p2 = (
+        os.environ.get("GROWLIGHT_DIM_PIN") or os.environ.get("GROWLIGHT_LIGHT2_PIN") or ""
+    ).strip()
     if _p2:
         GPIO_PIN2 = int(_p2)
 except ValueError:
     GPIO_PIN2 = None
-PWM_FREQ      = 1000
+PWM_FREQ = 1000
 
 # --- pump actuators (gpiozero, guarded so off-Pi / unwired stays safe) ---
 # Pump GPIOs (BCM). Override without editing code by setting GROWLIGHT_PUMP_PINS,
 # e.g. GROWLIGHT_PUMP_PINS="1:24,2:26" in the systemd unit, then restart.
-FAN_PIN = 20                     # BCM; physical 38. Low-side switched via a
-                                 #   D4184 with a flyback across the fan.
+FAN_PIN = 20  # BCM; physical 38. Low-side switched via a
+#   D4184 with a flyback across the fan.
 _fanenv = os.environ.get("GROWLIGHT_FAN_PIN")
 if _fanenv is not None and not _fanenv.strip():
-    FAN_PIN = None                      # explicitly configured as "no fan"
+    FAN_PIN = None  # explicitly configured as "no fan"
 else:
     try:
         FAN_PIN = int(_fanenv) if _fanenv else FAN_PIN
@@ -60,22 +61,22 @@ if FAN_PIN is None:
 else:
     try:
         from gpiozero import PWMOutputDevice as _PWMOut
+
         _fan = _PWMOut(FAN_PIN, frequency=FAN_PWM_HZ, initial_value=0)
     except Exception as _e:
         log.warning(f"fan GPIO{FAN_PIN} unavailable ({_e}); fan control disabled")
 FAN_HW = _fan is not None
 fan_state = {"on": False, "reason": "off", "speed": 0}
 
-PUMP_PINS = {"1": 24, "2": 26}   # tray -> BCM (physical 18, 37)
+PUMP_PINS = {"1": 24, "2": 26}  # tray -> BCM (physical 18, 37)
 _pp = os.environ.get("GROWLIGHT_PUMP_PINS")
 if _pp is not None and not _pp.strip():
-    PUMP_PINS = {}                      # explicitly configured as "no pumps"
+    PUMP_PINS = {}  # explicitly configured as "no pumps"
     log.info("pump pins: none configured")
 elif (_pp or "").strip():
     _pp = _pp.strip()
     try:
-        PUMP_PINS = {t.strip(): int(v) for t, v in
-                     (part.split(":") for part in _pp.split(","))}
+        PUMP_PINS = {t.strip(): int(v) for t, v in (part.split(":") for part in _pp.split(","))}
         log.info(f"pump pins from environment: {PUMP_PINS}")
     except Exception as _e:
         log.warning(f"GROWLIGHT_PUMP_PINS unreadable ({_e}); using {PUMP_PINS}")
@@ -83,36 +84,42 @@ _pumps = {}
 for _t, _pin in PUMP_PINS.items():
     try:
         from gpiozero import OutputDevice
+
         _pumps[_t] = OutputDevice(_pin, active_high=True, initial_value=False)
     except Exception as _e:
         log.warning(f"pump {_t} GPIO{_pin} unavailable ({_e}); disabled")
 PUMP_HW = bool(_pumps)
 
+
 def _blank_pump():
-    return {"running": False, "last_run": 0.0,
-            "today_seconds": 0.0, "day": "", "last_detail": ""}
+    return {"running": False, "last_run": 0.0, "today_seconds": 0.0, "day": "", "last_detail": ""}
+
+
 pump_state = {t: _blank_pump() for t in PUMP_PINS}
-pump_lock = threading.Lock()   # also serializes the two pumps: one at a time
+pump_lock = threading.Lock()  # also serializes the two pumps: one at a time
 
 try:
-    pwm = HardwarePWM(pwm_channel=(1 if GPIO_PIN == 19 else 0),
-                      hz=PWM_FREQ, chip=0)
+    pwm = HardwarePWM(pwm_channel=(1 if GPIO_PIN == 19 else 0), hz=PWM_FREQ, chip=0)
     # Start DARK, not at duty 0: on inverted wiring duty 0 is full brightness,
     # so a plain start(0) would blast the light on at boot until the control
     # loop's first pass caught up.
-    pwm.start(100.0 if (config.settings.get("light_backend") == "dim"
-                        or config.settings.get("light_invert")) else 0.0)  # start dark
+    pwm.start(
+        100.0
+        if (config.settings.get("light_backend") == "dim" or config.settings.get("light_invert"))
+        else 0.0
+    )  # start dark
 except Exception as e:
-    sys.exit(f"Hardware PWM unavailable ({e}). Check that "
-             f"'dtoverlay=pwm,pin=18,func=2' is in /boot/firmware/config.txt "
-             f"and reboot after adding it.")
+    sys.exit(
+        f"Hardware PWM unavailable ({e}). Check that "
+        f"'dtoverlay=pwm,pin=18,func=2' is in /boot/firmware/config.txt "
+        f"and reboot after adding it."
+    )
 
 pwm2 = None
 if GPIO_PIN2 and GPIO_PIN2 != GPIO_PIN:
     try:
-        pwm2 = HardwarePWM(pwm_channel=(1 if GPIO_PIN2 == 19 else 0),
-                           hz=PWM_FREQ, chip=0)
-        pwm2.start(100.0)          # the dim channel: start pulled down = dark
+        pwm2 = HardwarePWM(pwm_channel=(1 if GPIO_PIN2 == 19 else 0), hz=PWM_FREQ, chip=0)
+        pwm2.start(100.0)  # the dim channel: start pulled down = dark
         log.info(f"dim-line fixture on GPIO{GPIO_PIN2}")
     except Exception as e:
         # a missing second channel must not stop the controller: the main
@@ -187,8 +194,8 @@ def _all_off():
         except Exception:
             pass
     light_mod._dither_stop()
-    light_mod.light2_state["level"] = 0.0     # or the write below would keep it lit
-    light_mod.set_brightness(0)               # darkens both channels
+    light_mod.light2_state["level"] = 0.0  # or the write below would keep it lit
+    light_mod.set_brightness(0)  # darkens both channels
 
 
 def cleanup(*_):
@@ -197,7 +204,7 @@ def cleanup(*_):
     # not leave a pump relying on gpiozero's atexit teardown and a gate pulldown.
     SHUTTING_DOWN.set()
     _all_off()
-    heat_mod.off_now()          # the smart plug, when it is the heat mat's
+    heat_mod.off_now()  # the smart plug, when it is the heat mat's
     status_mod._end_streams()
     # A pump thread or control pass already past its check could still write
     # once more. They poll every 0.1 s and now see the flag; wait for running
@@ -214,10 +221,13 @@ def cleanup(*_):
     # driving its dark duty is what actually keeps the light off.
     # The main pin carries the dim fixture when no separate dim pin is set, and
     # releasing that pin would let the fixture come on.
-    light_mod._stop_pwm(pwm, "dim" if (pwm2 is None and light_mod.light_backend() == "dim") else "pwm")
+    light_mod._stop_pwm(
+        pwm, "dim" if (pwm2 is None and light_mod.light_backend() == "dim") else "pwm"
+    )
     if pwm2 is not None:
-        light_mod._stop_pwm(pwm2, "dim")     # dim line: keep it pulled down, or it lights
+        light_mod._stop_pwm(pwm2, "dim")  # dim line: keep it pulled down, or it lights
     sys.exit(0)
+
 
 # Imported last: these modules import this one, and their import-time
 # code runs only after everything above is defined. Their names are

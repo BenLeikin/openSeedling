@@ -21,10 +21,10 @@ import time
 
 # bit -> (now_label, since_boot_label)
 THROTTLE_BITS = {
-    0:  "undervoltage",
-    1:  "arm frequency capped",
-    2:  "currently throttled",
-    3:  "soft temperature limit",
+    0: "undervoltage",
+    1: "arm frequency capped",
+    2: "currently throttled",
+    3: "soft temperature limit",
 }
 
 
@@ -49,8 +49,12 @@ def cpu_temp_c():
 def load_avg():
     try:
         one, five, fifteen = os.getloadavg()
-        return {"1m": round(one, 2), "5m": round(five, 2),
-                "15m": round(fifteen, 2), "cores": os.cpu_count() or 1}
+        return {
+            "1m": round(one, 2),
+            "5m": round(five, 2),
+            "15m": round(fifteen, 2),
+            "cores": os.cpu_count() or 1,
+        }
     except Exception:
         return None
 
@@ -63,21 +67,27 @@ def memory():
     for line in raw.splitlines():
         m = re.match(r"(\w+):\s+(\d+)", line)
         if m:
-            vals[m.group(1)] = int(m.group(2))       # kB
+            vals[m.group(1)] = int(m.group(2))  # kB
     total = vals.get("MemTotal")
     avail = vals.get("MemAvailable")
     if not total:
         return None
     used = total - (avail if avail is not None else 0)
-    return {"used_mb": round(used / 1024), "total_mb": round(total / 1024),
-            "percent": round(used / total * 100)}
+    return {
+        "used_mb": round(used / 1024),
+        "total_mb": round(total / 1024),
+        "percent": round(used / total * 100),
+    }
 
 
 def disk(path="/"):
     try:
         t, u, f = shutil.disk_usage(path)
-        return {"used_gb": round(u / 1e9, 1), "total_gb": round(t / 1e9, 1),
-                "percent": round(u / t * 100)}
+        return {
+            "used_gb": round(u / 1e9, 1),
+            "total_gb": round(t / 1e9, 1),
+            "percent": round(u / t * 100),
+        }
     except Exception:
         return None
 
@@ -118,8 +128,7 @@ def throttled():
             now.append(label)
         if word & (1 << (bit + 16)):
             ever.append(label)
-    return {"raw": word, "now": now, "since_boot": ever,
-            "ok": not now and not ever}
+    return {"raw": word, "now": now, "since_boot": ever, "ok": not now and not ever}
 
 
 def core_voltage():
@@ -157,12 +166,15 @@ def wifi():
             continue
         iface = parts[0].rstrip(":")
         try:
-            quality = float(parts[2])        # out of 70 on most drivers
-            level = float(parts[3])          # dBm
+            quality = float(parts[2])  # out of 70 on most drivers
+            level = float(parts[3])  # dBm
         except ValueError:
             continue
-        return {"iface": iface, "percent": max(0, min(100, round(quality / 70 * 100))),
-                "dbm": round(level)}
+        return {
+            "iface": iface,
+            "percent": max(0, min(100, round(quality / 70 * 100))),
+            "dbm": round(level),
+        }
     return None
 
 
@@ -178,7 +190,7 @@ def ip_address():
     s = None
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("192.0.2.1", 1))          # TEST-NET-1: never routed
+        s.connect(("192.0.2.1", 1))  # TEST-NET-1: never routed
         return s.getsockname()[0]
     except Exception:
         return None

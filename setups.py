@@ -12,6 +12,7 @@ import config
 import hardware
 import light as light_mod
 
+
 def canopy_factor():
     """Multiplier from the sensor plane to canopy height. Light falls off with
     distance, so a sensor at soil level under-reads what the leaves receive."""
@@ -57,8 +58,7 @@ def dli_between(start, end, key="lux", k=None):
     if not k or end <= start:
         return None
     hours = (time.time() - start) / 3600 + 1
-    pts = [(ts, v) for ts, v in db.series(key, hours=max(2, hours))
-           if start <= ts <= end]
+    pts = [(ts, v) for ts, v in db.series(key, hours=max(2, hours)) if start <= ts <= end]
     if len(pts) < 2:
         return None
     peak = max(v for _, v in pts)
@@ -72,8 +72,7 @@ def dli_between(start, end, key="lux", k=None):
         covered += dt
         if (v0 + v1) / 2 > dark:
             lit += dt
-    return (round(total * canopy_factor() / 1_000_000, 2),
-            covered / (end - start), lit)
+    return (round(total * canopy_factor() / 1_000_000, 2), covered / (end - start), lit)
 
 
 def measured_day(cfg, now, off_time, key="lux", k=None):
@@ -119,13 +118,13 @@ def dli_today(key="lux", k=None):
     pts = [(ts, v) for ts, v in db.series(key, hours=25) if ts >= since]
     if len(pts) < 2:
         return None
-    total = 0.0                       # micromol/m2 accumulated
+    total = 0.0  # micromol/m2 accumulated
     for (t0, v0), (t1, v1) in zip(pts, pts[1:]):
         dt = t1 - t0
-        if dt <= 0 or dt > 1800:      # gap: don't fill it in
+        if dt <= 0 or dt > 1800:  # gap: don't fill it in
             continue
         total += ((v0 + v1) / 2 / k) * dt
-    return round(total * canopy_factor() / 1_000_000, 2)   # micromol -> mol
+    return round(total * canopy_factor() / 1_000_000, 2)  # micromol -> mol
 
 
 def day_light_summary(key="lux", k=None):
@@ -145,11 +144,11 @@ def day_light_summary(key="lux", k=None):
     lit_s = 0
     for (t0, v0), (t1, _) in zip(pts, pts[1:]):
         dt = t1 - t0
-        if 0 < dt <= 1800 and v0 >= 100:      # 100 lx: light is genuinely on
+        if 0 < dt <= 1800 and v0 >= 100:  # 100 lx: light is genuinely on
             lit_s += dt
     return {
         "dli": dli_today(key, k),
-        "peak_lux": round(peak, 1),                       # sensor plane
+        "peak_lux": round(peak, 1),  # sensor plane
         "peak_ppfd": (round(peak / kk * canopy_factor(), 1) if kk else None),  # canopy
         "canopy_factor": canopy_factor(),
         "lit_minutes": round(lit_s / 60),
@@ -201,7 +200,7 @@ def dli_forecast(cfg, now, on_time, off_time):
     t = start
     while t < off_time:
         pct = light_mod.brightness_for(cfg, t, on_time, off_time)
-        total += (lux_at(pct) * cf / k) * 60.0   # umol/m2 for this minute
+        total += (lux_at(pct) * cf / k) * 60.0  # umol/m2 for this minute
         t += step
     return round(total / 1_000_000, 2)
 
@@ -222,15 +221,24 @@ def setups(cfg=None):
     got = [x for x in (cfg.get("setups") or []) if isinstance(x, dict)]
     if got:
         return got
-    return [{"id": "main", "name": "Main", "light": "main", "lux": "lux",
-             "k": None, "sensors": [], "trays": [],
-             "dli_low": float(cfg.get("dli_target_low") or config.DEFAULTS["dli_target_low"]),
-             "dli_high": float(cfg.get("dli_target_high") or config.DEFAULTS["dli_target_high"])}]
+    return [
+        {
+            "id": "main",
+            "name": "Main",
+            "light": "main",
+            "lux": "lux",
+            "k": None,
+            "sensors": [],
+            "trays": [],
+            "dli_low": float(cfg.get("dli_target_low") or config.DEFAULTS["dli_target_low"]),
+            "dli_high": float(cfg.get("dli_target_high") or config.DEFAULTS["dli_target_high"]),
+        }
+    ]
 
 
 def setup_band(setup):
     lo, hi = float(setup.get("dli_low") or 0), float(setup.get("dli_high") or 0)
-    if not 0 < lo < hi:                   # a hand-edited config.json; keep it usable
+    if not 0 < lo < hi:  # a hand-edited config.json; keep it usable
         lo, hi = config.DEFAULTS["dli_target_low"], config.DEFAULTS["dli_target_high"]
     return lo, hi
 
@@ -243,8 +251,11 @@ def setup_k(setup):
     return k if k > 0 else lux_k()
 
 
-FIXTURE_LABELS = {"pwm": "5V LED panel", "dim": "AC fixture (dim line)",
-                  "kasa": "AC fixture (smart plug)"}
+FIXTURE_LABELS = {
+    "pwm": "5V LED panel",
+    "dim": "AC fixture (dim line)",
+    "kasa": "AC fixture (smart plug)",
+}
 
 
 def light_options(cfg=None):
@@ -259,10 +270,15 @@ def light_options(cfg=None):
             cfg = dict(config.settings)
     main = light_mod.light_backend(cfg)
     opts = [{"value": "main", "label": FIXTURE_LABELS[main]}]
-    if hardware.pwm2 is not None:              # the second light needs its own PWM channel
+    if hardware.pwm2 is not None:  # the second light needs its own PWM channel
         sec = "pwm" if main != "pwm" else "dim"
-        opts.append({"value": "second", "label": FIXTURE_LABELS[sec]
-                     + ("" if cfg.get("light2_on") else " (turned off in Settings)")})
+        opts.append(
+            {
+                "value": "second",
+                "label": FIXTURE_LABELS[sec]
+                + ("" if cfg.get("light2_on") else " (turned off in Settings)"),
+            }
+        )
     return opts
 
 
@@ -270,7 +286,7 @@ def light_label(value, cfg=None):
     for o in light_options(cfg):
         if o["value"] == value:
             return o["label"]
-    if value == "second":               # no second channel wired: still name the fixture
+    if value == "second":  # no second channel wired: still name the fixture
         if cfg is None:
             with config.settings_lock:
                 cfg = dict(config.settings)
@@ -306,7 +322,6 @@ def camera_trays(cfg):
     cam = setup_with(cfg, "camera")
     got = [str(t) for t in ((cam or {}).get("trays") or [])]
     return got or sorted(str(t) for t in (cfg.get("trays") or {}))
-
 
 
 # Which setup a tray or a reading belongs to, for anything that has to say so
@@ -355,6 +370,7 @@ def sensor_setup(cfg, key):
     sts = sensor_setups(cfg, key)
     return sts[0] if sts else None
 
+
 def setup_with(cfg, flag):
     """The setup that has the fan or the camera ("fan" / "camera"), or None."""
     return next((st for st in setups(cfg) if st.get(flag)), None)
@@ -400,11 +416,15 @@ def dli_curves(key, k, tz):
             dt = b - a
             if 0 < dt <= 1800:
                 total += ((va + vb) / 2 / k) * dt
-        out.append([round((min(t1, seg[-1][0] if seg else t0) - t0) / 60),
-                    round(total * cf / 1e6, 2)])
+        out.append(
+            [round((min(t1, seg[-1][0] if seg else t0) - t0) / 60), round(total * cf / 1e6, 2)]
+        )
         return out if seg else []
-    res = {"today": curve(midnight, now.timestamp()),
-           "yesterday": curve(midnight - 86400, midnight)}
+
+    res = {
+        "today": curve(midnight, now.timestamp()),
+        "yesterday": curve(midnight - 86400, midnight),
+    }
     if len(_dli_curve_cache) > 32:
         _dli_curve_cache.clear()
     _dli_curve_cache[ck] = res
@@ -426,17 +446,25 @@ def setup_status(cfg, setup, on_time, off_time, tz):
         day["forecast_remaining"] = rest[0] if rest and rest[1] >= 0.9 else None
         day["curve"] = dli_curves(key, k, tz)
     lo, hi = setup_band(setup)
-    return {"id": setup.get("id"), "name": setup.get("name"),
-            "light": setup.get("light", ""), "lux": key, "k": k,
-            "light_label": light_label(setup.get("light", ""), cfg) if setup.get("light") else "",
-            "sensors": list(setup.get("sensors") or []),
-            "trays": [str(t) for t in (setup.get("trays") or [])],
-            "fan": bool(setup.get("fan")), "camera": bool(setup.get("camera")),
-            "reservoir": bool(setup.get("reservoir")), "heat": bool(setup.get("heat")),
-            "on": on_time.isoformat() if on_time else None,
-            "off": off_time.isoformat() if off_time else None,
-            "band": [lo, hi], "day": day,
-            "plan": light_plan(cfg, on_time, off_time, setup)}
+    return {
+        "id": setup.get("id"),
+        "name": setup.get("name"),
+        "light": setup.get("light", ""),
+        "lux": key,
+        "k": k,
+        "light_label": light_label(setup.get("light", ""), cfg) if setup.get("light") else "",
+        "sensors": list(setup.get("sensors") or []),
+        "trays": [str(t) for t in (setup.get("trays") or [])],
+        "fan": bool(setup.get("fan")),
+        "camera": bool(setup.get("camera")),
+        "reservoir": bool(setup.get("reservoir")),
+        "heat": bool(setup.get("heat")),
+        "on": on_time.isoformat() if on_time else None,
+        "off": off_time.isoformat() if off_time else None,
+        "band": [lo, hi],
+        "day": day,
+        "plan": light_plan(cfg, on_time, off_time, setup),
+    }
 
 
 def light_plan(cfg, on_time, off_time, setup=None):
@@ -452,34 +480,56 @@ def light_plan(cfg, on_time, off_time, setup=None):
     setup = setup or setups(cfg)[0]
     key, k = setup.get("lux") or "", setup_k(setup)
     if not key:
-        return {"status": "no_sensor", "full_day": None, "day": None,
-                "advice": [f"{setup.get('name', 'This setup')} has no light sensor "
-                           "assigned, so its daily light is not measured."]}
+        return {
+            "status": "no_sensor",
+            "full_day": None,
+            "day": None,
+            "advice": [
+                f"{setup.get('name', 'This setup')} has no light sensor "
+                "assigned, so its daily light is not measured."
+            ],
+        }
     m = measured_day(cfg, now, off_time, key, k)
     if m is None:
         so_far = dli_today(key, k)
-        return {"status": "pending", "full_day": so_far or 0.0, "day": None,
-                "advice": ["Waiting for a full day measured by the light "
-                           "sensor; the first one completes tonight."]}
+        return {
+            "status": "pending",
+            "full_day": so_far or 0.0,
+            "day": None,
+            "advice": [
+                "Waiting for a full day measured by the light "
+                "sensor; the first one completes tonight."
+            ],
+        }
     full, lit_h = m["mol"], m["lit_hours"]
     DLI_TARGET_LOW, DLI_TARGET_HIGH = setup_band(setup)
     # average light per lit hour, measured: what an hour more or less is worth
     per_hour = full / lit_h if lit_h > 0 else 0.0
-    mx = float(cfg.get("light2_bright", 100) if setup.get("light") == "second"
-               else cfg.get("max_bright", 100))
-    plan = {"full_day": full, "per_hour": round(per_hour, 2),
-            "hours": round(lit_h, 1), "status": "ok", "day": m["day"],
-            "advice": [f"Measured by the light sensor {m['day']}: {full:.1f} mol "
-                       f"over {lit_h:.1f}h of light."]}
+    mx = float(
+        cfg.get("light2_bright", 100)
+        if setup.get("light") == "second"
+        else cfg.get("max_bright", 100)
+    )
+    plan = {
+        "full_day": full,
+        "per_hour": round(per_hour, 2),
+        "hours": round(lit_h, 1),
+        "status": "ok",
+        "day": m["day"],
+        "advice": [
+            f"Measured by the light sensor {m['day']}: {full:.1f} mol over {lit_h:.1f}h of light."
+        ],
+    }
     if full < DLI_TARGET_LOW:
         plan["status"] = "low"
         deficit = DLI_TARGET_LOW - full
         if per_hour > 0:
             add_h = deficit / per_hour
             plan["advice"].append(
-                f"About {add_h:.1f}h more light, or brighter, to reach "
-                f"{DLI_TARGET_LOW:g} mol." if lit_h + add_h <= 18 else
-                "Even an 18h day would not close the gap at this intensity.")
+                f"About {add_h:.1f}h more light, or brighter, to reach {DLI_TARGET_LOW:g} mol."
+                if lit_h + add_h <= 18
+                else "Even an 18h day would not close the gap at this intensity."
+            )
     elif full > DLI_TARGET_HIGH:
         plan["status"] = "high"
         excess = full - DLI_TARGET_HIGH
@@ -487,8 +537,10 @@ def light_plan(cfg, on_time, off_time, setup=None):
             plan["advice"].append(
                 f"About {excess / per_hour:.1f}h more light than seedlings need; "
                 f"shorten the photoperiod or dim to roughly "
-                f"{mx * DLI_TARGET_HIGH / full:.0f}% max.")
+                f"{mx * DLI_TARGET_HIGH / full:.0f}% max."
+            )
     else:
         plan["advice"].append(
-            f"Inside the {DLI_TARGET_LOW:g}-{DLI_TARGET_HIGH:g} mol seedling target.")
+            f"Inside the {DLI_TARGET_LOW:g}-{DLI_TARGET_HIGH:g} mol seedling target."
+        )
     return plan

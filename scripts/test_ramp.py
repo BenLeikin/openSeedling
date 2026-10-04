@@ -14,27 +14,30 @@ import time
 
 # refuse to run alongside the service
 if subprocess.run(["systemctl", "is-active", "--quiet", "growlight"]).returncode == 0:
-    sys.exit("growlight service is running. Stop it first:\n"
-             "  sudo systemctl stop growlight")
+    sys.exit("growlight service is running. Stop it first:\n  sudo systemctl stop growlight")
 
 from rpi_hardware_pwm import HardwarePWM
 
-PWM_FREQ   = 1000
-HALF_SECS  = 15          # 15 up + 15 down = 30 total
-STEP_SECS  = 0.1
+PWM_FREQ = 1000
+HALF_SECS = 15  # 15 up + 15 down = 30 total
+STEP_SECS = 0.1
 
 try:
     pwm = HardwarePWM(pwm_channel=0, hz=PWM_FREQ, chip=0)
     pwm.start(0)
 except Exception as e:
-    sys.exit(f"Hardware PWM unavailable ({e}). Is the dtoverlay in place, "
-             f"and did you reboot after setup?")
+    sys.exit(
+        f"Hardware PWM unavailable ({e}). Is the dtoverlay in place, "
+        f"and did you reboot after setup?"
+    )
 
 steps = int(HALF_SECS / STEP_SECS)
+
 
 def show(pct):
     bar = "#" * int(pct / 2)
     print(f"\r{pct:5.1f}% |{bar:<50}|", end="", flush=True)
+
 
 print("Ramping up (15s)...")
 try:

@@ -21,7 +21,7 @@ import json
 import urllib.request
 from pathlib import Path
 
-from applog import log     # levelled logging; see applog.py
+from applog import log  # levelled logging; see applog.py
 
 CONFIG_PATH = Path(__file__).with_name("config.json")
 
@@ -49,9 +49,9 @@ def send(title, message, priority="default", tags=""):
     headers = {"Title": title, "Priority": priority}
     if tags:
         headers["Tags"] = tags
-    req = urllib.request.Request(f"{server}/{topic}",
-                                 data=message.encode("utf-8"),
-                                 headers=headers, method="POST")
+    req = urllib.request.Request(
+        f"{server}/{topic}", data=message.encode("utf-8"), headers=headers, method="POST"
+    )
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
             return 200 <= r.status < 300
@@ -62,6 +62,7 @@ def send(title, message, priority="default", tags=""):
 
 if __name__ == "__main__":
     import sys
+
     msg = sys.argv[1] if len(sys.argv) > 1 else "Test from the grow controller."
     if not enabled():
         print('No "ntfy_topic" in config.json -- nothing to send to.')
