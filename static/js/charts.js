@@ -1,15 +1,22 @@
 // openSeedling dashboard: Sensor readouts and units, and the chart grid.
-// One of several plain scripts loaded in order by index.html; they share one
-// global scope (the split of the former app.js, 4 Oct). A function used at
-// load time must be defined in this file or an earlier one.
+// An ES module: what it uses from the others is imported at the top, and what
+// it offers is exported. Another module cannot assign one of its variables
+// directly; it calls the set_<name>() exported at the bottom. Code that runs
+// at page load is in start(), which main.js calls in a fixed order.
 // ---------------- sensors: readout, chart, overlay ----------------
-let sensorData={};
-let sampleMin=5, capMin=30, capOn=false, camHealth=null, presTrend=null, lightMetrics=null;
+import { S, agoStr } from './light.js';
+import { inSetup, trayInSetup } from './setups.js';
+import { set_playerFps } from './photos.js';
+import { esc } from './trays.js';
+import { dliBand, drawGrid, grid, refresh } from './grid.js';
+
+export let sensorData={};
+export let sampleMin=5, capMin=30, capOn=false, camHealth=null, presTrend=null, lightMetrics=null;
 // Canopy comes from photos, which are taken only while the camera's light is
 // on: stale only while due, counted from when they became due (null = not due,
 // e.g. at night)
-let canopyDue=null;
-function readingStale(key, ts){
+export let canopyDue=null;
+export function readingStale(key, ts){
   if(!ts)return false;
   const now=Date.now()/1000;
   if(key.startsWith('canopy:'))
@@ -17,35 +24,35 @@ function readingStale(key, ts){
   if(key.startsWith('heat:'))return false;   // logged only while Auto runs
   return now-ts > 3*sampleMin*60;
 }
-let probeCal={}, probeNames={}, probeDefaultCal=null;   // per-tray anchors, labels, fallback
-let probeFlags={};             // per-tray below_wet/above_dry from the server
-let filteredVals={};           // sensor -> transient-filtered value
-function probePct(c, v){
+export let probeCal={}, probeNames={}, probeDefaultCal=null;   // per-tray anchors, labels, fallback
+export let probeFlags={};             // per-tray below_wet/above_dry from the server
+export let filteredVals={};           // sensor -> transient-filtered value
+export function probePct(c, v){
   if(!c || c.wet==null || c.dry==null || (c.dry-c.wet)<0.05) return null;
   return Math.max(0, Math.min(100, 100*(c.dry-v)/(c.dry-c.wet)));
 }
-function probeMoisture(t, v){
+export function probeMoisture(t, v){
   const p=probePct(probeCal[t], v);
   if(p!=null) return {pct:p, approx:false};
   const d=probePct(probeDefaultCal, v);
   return d==null ? null : {pct:d, approx:true};
 }
-let chartHours=24;
+export let chartHours=24;
 
-let units='imperial';
-function isMetric(){return units==='metric';}
-function c2f(c){return c*9/5+32;}
+export let units='imperial';
+export function isMetric(){return units==='metric';}
+export function c2f(c){return c*9/5+32;}
 // display helpers: storage stays Celsius / hPa, only presentation switches
-function tDisp(c){return isMetric()?c:c*9/5+32;}
-function tUnit(){return isMetric()?'\u00b0C':'\u00b0F';}
-function tFromF(f){return isMetric()?(f-32)*5/9:f;}   // an F-stored setting, shown
-function tToF(v){return isMetric()?v*9/5+32:v;}       // ...and read back
-function pDisp(hpa){return isMetric()?hpa:hpa*0.0295299830714;}
-function pUnit(){return isMetric()?'hPa':'inHg';}
-function pDec(){return isMetric()?0:2;}
+export function tDisp(c){return isMetric()?c:c*9/5+32;}
+export function tUnit(){return isMetric()?'\u00b0C':'\u00b0F';}
+export function tFromF(f){return isMetric()?(f-32)*5/9:f;}   // an F-stored setting, shown
+export function tToF(v){return isMetric()?v*9/5+32:v;}       // ...and read back
+export function pDisp(hpa){return isMetric()?hpa:hpa*0.0295299830714;}
+export function pUnit(){return isMetric()?'hPa':'inHg';}
+export function pDec(){return isMetric()?0:2;}
 // key -> {group, label, value, unit}
 
-function sensorMeta(key, val){
+export function sensorMeta(key, val){
   if(key==='temp:air')   return {group:'Environment', label:'Air',      value:tDisp(val).toFixed(1), unit:tUnit()};
   if(key==='humidity')   return {group:'Environment', label:'Humidity', value:val.toFixed(0),       unit:'%'};
   if(key==='lux')        return {group:'Environment', label:'Light',    value:Math.round(val).toLocaleString(), unit:'lx'};
@@ -94,14 +101,14 @@ function sensorMeta(key, val){
 // Per-cell camera readings, laid out to match the physical trays. Canopy and
 // surface dryness live in the same square because they describe the same cell;
 // separate wrapped lists made it impossible to see which cell was which.
-function sensorLabel(key){
+export function sensorLabel(key){
   const m=sensorMeta(key, 0);
   return m ? m.label : key;
 }
 // Sensor health, contradictions and post-fill verdicts. Collapsed by default:
 // when everything is fine this is one line, and it only demands attention when
 // something is actually wrong.
-function renderQuality(j){
+export function renderQuality(j){
   const wrap=document.getElementById('qualitywrap');
   const body=document.getElementById('qbody');
   const sum=document.getElementById('qsummary');
@@ -135,8 +142,8 @@ function renderQuality(j){
   body.innerHTML=h;
 }
 
-var trayLabels={};
-function renderSensors(j){
+export var trayLabels={};
+export function renderSensors(j){
   sensorData=j.sensors||{};
   probeCal=(j.settings&&j.settings.probe_cal)||{};
   probeNames=(j.settings&&j.settings.probe_names)||{};
@@ -157,7 +164,7 @@ function renderSensors(j){
   if(j.settings){
     sampleMin=+j.settings.sample_interval_min||5;
     capMin=+j.settings.capture_interval_min||30;
-    playerFps=+j.settings.player_fps||4;
+    set_playerFps(+j.settings.player_fps||4);
     capOn=!!j.settings.capture_enabled;
   }
   if('canopy_due_since' in j)canopyDue=j.canopy_due_since;
@@ -239,7 +246,7 @@ function renderSensors(j){
   if(grid)drawGrid();   // refresh per-cell overlay
 }
 // ---- chart grid: every sensor visible at once, grouped by section ----
-const CHART_SECTIONS=[
+export const CHART_SECTIONS=[
   // ordered by how often they drive a decision, not by sensor type
   {id:'soil',   title:'Soil',
    match:k=>k.startsWith('temp:soil')||k.startsWith('probe:')||k.startsWith('heat:')},
@@ -249,21 +256,21 @@ const CHART_SECTIONS=[
   {id:'device', title:'Device',           match:k=>k.startsWith('sys:')},
   {id:'other',  title:'Other',            match:k=>true},
 ];
-let seriesData={}, chartPlots={}, soilTempHigh=85, soilTempLow=80;
-let humHigh=60, humLow=40;
+export let seriesData={}, chartPlots={}, soilTempHigh=85, soilTempLow=80;
+export let humHigh=60, humLow=40;
 // lux and PPFD are the same measurement in two units, so the lux card names
 // both rather than the app drawing two identical charts
-function ppfdFromLux(lx){
+export function ppfdFromLux(lx){
   const k=Number(S&&S.settings&&S.settings.lux_to_ppfd_k)||0;
   const cf=Number(S&&S.settings&&S.settings.canopy_factor)||1;
   return k>0 ? lx*cf/k : null;
 }
-function chartHeadUnit(key){
+export function chartHeadUnit(key){
   if(key!=='lux')return chartUnitFor(key);
   return ppfdFromLux(1)==null ? 'lx' : 'lx \u00b7 \u00b5mol/m\u00b2/s';
 }
 
-function chartUnitFor(s){
+export function chartUnitFor(s){
   if(s.startsWith('temp:'))return tUnit();
   if(s.startsWith('humidity')||s.startsWith('canopy:')||s.startsWith('heat:'))return '%';
   if(s.startsWith('sys:'))return 'MB';
@@ -274,15 +281,15 @@ function chartUnitFor(s){
   if(s==='ppfd')return '\u00b5mol/m\u00b2/s';
   return '';
 }
-function convertFor(s){
+export function convertFor(s){
   if(s.startsWith('temp:'))return v=>tDisp(v);
   if(s==='pressure')return v=>pDisp(v);
   if(s.startsWith('probe:')){const t=s.slice(6);
     return v=>{const m=probeMoisture(t,v);return m==null?v:m.pct;};}
   return v=>v;
 }
-let lastChartLoad=0, lastHostLoad=0;
-async function loadChart(){
+export let lastChartLoad=0, lastHostLoad=0;
+export async function loadChart(){
   lastChartLoad=Date.now();
   const info=document.getElementById('chartinfo');
   if(info)info.textContent='loading\u2026';
@@ -294,8 +301,8 @@ async function loadChart(){
     renderChartGrid();
   }catch(e){if(info)info.textContent='charts unavailable';}
 }
-let expandedCharts=new Set();
-function renderChartGrid(){
+export let expandedCharts=new Set();
+export function renderChartGrid(){
   const grid=document.getElementById('chartgrid');
   if(!grid)return;
   // remember which cards are open: the grid is rebuilt on every reload
@@ -359,7 +366,7 @@ function renderChartGrid(){
 // and rows balanced: 4 charts that fit 3 across go 2 + 2, not 3 + 1.
 // The column count per section comes from the width available and the
 // smallest readable chart (340 px for Soil, 260 px for the rest).
-function layoutChartRows(){
+export function layoutChartRows(){
   document.querySelectorAll('#chartgrid .cgrid').forEach(g=>{
     const cards=[...g.children].filter(c=>c.classList.contains('ccard')&&!c.classList.contains('expanded'));
     const n=cards.length; if(!n)return;
@@ -370,8 +377,8 @@ function layoutChartRows(){
     g.style.setProperty('--cols',cols);
   });
 }
-var rowRO=('ResizeObserver' in window)?new ResizeObserver(()=>requestAnimationFrame(layoutChartRows)):null;
-var chartRO=('ResizeObserver' in window)?new ResizeObserver(entries=>{
+export var rowRO=('ResizeObserver' in window)?new ResizeObserver(()=>requestAnimationFrame(layoutChartRows)):null;
+export var chartRO=('ResizeObserver' in window)?new ResizeObserver(entries=>{
   for(const e of entries){
     const svg=e.target, vb=(svg.getAttribute('viewBox')||'').split(' ');
     const w=Math.round(e.contentRect.width), h=Math.round(e.contentRect.height);
@@ -380,9 +387,9 @@ var chartRO=('ResizeObserver' in window)?new ResizeObserver(entries=>{
     if(key)requestAnimationFrame(()=>drawMini(key));
   }
 }):null;
-function cssId(k){return k.replace(/[^a-zA-Z0-9]/g,'_');}
+export function cssId(k){return k.replace(/[^a-zA-Z0-9]/g,'_');}
 // round-number ticks between a and b, about n of them
-function niceTicks(a,b,n){
+export function niceTicks(a,b,n){
   const span=Math.max(1e-9,b-a), raw=span/Math.max(1,n);
   const mag=Math.pow(10,Math.floor(Math.log10(raw))), f=raw/mag;
   const step=(f<1.5?1:f<3?2:f<7?5:10)*mag;
@@ -392,7 +399,7 @@ function niceTicks(a,b,n){
 }
 // time ticks at round local hours (or midnights for long ranges), with labels
 // that never collide
-function timeTicks(x0,x1,sx,top,bot,W,FS,big){
+export function timeTicks(x0,x1,sx,top,bot,W,FS,big){
   const span=(x1-x0)/3600;
   const hrs=span<=8?1:span<=30?(big?2:3):span<=80?12:span<=200?24:span<=400?48:120;
   let out='', lastRight=-1e9;
@@ -415,7 +422,7 @@ function timeTicks(x0,x1,sx,top,bot,W,FS,big){
   return out;
 }
 // shaded lights-off hours, from today's schedule repeated over the window
-function nightBands(x0,x1,sx,top,bot){
+export function nightBands(x0,x1,sx,top,bot){
   if(!S||!S.on||!S.off||(x1-x0)>8*86400)return '';
   const minOf=ms=>{const d=new Date(ms);return d.getHours()*60+d.getMinutes();};
   const onM=minOf(+S.on), offM=minOf(+S.off);
@@ -431,7 +438,7 @@ function nightBands(x0,x1,sx,top,bot){
   }
   return out;
 }
-function drawMini(key){
+export function drawMini(key){
   const svg=document.getElementById('cv-'+cssId(key));
   const stat=document.getElementById('cs-'+cssId(key));
   if(!svg)return;
@@ -612,7 +619,7 @@ function drawMini(key){
     gap:gapLimit,
     fmt:t=>new Date(t*1000).toLocaleString([],{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})};
 }
-function chartMove(e){
+export function chartMove(e){
   const svg=e.target.closest('svg.cmini');
   if(!svg)return;
   const key=Object.keys(chartPlots).find(k=>'cv-'+cssId(k)===svg.id);
@@ -635,7 +642,7 @@ function chartMove(e){
     tip.style.display='';tip.style.left=(e.clientX+12)+'px';tip.style.top=(e.clientY-32)+'px';
   }else if(tip){tip.style.display='none';}
 }
-function showCross(k, t, own){
+export function showCross(k, t, own){
   const plot=chartPlots[k], svg=document.getElementById('cv-'+cssId(k));
   if(!plot||!svg)return;
   const vl=svg.querySelector('.hvl'),dot=svg.querySelector('.hdot'),lbl=svg.querySelector('.hlbl');
@@ -661,19 +668,19 @@ function showCross(k, t, own){
   rect.setAttribute('width',cw); rect.setAttribute('height',ch);
   txt.setAttribute('x',bx+5); txt.setAttribute('y',by+ch-(plot.big?7:5));
 }
-function chartLeave(){
+export function chartLeave(){
   document.querySelectorAll('svg.cmini .hvl, svg.cmini .hdot, svg.cmini .hlbl')
     .forEach(el=>el.style.display='none');
   const tip=document.getElementById('charttip');
   if(tip)tip.style.display='none';
 }
-function floatLabel(v){
+export function floatLabel(v){
   return v===null ? 'no sensor' : (v>=1 ? 'not full' : 'full');
 }
-let pumpActive=false;   // float state only changes while a pump runs; the 15s
+export let pumpActive=false;   // float state only changes while a pump runs; the 15s
                         // status poll covers the idle case, so don't hammer
                         // /api/float at 1.5s from every open tab
-async function pollFloat(){
+export async function pollFloat(){
   if(!pumpActive)return;
   try{
     const r=await fetch('/api/float');
@@ -685,7 +692,7 @@ async function pollFloat(){
     }
   }catch(e){}
 }
-function renderWater(j){
+export function renderWater(j){
   const w=j.water;const box=document.getElementById('waterctl');
   if(!w||!w.trays){box.style.display='none';return;}
   box.style.display='';
@@ -796,10 +803,10 @@ function renderWater(j){
     }
   }
 }
-let lightBackend='pwm';  // 'kasa' means on/off only: no slider, no sweep
-let autoWaterOn=false;   // whether this tab's pump trays are all armed
-let autoWaterTrays=[];   // the pump trays the Arm switch covers on this tab
-async function toggleAutoWater(){
+export let lightBackend='pwm';  // 'kasa' means on/off only: no slider, no sweep
+export let autoWaterOn=false;   // whether this tab's pump trays are all armed
+export let autoWaterTrays=[];   // the pump trays the Arm switch covers on this tab
+export async function toggleAutoWater(){
   const info=document.getElementById('autowinfo');
   const want=!autoWaterOn;
   if(want && !confirm('Arm auto-watering? The controller will fill a tray on its '
@@ -815,7 +822,7 @@ async function toggleAutoWater(){
   refresh();
 }
 
-async function waterAct(tray, body, msg){
+export async function waterAct(tray, body, msg){
   const info=document.getElementById('pumpinfo'+tray);
   if(info)info.textContent=msg;
   pumpActive=true;   // watch the float live from the moment the run starts
@@ -829,7 +836,7 @@ async function waterAct(tray, body, msg){
     // progress/result arrives via the status poll (running/last) + live float
   }catch(e){if(info)info.textContent='request failed';}
 }
-async function calibrateProbe(tray, point, force, volts){
+export async function calibrateProbe(tray, point, force, volts){
   const info=document.getElementById('probecalinfo');
   if(info){
     info.className='';
@@ -861,7 +868,7 @@ async function calibrateProbe(tray, point, force, volts){
           +`data-volts="${j.volts}">store ${j.volts}V anyway</button>` : '');
   }catch(e){if(info)info.textContent='calibration failed';}
 }
-async function checkTempComp(tray, apply){
+export async function checkTempComp(tray, apply){
   const info=document.getElementById('probetcinfo');
   if(info)info.textContent='analyzing\u2026';
   try{
@@ -881,3 +888,10 @@ async function checkTempComp(tray, apply){
     if(a)a.addEventListener('click',e=>{e.preventDefault();checkTempComp(tray,true);});
   }catch(e){if(info)info.textContent='request failed';}
 }
+
+// setters: other modules cannot assign an imported binding
+export function set_camHealth(v){ camHealth=v; return v; }
+export function set_chartHours(v){ chartHours=v; return v; }
+export function set_lastHostLoad(v){ lastHostLoad=v; return v; }
+export function set_lightBackend(v){ lightBackend=v; return v; }
+export function set_units(v){ units=v; return v; }

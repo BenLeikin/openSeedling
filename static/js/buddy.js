@@ -1,32 +1,35 @@
 // openSeedling dashboard: Little Buddy, the wandering seedling.
-// One of several plain scripts loaded in order by index.html; they share one
-// global scope (the split of the former app.js, 4 Oct). A function used at
-// load time must be defined in this file or an earlier one.
+// An ES module: what it uses from the others is imported at the top, and what
+// it offers is exported. Another module cannot assign one of its variables
+// directly; it calls the set_<name>() exported at the bottom. Code that runs
+// at page load is in start(), which main.js calls in a fixed order.
 // ---- the wandering seedling ----
 // Every half minute a small seedling crosses one card, entering and leaving
 // behind its edge. It sits at z-index:-1 inside the card, so it walks BEHIND
 // the chips and buttons rather than over them.
-let buddyOn=true;        // mirrors the "little buddy" setting
-let buddyPick='sprout';  // 'sprout' | 'pepper' | 'cat' | 'random'
-function buddyModel(){
+
+
+export let buddyOn=true;        // mirrors the "little buddy" setting
+export let buddyPick='sprout';  // 'sprout' | 'pepper' | 'cat' | 'random'
+export function buddyModel(){
   if(buddyPick!=='random')return buddyPick in BUDDY_SPRITES ? buddyPick : 'sprout';
   const keys=Object.keys(BUDDY_SPRITES);
   return keys[Math.floor(Math.random()*keys.length)];
 }
-const WALK_EVERY_MS=30000;
+export const WALK_EVERY_MS=30000;
 // walk in, stop and wave, walk out. The pause fractions must match the
 // walk-across keyframes in the stylesheet (36% and 64%).
-const WALK_DUR_MS=11000, PAUSE_START=0.36, PAUSE_END=0.64;
-let walkTimer=null;
+export const WALK_DUR_MS=11000, PAUSE_START=0.36, PAUSE_END=0.64;
+export let walkTimer=null;
 
 // Three characters, picked per outing. Each returns the SVG for one walker;
 // they share the walk cycle, so a new one is a sprite function plus a case
 // here, nothing more. The parts that animate carry fixed class names:
 // .legs/.leg-a/.leg-b step, .body bobs, .arm waves during the pause.
-const BUDDY_MODELS={sprout:'Potted sprout', pepper:'Chile pepper', cat:'Avey',
+export const BUDDY_MODELS={sprout:'Potted sprout', pepper:'Chile pepper', cat:'Avey',
   snail:'Snail', ladybug:'Ladybug', drop:'Raindrop', bee:'Bee', gnome:'Garden gnome'};
 
-function buddySprout(){
+export function buddySprout(){
   return `<g class="legs">
       <line class="leg-a" x1="15" y1="26" x2="11" y2="33" style="transform-origin:15px 26px"/>
       <line class="leg-b" x1="15" y1="26" x2="19" y2="33" style="transform-origin:15px 26px"/>
@@ -46,7 +49,7 @@ function buddySprout(){
     </g>`;
 }
 
-function buddyPepper(){
+export function buddyPepper(){
   return `<g class="legs">
       <line class="leg-a" x1="15" y1="30" x2="11.5" y2="35" style="transform-origin:15px 30px"/>
       <line class="leg-b" x1="15" y1="30" x2="18.5" y2="35" style="transform-origin:15px 30px"/>
@@ -64,7 +67,7 @@ function buddyPepper(){
     </g>`;
 }
 
-function buddyCat(){
+export function buddyCat(){
   // side profile: a cat walking across should look like it is going somewhere.
   // The tail takes the place of the wave during the pause.
   return `<g class="legs">
@@ -88,7 +91,7 @@ function buddyCat(){
     </g>`;
 }
 
-function buddySnail(){
+export function buddySnail(){
   // the slow one: SNAIL_DUR overrides the shared duration so it actually
   // reads as a snail rather than a shell on a normal walk cycle
   return `<g class="legs">
@@ -108,7 +111,7 @@ function buddySnail(){
     </g>`;
 }
 
-function buddyLadybug(){
+export function buddyLadybug(){
   // In flight a ladybug lifts its two shell halves (the elytra) up and out,
   // and the thin wings folded underneath do the flapping. So the shell is
   // drawn as two halves hinged behind the head, with the body and wings
@@ -145,8 +148,7 @@ function buddyLadybug(){
     </g>`;
 }
 
-
-function buddyDrop(){
+export function buddyDrop(){
   return `<g class="legs">
       <line class="leg-a drop-leg" x1="12.5" y1="27" x2="10" y2="33.5" style="transform-origin:12.5px 27px"/>
       <line class="leg-b drop-leg" x1="17.5" y1="27" x2="20" y2="33.5" style="transform-origin:17.5px 27px"/>
@@ -163,7 +165,7 @@ function buddyDrop(){
     </g>`;
 }
 
-function buddyBee(){
+export function buddyBee(){
   // a flyer: no legs, and two wings that flap about their own roots, mirrored
   return `<g class="body">
       <ellipse class="wing wing-l" cx="9.5" cy="14" rx="5.5" ry="3.6" style="transform-origin:13.5px 15.5px"/>
@@ -180,8 +182,7 @@ function buddyBee(){
     </g>`;
 }
 
-
-function buddyGnome(){
+export function buddyGnome(){
   return `<g class="legs">
       <line class="leg-a boot" x1="12.5" y1="28" x2="10.5" y2="33.5" style="transform-origin:12.5px 28px"/>
       <line class="leg-b boot" x1="17.5" y1="28" x2="19.5" y2="33.5" style="transform-origin:17.5px 28px"/>
@@ -200,25 +201,25 @@ function buddyGnome(){
     </g>`;
 }
 
-const BUDDY_SPRITES={sprout:buddySprout, pepper:buddyPepper, cat:buddyCat,
+export const BUDDY_SPRITES={sprout:buddySprout, pepper:buddyPepper, cat:buddyCat,
                      snail:buddySnail, ladybug:buddyLadybug, drop:buddyDrop,
                      bee:buddyBee, gnome:buddyGnome};
 // the snail walks at its own pace; everything else shares the standard cycle
-const BUDDY_DURATION={snail:20000};
+export const BUDDY_DURATION={snail:20000};
 // Sprites drawn in profile have a natural facing. The walk flips them with
 // scaleX so they always face the way they are travelling; a sprite drawn
 // facing LEFT needs the opposite sign from one drawn facing right, or it
 // moonwalks in one direction. Front-facing sprites are symmetric enough that
 // either sign looks correct.
-const BUDDY_FACES_LEFT={cat:true, snail:true};
+export const BUDDY_FACES_LEFT={cat:true, snail:true};
 // Characters that would naturally fly cruise through the card instead of
 // walking along its floor, and at the pause they loop the loop instead of
 // waving. The raindrop falls rather than flies, so it keeps walking.
-const BUDDY_FLIES={bee:true, ladybug:true};
+export const BUDDY_FLIES={bee:true, ladybug:true};
 // headroom a loop needs above the flyer: two radii plus its own height
-const LOOP_HEADROOM=76;
+export const LOOP_HEADROOM=76;
 
-function walkerSvg(model){
+export function walkerSvg(model){
   const draw=BUDDY_SPRITES[model]||buddySprout;
   const name=model in BUDDY_SPRITES ? model : 'sprout';
   // flyers get an inner group so the hover and the loop can move the whole
@@ -230,7 +231,7 @@ function walkerSvg(model){
   return `<svg class="walker buddy-${name}${BUDDY_FLIES[name]?' flying':''}" viewBox="0 0 30 36" aria-hidden="true" focusable="false">${inner}</svg>`;
 }
 
-function walkOnce(){
+export function walkOnce(){
   // never interrupt: one seedling at a time, and none while the tab is hidden
   if(!buddyOn || document.hidden || document.querySelector('.walkwrap'))return;
   const cards=[...document.querySelectorAll('.card')].filter(c=>{
@@ -274,9 +275,13 @@ function walkOnce(){
   }, dur+400);
 }
 
-function startWalker(){
+export function startWalker(){
   if(walkTimer)return;
   if(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches)
     return;                       // no ambient motion for anyone who opted out
   walkTimer=setInterval(walkOnce, WALK_EVERY_MS);
 }
+
+// setters: other modules cannot assign an imported binding
+export function set_buddyOn(v){ buddyOn=v; return v; }
+export function set_buddyPick(v){ buddyPick=v; return v; }

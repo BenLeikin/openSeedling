@@ -56,7 +56,7 @@ APP_MODULES = ("growlight.py", "config.py", "hardware.py", "light.py", "setups.p
 def page_js():
     """The dashboard's scripts (static/js/*.js, loaded in this order by the
     page), joined: what static/app.js was before the 4 Oct split."""
-    order = re.findall(r"filename='js/(\w+\.js)'", (APP / "templates" / "index.html").read_text())
+    order = re.findall(r"from '\./(\w+\.js)'", (APP / "static" / "js" / "main.js").read_text())
     return "\n".join((APP / "static" / "js" / f).read_text() for f in order)
 
 
@@ -767,7 +767,7 @@ def _timelapse_sharp():
     js_ = page_js()
     check(config.DEFAULTS.get("video_fps") == 8 and config.DEFAULTS.get("player_fps") == 4
           and fr == "8" and "},Math.round(1000/Math.max(0.5,playerFps)));" in js_
-          and "playerFps=+j.settings.player_fps||4;" in js_ and "timelapse_speed_pct" not in js_,
+          and ("playerFps=+j.settings.player_fps||4;" in js_ or "set_playerFps(+j.settings.player_fps||4);" in js_) and "timelapse_speed_pct" not in js_,
           f"the player and the video have their own speeds: video {fr} frames/s, player 4")
     src_c = (APP / "config.py").read_text()
     mig = src_c[src_c.index('if "timelapse_speed_pct" in settings:'):src_c.index("def save_config():")]
@@ -1367,10 +1367,10 @@ def _unsaved_settings():
     from the live readings) as soon as its field lost focus."""
     js = page_js()
     fh = re.search(r"function formHolds\(key, cfg\)\{[\s\S]*?\n\}", js)
-    ff = re.search(r"function fillForm\(cfg\)\{[\s\S]*?(?=\nlet frames=)", js)
+    ff = re.search(r"function fillForm\(cfg\)\{[\s\S]*?(?=\n(?:export )?let frames=)", js)
     sub2 = re.search(r"getElementById\('cfgform'\)\.addEventListener\('submit'[\s\S]*?\n\}\);", js)
     check(sub2 and "if(setupDirty&&setupDraft)body.setups=setupDraft;" in sub2.group(0)
-          and "setupDirty=false;" in sub2.group(0) and "if(k==='setups')return 'Setups:';" in js,
+          and ("setupDirty=false;" in sub2.group(0) or "set_setupDirty(false);" in sub2.group(0)) and "if(k==='setups')return 'Setups:';" in js,
           "the main Save also saves pending Setups edits (a daily light target changed there was "
           "silently dropped before)")
     check("f.addEventListener('input',markDirty);f.addEventListener('change',markDirty);" in js
@@ -1865,7 +1865,7 @@ def _charts():
     js = page_js()
     html = (APP / "templates" / "index.html").read_text()
     css = (APP / "static" / "style.css").read_text()
-    dm = re.search(r"function drawMini\(key\)\{[\s\S]*?\n\}\nfunction chartMove", js)
+    dm = re.search(r"function drawMini\(key\)\{[\s\S]*?\n\}\n(?:export )?function chartMove", js)
     body = dm.group(0) if dm else ""
     check("h+=nightBands(x0,x1,sx,P,H-B);" in body and "niceTicks(y0,y1,big?5:3)" in body
           and "h+=timeTicks(x0,x1,sx,P,H-B,W,FS,big);" in body and 'class="cyax"' in body
@@ -2344,6 +2344,30 @@ def _refuses(fn, value):
     except Exception:
         return True
 
+
+def _page_modules():
+    """5 Oct: the dashboard's scripts are ES modules with explicit imports,
+    entered through static/js/main.js."""
+    page = c.get("/").get_data(as_text=True)
+    jsdir = APP / "static" / "js"
+    mods = sorted(p.name for p in jsdir.glob("*.js") if p.name != "main.js")
+    main = (jsdir / "main.js").read_text()
+    imported = re.findall(r"from '\./(\w+\.js)'", main)
+    no_export = [m for m in mods if "export " not in (jsdir / m).read_text()]
+    check(re.search(r'<script type="module" src="[^"]*js/main\.js', page) is not None
+          and sorted(imported) == mods and not no_export
+          and "if (typeof m.start === 'function') m.start();" in main,
+          f"the page loads one module, main.js, which imports every dashboard module and "
+          f"starts them in order ({len(mods)} modules)")
+    r = c.get("/static/js/main.js")
+    check(r.headers.get("Cache-Control") == "no-cache",
+          "the dashboard's modules are revalidated on every load, so an update is never "
+          "half-applied in a browser")
+    cfg = (APP / "eslint.config.mjs").read_text()
+    pkg = json.loads((APP / "package.json").read_text())
+    check('sourceType: "module"' in cfg and "eslint" in pkg.get("devDependencies", {}),
+          "ESLint is configured for the modules (npm install && npx eslint static)")
+
 def run(name, fn):
     """A section that crashes counts as one failure; the rest still run."""
     section(name)
@@ -2388,6 +2412,7 @@ run('Touchscreen kiosk', _kiosk)
 run('USB link', _usb_link)
 run('Settings layout', _settings_layout)
 run('Settings field definitions', _form_definitions)
+run('Dashboard modules', _page_modules)
 run('Optimizations', _optimizations)
 run('Shutdown', _shutdown)
 

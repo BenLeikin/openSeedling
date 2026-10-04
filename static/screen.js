@@ -12,7 +12,6 @@ const tDisp = c => metric() ? c : c * 9 / 5 + 32;
 const tUnit = () => metric() ? '\u00b0C' : '\u00b0F';
 const fToDisp = f => metric() ? (f - 32) * 5 / 9 : f;
 const hhmm = iso => iso ? new Date(iso).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'}) : '';
-const cap = s => s ? s[0].toUpperCase() + s.slice(1) : s;
 
 function probePct(cal, v) {
   if (!cal || cal.wet == null || cal.dry == null || (cal.dry - cal.wet) < 0.05 || v == null) return null;

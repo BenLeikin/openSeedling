@@ -1,18 +1,27 @@
 // openSeedling dashboard: The cell grid overlay, the Settings form's submit handler, and the AI garden report.
-// One of several plain scripts loaded in order by index.html; they share one
-// global scope (the split of the former app.js, 4 Oct). A function used at
-// load time must be defined in this file or an earlier one.
+// An ES module: what it uses from the others is imported at the top, and what
+// it offers is exported. Another module cannot assign one of its variables
+// directly; it calls the set_<name>() exported at the bottom. Code that runs
+// at page load is in start(), which main.js calls in a fixed order.
 // ---------------- cell grid overlay ----------------
-let grid=null, gdrag=-1, gridDirty=false;
-function colL(c){return String.fromCharCode(65+c);}
-function cellKey(r,c){return colL(c)+(r+1);}
-function bil(C,u,v){
+import { S, capturePhoto, render, renderPhoto, set_S } from './light.js';
+import { applySetup, set_setupDirty, setupDirty, setupDraft } from './setups.js';
+import { FORM, aligning, applyAuth, canEdit, cropping, fillForm, formDirty, loadFrames, pendingSave, readField, renderVideoState, startAlign, stopAlign } from './photos.js';
+import { lastChartLoad, lastHostLoad, loadChart, renderQuality, renderSensors, renderWater, set_lastHostLoad, set_lightBackend } from './charts.js';
+import { esc, renderTrayConfig, renderTrays } from './trays.js';
+import { renderCalibration, renderLight2, renderStorm } from './devices.js';
+import { fieldLabel, loadHost, renderDayProgress, renderFan, renderFocus, renderHeat, renderLightPlan, renderSweep } from './cards.js';
+
+export let grid=null, gdrag=-1, gridDirty=false;
+export function colL(c){return String.fromCharCode(65+c);}
+export function cellKey(r,c){return colL(c)+(r+1);}
+export function bil(C,u,v){
   const t=[(1-u)*C[0][0]+u*C[1][0],(1-u)*C[0][1]+u*C[1][1]];
   const b=[(1-u)*C[3][0]+u*C[2][0],(1-u)*C[3][1]+u*C[2][1]];
   return [(1-v)*t[0]+v*b[0],(1-v)*t[1]+v*b[1]];
 }
-function gridEditable(){return canEdit && grid && !grid.locked;}
-function drawGrid(){
+export function gridEditable(){return canEdit && grid && !grid.locked;}
+export function drawGrid(){
   const svg=document.getElementById('gridsvg');
   if(!grid||!svg)return;
   if(cropping){svg.style.display='none';return;}   // the crop box owns the photo
@@ -46,12 +55,12 @@ function drawGrid(){
     h+=`<circle class="gh" data-i="${i}" cx="${(C[i][0]*S).toFixed(1)}" cy="${(C[i][1]*S).toFixed(1)}" r="16"/>`;
   svg.innerHTML=h;
 }
-function ptFrac(svg,e){
+export function ptFrac(svg,e){
   const r=svg.getBoundingClientRect();
   return [Math.max(0,Math.min(1,(e.clientX-r.left)/r.width)),
           Math.max(0,Math.min(1,(e.clientY-r.top)/r.height))];
 }
-async function saveGrid(){
+export async function saveGrid(){
   gridDirty=true;                 // pending local edit; block poll-sync until saved
   const info=document.getElementById('gridinfo');
   try{
@@ -68,7 +77,7 @@ async function saveGrid(){
     if(info && /not saved|HTTP|log in/.test(info.textContent)) info.textContent='';
   }catch(e){ if(info)info.textContent='grid not saved (request failed)'; }
 }
-async function detectGrid(){
+export async function detectGrid(){
   if(!gridEditable())return;
   const info=document.getElementById('gridinfo');info.textContent='Detecting...';
   try{
@@ -79,14 +88,14 @@ async function detectGrid(){
     else info.textContent=j.error||'Detection failed; place corners by hand.';
   }catch(e){info.textContent='Detection unavailable; place corners by hand.';}
 }
-function syncGridControls(){
+export function syncGridControls(){
   if(!grid)return;
   document.getElementById('gridshow').checked=!!grid.show;
   document.getElementById('gridrows').value=grid.rows;
   document.getElementById('gridcols').value=grid.cols;
   applyGridLock();
 }
-function initGridSvg(){
+export function initGridSvg(){
   const svg=document.getElementById('gridsvg');
   svg.addEventListener('pointerdown',e=>{
     if(!gridEditable())return;
@@ -122,20 +131,20 @@ function initGridSvg(){
     applyGridLock();drawGrid();saveGrid();
   });
 }
-function applyGridLock(){
+export function applyGridLock(){
   if(!grid)return;
   const locked=!!grid.locked;
   document.body.classList.toggle('gridlocked',locked);
   const btn=document.getElementById('gridlock');
   if(btn)btn.textContent=locked?'\uD83D\uDD13 Unlock grid':'\uD83D\uDD12 Lock grid';
 }
-function adoptGrid(g){
+export function adoptGrid(g){
   grid=g;
   if(!grid.names)grid.names={};
   if(grid.locked===undefined)grid.locked=false;
   syncGridControls();
 }
-function handleGrid(j){
+export function handleGrid(j){
   if(j.settings&&j.settings.grid){
     const srv=j.settings.grid;
     if(grid===null){
@@ -149,7 +158,7 @@ function handleGrid(j){
   }
 }
 
-async function refresh(){
+export async function refresh(){
   let j=null;
   try{
     const r=await fetch('/api/status');
@@ -166,16 +175,16 @@ async function refresh(){
 // The whole render, split out so a pushed status and a polled one go through
 // exactly the same path. Anything that renders differently depending on how
 // the data arrived is a bug waiting to happen.
-function applyStatus(j){
+export function applyStatus(j){
   try{
-    S={...j,now:new Date(j.now),on:new Date(j.on),off:new Date(j.off),
-       sunrise:new Date(j.sunrise),sunset:new Date(j.sunset)};
+    set_S({...j,now:new Date(j.now),on:new Date(j.on),off:new Date(j.off),
+       sunrise:new Date(j.sunrise),sunset:new Date(j.sunset)});
     // Same hold as the form fields: until the server echoes a saved backend,
     // keep the chosen one. Otherwise a stale poll flips the slider and sweep
     // card back into view for one cycle and the whole card jumps.
-    lightBackend=('light_backend' in pendingSave)
+    set_lightBackend(('light_backend' in pendingSave)
       ? pendingSave.light_backend
-      : (j.light_backend||'pwm');   // set before any renderer reads it
+      : (j.light_backend||'pwm'));   // set before any renderer reads it
     fillForm(j.settings);
     {const camOn=!!(j.settings&&j.settings.camera_enabled);
      for(const id of ['photocard','videocard','reportcard']){
@@ -209,7 +218,7 @@ function applyStatus(j){
     renderHeat(j);
     renderDayProgress(j);
     renderLightPlan(j);
-    if(Date.now()-lastHostLoad>60000){lastHostLoad=Date.now();loadHost();}
+    if(Date.now()-lastHostLoad>60000){set_lastHostLoad(Date.now());loadHost();}
     if(Date.now()-lastChartLoad>120000)loadChart();   // history every ~2 min
     renderWater(j);
     render();
@@ -221,73 +230,21 @@ function applyStatus(j){
   }
 }
 
-document.getElementById('cfgform').addEventListener('submit',async ev=>{
-  ev.preventDefault();
-  const f=ev.target,msg=document.getElementById('msg');
-  const body={};
-  // Setups have their own Save button, but a change there must not be lost
-  // when the main Save is the one pressed (it used to be, silently)
-  if(setupDirty&&setupDraft)body.setups=setupDraft;
-  // every Settings field, read the way config.FORM says it is stored
-  for(const k of Object.keys(FORM)){
-    const v=readField(f,k,FORM[k]);
-    if(v!==undefined)body[k]=v;
-  }
-  msg.textContent='Planting...';msg.className='';
-  try{
-    const r=await fetch('/api/settings',{method:'POST',
-      headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    const j=await r.json();
-    const errs=j.errors&&Object.keys(j.errors);
-    // a rejected field inside a collapsed section would be invisible: open the
-    // sections holding any errors so the message points at something on screen
-    f.querySelectorAll('[aria-invalid="true"]').forEach(el=>el.removeAttribute('aria-invalid'));
-    for(const k of (errs||[])){
-      const el=k==='setups'?document.getElementById('setupcfg'):f.elements[k];
-      const grp=el&&el.closest&&el.closest('details.fgroup');
-      if(grp)grp.open=true;
-      if(el&&el.setAttribute)el.setAttribute('aria-invalid','true');   // outlined until fixed
-    }
-    // hold every accepted field until the server echoes it back; it is no
-    // longer an unsaved edit. A rejected one stays as typed, to be fixed.
-    for(const k of (j.saved||[]))
-      if(k in body)pendingSave[k]=body[k];
-    for(const k of Object.keys(body))
-      if(!(j.errors&&k in j.errors))formDirty.delete(k);
-    formDirty.delete('kasa_pass');
-    if('setups' in body&&(j.saved||[]).includes('setups')){
-      setupDirty=false;
-      const sm=document.getElementById('setupmsg');if(sm)sm.textContent='Saved.';
-    }
-    if(r.ok&&j.ok){msg.textContent='Saved \u{1F331}';msg.className='ok';refresh();}
-    else if(errs&&errs.length){
-      // everything valid was saved; say exactly which fields were rejected
-      msg.textContent='Saved, except: '
-        +errs.map(k=>fieldLabel(f,k)+' '+j.errors[k]).join('; ');
-      msg.className='err';refresh();
-    }
-    else{msg.textContent=j.error||'Save failed';msg.className='err';}
-  }catch(e){msg.textContent='Save failed';msg.className='err';}
-});
-
-setInterval(()=>{const d=new Date();
-  document.getElementById('clock').textContent=d.toLocaleTimeString();
-  if(S){S.now=d;}},1000);
 // ---------------- AI garden report ----------------
-function rBadge(h){
+export function rBadge(h){
   const m={good:['Healthy','rbg-good'],watch:['Watch','rbg-watch'],problem:['Problem','rbg-problem']};
   const v=m[h]||['\u2014','rbg-watch'];
   return `<span class="rbadge ${v[1]}">${v[0]}</span>`;
 }
-function rList(title,arr){
+export function rList(title,arr){
   if(!arr||!arr.length)return '';
   return `<div class="rsec"><h4>${title}</h4><ul>${arr.map(x=>`<li>${esc(String(x))}</li>`).join('')}</ul></div>`;
 }
-function rAgo(ts){
+export function rAgo(ts){
   if(!ts)return '';
   return new Date(ts*1000).toLocaleString([],{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
 }
-function fitReportHeight(){
+export function fitReportHeight(){
   const card=document.getElementById('reportcard');
   const media=document.querySelector('.amedia');
   if(!card||!media)return;
@@ -296,7 +253,7 @@ function fitReportHeight(){
   const mediaBottom=media.getBoundingClientRect().bottom;
   card.style.maxHeight=Math.max(220,Math.round(mediaBottom-top))+'px';
 }
-function renderReport(j){
+export function renderReport(j){
   const body=document.getElementById('reportbody'); if(!body)return;
   if(j.generating){body.innerHTML='<p class="rmuted">Generating report\u2026</p>';return;}
   if(j.have_key===false){body.innerHTML='<p class="rmuted">No API key on the controller. Add a <code>.anthropic_key</code> file (or set ANTHROPIC_API_KEY) to enable AI reports.</p>';return;}
@@ -332,8 +289,8 @@ function renderReport(j){
   if(r.confidence)h+=`<p class="rconf">Confidence: ${esc(r.confidence)}${j.parse_error?' \u00b7 (reply was not structured JSON)':''}</p>`;
   body.innerHTML=h;
 }
-let lastReportSig=null;
-async function fetchReport(){
+export let lastReportSig=null;
+export async function fetchReport(){
   try{
     const r=await fetch('/api/report');
     const j=await r.json();
@@ -346,7 +303,7 @@ async function fetchReport(){
     if(j.generating)setTimeout(fetchReport,4000);   // poll faster until it lands
   }catch(e){}
 }
-async function genReport(){
+export async function genReport(){
   const info=document.getElementById('reportinfo');if(info)info.textContent='working\u2026';
   document.getElementById('reportbody').innerHTML='<p class="rmuted">Generating report\u2026 this takes ~20s.</p>';
   try{
@@ -363,8 +320,8 @@ async function genReport(){
 }
 // The seedling DLI target band, from the setup (Settings, Setups). The bar's scale grows
 // to fit a high band: 16 mol for a 6 to 12 band, 24 for 15 to 20, and so on.
-var dliBand={lo:15,hi:20,max:24};   // var: read by renders that can run before this line
-function setDliBand(s){
+export var dliBand={lo:15,hi:20,max:24};   // var: read by renders that can run before this line
+export function setDliBand(s){
   if(!s)return;
   const lo=parseFloat(s.dli_target_low), hi=parseFloat(s.dli_target_high);
   if(!(lo>0&&hi>lo))return;
@@ -383,7 +340,7 @@ function setDliBand(s){
     +`<span style="left:${pct(hi)}">${hi}</span>`
     +`<span class="s16" style="left:100%">${max} mol</span>`;
 }
-function setAiControls(s){
+export function setAiControls(s){
   if(!s)return;
   const en=document.getElementById('aienabled'),t=document.getElementById('aitime');
   if(en&&document.activeElement!==en)en.checked=!!s.ai_enabled;
@@ -393,7 +350,7 @@ function setAiControls(s){
     t.value=`${h}:${m}`;
   }
 }
-async function saveAi(){
+export async function saveAi(){
   const en=document.getElementById('aienabled'),t=document.getElementById('aitime');
   const parts=(t.value||'08:00').split(':');
   const h=Math.min(23,Math.max(0,parseInt(parts[0],10)||0));
@@ -401,7 +358,7 @@ async function saveAi(){
   try{await fetch('/api/ai_settings',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({ai_enabled:en.checked,ai_report_hour:h,ai_report_minute:m})});}catch(e){}
 }
-async function resetTimelapse(confirmed){
+export async function resetTimelapse(confirmed){
   const info=document.getElementById('renderinfo');
   try{
     const r=await fetch('/api/reset_timelapse',{method:'POST',
@@ -422,7 +379,7 @@ async function resetTimelapse(confirmed){
     refresh();
   }catch(e){if(info)info.textContent='request failed';}
 }
-function initReport(){
+export function initReport(){
   const gb=document.getElementById('genreport');if(gb)gb.addEventListener('click',genReport);
   const en=document.getElementById('aienabled');if(en)en.addEventListener('change',saveAi);
   const t=document.getElementById('aitime');if(t)t.addEventListener('change',saveAi);
@@ -432,4 +389,59 @@ function initReport(){
     if(m)new ResizeObserver(()=>fitReportHeight()).observe(m);
   }
   fetchReport();
+}
+
+// what ran at load time as a plain script; main.js calls it in the old order
+export function start(){
+document.getElementById('cfgform').addEventListener('submit',async ev=>{
+  ev.preventDefault();
+  const f=ev.target,msg=document.getElementById('msg');
+  const body={};
+  // Setups have their own Save button, but a change there must not be lost
+  // when the main Save is the one pressed (it used to be, silently)
+  if(setupDirty&&setupDraft)body.setups=setupDraft;
+  // every Settings field, read the way config.FORM says it is stored
+  for(const k of Object.keys(FORM)){
+    const v=readField(f,k,FORM[k]);
+    if(v!==undefined)body[k]=v;
+  }
+  msg.textContent='Planting...';msg.className='';
+  try{
+    const r=await fetch('/api/settings',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const j=await r.json();
+    const errs=j.errors&&Object.keys(j.errors);
+    // a rejected field inside a collapsed section would be invisible: open the
+    // sections holding any errors so the message points at something on screen
+    f.querySelectorAll('[aria-invalid="true"]').forEach(el=>el.removeAttribute('aria-invalid'));
+    for(const k of (errs||[])){
+      const el=k==='setups'?document.getElementById('setupcfg'):f.elements[k];
+      const grp=el&&el.closest&&el.closest('details.fgroup');
+      if(grp)grp.open=true;
+      if(el&&el.setAttribute)el.setAttribute('aria-invalid','true');   // outlined until fixed
+    }
+    // hold every accepted field until the server echoes it back; it is no
+    // longer an unsaved edit. A rejected one stays as typed, to be fixed.
+    for(const k of (j.saved||[]))
+      if(k in body)pendingSave[k]=body[k];
+    for(const k of Object.keys(body))
+      if(!(j.errors&&k in j.errors))formDirty.delete(k);
+    formDirty.delete('kasa_pass');
+    if('setups' in body&&(j.saved||[]).includes('setups')){
+      set_setupDirty(false);
+      const sm=document.getElementById('setupmsg');if(sm)sm.textContent='Saved.';
+    }
+    if(r.ok&&j.ok){msg.textContent='Saved \u{1F331}';msg.className='ok';refresh();}
+    else if(errs&&errs.length){
+      // everything valid was saved; say exactly which fields were rejected
+      msg.textContent='Saved, except: '
+        +errs.map(k=>fieldLabel(f,k)+' '+j.errors[k]).join('; ');
+      msg.className='err';refresh();
+    }
+    else{msg.textContent=j.error||'Save failed';msg.className='err';}
+  }catch(e){msg.textContent='Save failed';msg.className='err';}
+});
+setInterval(()=>{const d=new Date();
+  document.getElementById('clock').textContent=d.toLocaleTimeString();
+  if(S){S.now=d;}},1000);
 }

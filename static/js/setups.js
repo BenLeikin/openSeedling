@@ -1,22 +1,29 @@
 // openSeedling dashboard: Grow setups (tabs, light view, the Setups editor) and the USB camera's modes.
-// One of several plain scripts loaded in order by index.html; they share one
-// global scope (the split of the former app.js, 4 Oct). A function used at
-// load time must be defined in this file or an earlier one.
+// An ES module: what it uses from the others is imported at the top, and what
+// it offers is exported. Another module cannot assign one of its variables
+// directly; it calls the set_<name>() exported at the bottom. Code that runs
+// at page load is in start(), which main.js calls in a fixed order.
 // ---- grow setups: separate areas, each with its own light and sensors ----
 // The server sends every setup's measured day and verdict in `setups`; the tab
 // chosen here decides which one the Day and Plan cards show and which sensors
 // the chips and charts include. A setup with no sensors ticked shows them all.
-var setupsList=[], selSetup=null;
-try{ selSetup=localStorage.getItem('setup'); }catch(e){}
-function curSetup(){
+import { S } from './light.js';
+import { formDirty } from './photos.js';
+import { renderChartGrid, sensorData, sensorMeta, set_lightBackend } from './charts.js';
+import { esc } from './trays.js';
+import { refresh, setDliBand } from './grid.js';
+
+export var setupsList=[], selSetup=null;
+
+export function curSetup(){
   return setupsList.find(s=>s.id===selSetup)||setupsList[0]||null;
 }
-function trayInSetup(id){
+export function trayInSetup(id){
   const cs=curSetup();
   if(!cs||setupsList.length<2||!cs.trays||!cs.trays.length)return true;
   return cs.trays.includes(String(id));
 }
-function inSetup(k){
+export function inSetup(k){
   const cs=curSetup();
   if(!cs||setupsList.length<2)return true;
   // the heat mat's power level shows on the heat mat's setup (all tabs if none)
@@ -29,7 +36,7 @@ function inSetup(k){
   if(k===cs.lux||(k==='ppfd'&&cs.lux==='lux'))return true;
   return cs.sensors.includes(k);
 }
-function applySetup(j){
+export function applySetup(j){
   setupsList=j.setups||[];
   const cs=curSetup();
   if(cs){
@@ -67,12 +74,12 @@ function applySetup(j){
 // Which light the Light card, the day phase and the schedule chart describe:
 // the selected setup's. The second light is shown through the same controls
 // by mapping its schedule onto S; writes go to its own settings.
-var ctlTarget='main';
-function hhmmToday(ref,hhmm){
+export var ctlTarget='main';
+export function hhmmToday(ref,hhmm){
   const m=/^(\d{1,2}):(\d{2})$/.exec(hhmm||'');
   const d=new Date(ref); if(m)d.setHours(+m[1],+m[2],0,0); return d;
 }
-function applyLightView(j, cs){
+export function applyLightView(j, cs){
   const l2=j.light2||{};
   ctlTarget=(cs&&cs.light==='second'&&l2.fixture)?'second':'main';
   const tgt=document.getElementById('lctarget');
@@ -88,37 +95,27 @@ function applyLightView(j, cs){
   S.on=hhmmToday(S.now,l2.start); S.off=hhmmToday(S.now,l2.end);
   S.schedule_mode='light2';
   S.light_linear_on=false;
-  lightBackend='pwm';                 // the second light always dims by PWM
+  set_lightBackend('pwm');                 // the second light always dims by PWM
   // the Light response card shows and calibrates this fixture
   const c2=j.light2_cal||{};
   for(const k of ['light_curve','light_linear','light_linear_on','light_linear_stale','light_curve_effective'])
     j[k]=c2[k];
 }
-{
-  const nav=document.getElementById('setuptabs');
-  if(nav)nav.addEventListener('click',ev=>{
-    const b=ev.target.closest('button[data-id]');if(!b)return;
-    selSetup=b.dataset.id;
-    try{localStorage.setItem('setup',selSetup);}catch(e){}
-    window._chartCtxSynced=false;
-    refresh();
-    renderChartGrid();
-  });
-}
+
 // Settings, Setups: an editable copy, redrawn from the server only when the
 // user is not in the middle of changing it
-var setupDraft=null, setupDirty=false, lightOpts=[];
+export var setupDraft=null, setupDirty=false, lightOpts=[];
 // the lights as physical fixtures ("AC fixture (dim line)", "5V LED panel"),
 // from the server, which knows the wiring; a stored choice the hardware no
 // longer offers stays listed so saving does not silently drop it
-function lightChoices(cur){
+export function lightChoices(cur){
   const out=lightOpts.map(o=>[o.value,o.label]);
   if(cur&&!out.some(o=>o[0]===cur))out.push([cur,cur==='second'?'Second light (not available)':cur]);
   out.push(['','None']);
   return out;
 }
-var trayOpts=[], setupOptSig='';
-function renderSetupConfig(j){
+export var trayOpts=[], setupOptSig='';
+export function renderSetupConfig(j){
   lightOpts=j.light_options||[];
   trayOpts=Object.entries((j.settings&&j.settings.trays)||{}).sort((a,b)=>a[0].localeCompare(b[0]))
     .map(([id,t])=>[id,(t&&t.label)||('Tray '+id)]);
@@ -140,7 +137,7 @@ function renderSetupConfig(j){
         dli_low:s.band[0],dli_high:s.band[1]}))));
   drawSetupConfig();
 }
-function drawSetupConfig(){
+export function drawSetupConfig(){
   const box=document.getElementById('setupcfg');
   if(!box||!setupDraft)return;
   const all=Object.keys(sensorData||{}).filter(k=>!k.startsWith('growth')&&!k.startsWith('dry:')
@@ -180,6 +177,38 @@ function drawSetupConfig(){
           canopy come with the tray</span></div>
       ${setupDraft.length>1?'<button type="button" class="setuprm">Remove</button>':''}
     </fieldset>`).join('');
+}
+
+// ---- camera modes: the sizes the USB camera offers, largest first ----
+export async function loadCameraModes(){
+  const sel=document.getElementById('usbmodes');
+  if(!sel||sel.dataset.loaded)return;
+  sel.dataset.loaded='1';
+  try{
+    const r=await fetch('/api/camera_modes');const j=await r.json();
+    if(!j.modes||!j.modes.length){sel.innerHTML='<option value="">no modes reported</option>';return;}
+    sel.innerHTML='<option value="">choose\u2026</option>'+j.modes.map((m,i)=>
+      `<option value="${esc(m)}">${esc(m)}${i===0?' (full sensor)':''}</option>`).join('');
+  }catch(e){sel.dataset.loaded='';}
+}
+
+
+// setters: other modules cannot assign an imported binding
+export function set_setupDirty(v){ setupDirty=v; return v; }
+
+// what ran at load time as a plain script; main.js calls it in the old order
+export function start(){
+try{ selSetup=localStorage.getItem('setup'); }catch(e){}
+{
+  const nav=document.getElementById('setuptabs');
+  if(nav)nav.addEventListener('click',ev=>{
+    const b=ev.target.closest('button[data-id]');if(!b)return;
+    selSetup=b.dataset.id;
+    try{localStorage.setItem('setup',selSetup);}catch(e){}
+    window._chartCtxSynced=false;
+    refresh();
+    renderChartGrid();
+  });
 }
 {
   const box=document.getElementById('setupcfg');
@@ -230,19 +259,6 @@ function drawSetupConfig(){
     }catch(e){if(msg)msg.textContent='Request failed.';}
   });
 }
-
-// ---- camera modes: the sizes the USB camera offers, largest first ----
-async function loadCameraModes(){
-  const sel=document.getElementById('usbmodes');
-  if(!sel||sel.dataset.loaded)return;
-  sel.dataset.loaded='1';
-  try{
-    const r=await fetch('/api/camera_modes');const j=await r.json();
-    if(!j.modes||!j.modes.length){sel.innerHTML='<option value="">no modes reported</option>';return;}
-    sel.innerHTML='<option value="">choose\u2026</option>'+j.modes.map((m,i)=>
-      `<option value="${esc(m)}">${esc(m)}${i===0?' (full sensor)':''}</option>`).join('');
-  }catch(e){sel.dataset.loaded='';}
-}
 {
   const sel=document.getElementById('usbmodes');
   if(sel){
@@ -255,4 +271,5 @@ async function loadCameraModes(){
       formDirty.add('usb_width');formDirty.add('usb_height');   // set by code: no input event
     });
   }
+}
 }

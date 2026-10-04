@@ -136,7 +136,7 @@ def settings_round_trip(page, base, app):
     page.goto(base + "/")
     page.wait_for_timeout(2500)
     open_all(page)
-    spec = page.evaluate("()=>FORM")
+    spec = page.evaluate("()=>JSON.parse(document.getElementById('formspec').textContent)")
     before = saved(app)
     want = {}               # key -> value we typed (as the form holds it)
     for k, s in spec.items():

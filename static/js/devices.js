@@ -1,12 +1,19 @@
 // openSeedling dashboard: The smart plug, backup, theme, thunderstorm, light calibration and the second light.
-// One of several plain scripts loaded in order by index.html; they share one
-// global scope (the split of the former app.js, 4 Oct). A function used at
-// load time must be defined in this file or an earlier one.
+// An ES module: what it uses from the others is imported at the top, and what
+// it offers is exported. Another module cannot assign one of its variables
+// directly; it calls the set_<name>() exported at the bottom. Code that runs
+// at page load is in start(), which main.js calls in a fixed order.
 // ---- smart plug setup ----
 // Scan, pick, test. The password field is never populated from the server (it
 // is redacted like the dashboard hash), so a blank one means "leave it alone"
 // rather than "clear it".
-async function plugScan(){
+import { ctlTarget } from './setups.js';
+import { canEdit, formDirty, pendingSave } from './photos.js';
+import { calibrateProbe, chartLeave, chartMove, chartPlots, checkTempComp, cssId, drawMini, expandedCharts, layoutChartRows, loadChart, seriesData, set_chartHours } from './charts.js';
+import { esc, loadPlantings } from './trays.js';
+import { refresh } from './grid.js';
+
+export async function plugScan(){
   const info=document.getElementById('pluginfo');
   const list=document.getElementById('pluglist');
   const f=document.getElementById('cfgform');
@@ -35,7 +42,7 @@ async function plugScan(){
   }catch(e){if(info)info.textContent='scan failed';}
 }
 
-async function plugTest(){
+export async function plugTest(){
   const info=document.getElementById('pluginfo');
   const f=document.getElementById('cfgform');
   if(info)info.textContent='connecting\u2026';
@@ -58,7 +65,7 @@ async function plugTest(){
   }catch(e){if(info)info.textContent='request failed';}
 }
 
-function initPlug(){
+export function initPlug(){
   const scan=document.getElementById('plugscan');
   const test=document.getElementById('plugtest');
   const list=document.getElementById('pluglist');
@@ -76,7 +83,7 @@ function initPlug(){
   });
 }
 
-function initBackup(){
+export function initBackup(){
   const box=document.getElementById('backupsecrets');
   const btn=document.getElementById('backupbtn');
   const info=document.getElementById('backupinfo');
@@ -91,7 +98,7 @@ function initBackup(){
   sync();
 }
 
-function initPlantings(){
+export function initPlantings(){
   const t=document.getElementById('histtoggle'), b=document.getElementById('histbody');
   if(t&&b)t.addEventListener('click',()=>{
     const open=b.hasAttribute('hidden');
@@ -119,7 +126,7 @@ function initPlantings(){
 // Empty a cell in place. Used for the instant feedback after Transplanted or
 // Died: the authoritative redraw follows from the next status, but the click
 // should not look ignored while that round trip happens.
-function clearCellUI(cell){
+export function clearCellUI(cell){
   cell.querySelectorAll('input,textarea').forEach(el=>{
     el.value='';
     el.setAttribute('value','');   // keep the attribute in step with the
@@ -137,16 +144,16 @@ function clearCellUI(cell){
 // two-state toggle stays unambiguous: "Dark Mode" means pressing it gives you
 // dark. "auto" resolves to whatever the device is currently doing, so the
 // first press always lands on the opposite of what you can see.
-let themeMode='auto';
-function isDarkNow(mode){
+export let themeMode='auto';
+export function isDarkNow(mode){
   return mode==='dark' || (mode!=='light' && window.matchMedia
     && window.matchMedia('(prefers-color-scheme: dark)').matches);
 }
-function labelTheme(){
+export function labelTheme(){
   const btn=document.getElementById('themebtn');
   if(btn)btn.textContent = isDarkNow(themeMode) ? 'Light Mode' : 'Dark Mode';
 }
-async function toggleTheme(){
+export async function toggleTheme(){
   const next = isDarkNow(themeMode) ? 'light' : 'dark';
   themeMode=next;
   applyTheme(next);                    // instant: never wait on the round trip
@@ -163,8 +170,8 @@ async function toggleTheme(){
 // an AC fixture on a 0-10V dim line. The 5V panel has too little range and
 // the smart plug cannot dim at all, so on those the server refuses and the
 // button stays hidden rather than offering something that will not work.
-let stormBusy=false;
-async function summonStorm(){
+export let stormBusy=false;
+export async function summonStorm(){
   if(stormBusy)return;
   const btn=document.getElementById('stormbtn');
   const info=document.getElementById('storminfo');
@@ -201,7 +208,7 @@ async function summonStorm(){
     stormBusy=false; if(btn)btn.disabled=false;
   }
 }
-function renderStorm(j){
+export function renderStorm(j){
   const row=document.getElementById('stormrow');
   if(!row)return;
   // the server decides: it knows the wiring and whether the channel opened
@@ -212,7 +219,7 @@ function renderStorm(j){
 // percent means a fraction of the fixture's real output. The sweep's own
 // progress is shown by the existing sweep card; this just starts it and
 // reports what the calibration found.
-async function startCalibration(){
+export async function startCalibration(){
   const info=document.getElementById('lininfo');
   const btn=document.getElementById('linbtn');
   try{
@@ -227,7 +234,7 @@ async function startCalibration(){
       +'The light will step through its whole range.';
   }catch(e){if(info)info.textContent='request failed';}
 }
-function renderCalibration(j){
+export function renderCalibration(j){
   const info=document.getElementById('lininfo');
   const btn=document.getElementById('linbtn');
   const running=!!(j.sweep&&j.sweep.running);
@@ -254,7 +261,7 @@ function renderCalibration(j){
 }
 
 // ---- second light ----
-function renderLight2(j){
+export function renderLight2(j){
   const el=document.getElementById('l2line');
   if(!el)return;
   const l=j.light2;
@@ -271,20 +278,20 @@ function renderLight2(j){
   el.textContent=`Second light (${name}): ${Math.round(l.level)}% \u00b7 ${l.why}${sched}`;
 }
 
-function initStorm(){
+export function initStorm(){
   const btn=document.getElementById('stormbtn');
   if(btn)btn.addEventListener('click',summonStorm);
   const lb=document.getElementById('linbtn');
   if(lb)lb.addEventListener('click',startCalibration);
 }
 
-function initTheme(){
+export function initTheme(){
   const btn=document.getElementById('themebtn');
   if(btn)btn.addEventListener('click',toggleTheme);
   labelTheme();
 }
 
-function applyTheme(mode){
+export function applyTheme(mode){
   const root=document.documentElement;
   if(mode==='light'||mode==='dark')root.setAttribute('data-theme',mode);
   else root.removeAttribute('data-theme');
@@ -296,7 +303,7 @@ function applyTheme(mode){
   labelTheme();
 }
 
-function initSensors(){
+export function initSensors(){
   const pmap={probewet1:['1','wet'],probedry1:['1','dry'],probewet2:['2','wet'],probedry2:['2','dry']};
   for(const id in pmap){const b=document.getElementById(id);
     if(b)b.addEventListener('click',()=>calibrateProbe(pmap[id][0],pmap[id][1]));}
@@ -335,7 +342,7 @@ function initSensors(){
   loadChart();                       // initial draw; range buttons reload
   document.querySelectorAll('#ranges button').forEach(b=>{
     b.addEventListener('click',()=>{
-      chartHours=+b.dataset.h;
+      set_chartHours(+b.dataset.h);
       document.querySelectorAll('#ranges button').forEach(x=>x.classList.remove('on'));
       b.classList.add('on');loadChart();});
   });

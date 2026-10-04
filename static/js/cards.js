@@ -1,9 +1,19 @@
 // openSeedling dashboard: Pi health tiles, the light plan and day progress, the fan, focus and USB camera controls, and start-up.
-// One of several plain scripts loaded in order by index.html; they share one
-// global scope (the split of the former app.js, 4 Oct). A function used at
-// load time must be defined in this file or an earlier one.
+// An ES module: what it uses from the others is imported at the top, and what
+// it offers is exported. Another module cannot assign one of its variables
+// directly; it calls the set_<name>() exported at the bottom. Code that runs
+// at page load is in start(), which main.js calls in a fixed order.
 // ---- Pi health tiles ----
-function hostTile(label, value, sub, cls){
+import { S, dragTimer, dragging, mins, pushBrightness, setLight, set_dragPending, set_dragTimer, set_dragging } from './light.js';
+import { initAuth } from './photos.js';
+import { isMetric, lightMetrics, tDisp, tFromF, tUnit } from './charts.js';
+import { esc, initTrayConfig, initTrays } from './trays.js';
+import { initBackup, initPlantings, initPlug, initSensors, initStorm, initTheme } from './devices.js';
+import { dliBand, initGridSvg, initReport, refresh } from './grid.js';
+import { drawLightCurve, lastCurve, set_lastCurve, set_sweepRunning, startSweep, sweepRunning } from './live.js';
+import { startWalker } from './buddy.js';
+
+export function hostTile(label, value, sub, cls){
   // numeric tiles are short and keep the large size; text values (hostname, IP)
   // can be long, so step the size down by length rather than breaking mid-word
   const plain=String(value).replace(/<[^>]*>/g,'');
@@ -14,14 +24,14 @@ function hostTile(label, value, sub, cls){
     +`<div class="hvalue${cls?' '+cls:''}" title="${esc(plain)}">${value}</div>`
     +`<div class="hsub">${sub||'&nbsp;'}</div></div>`;
 }
-function upStr(sec){
+export function upStr(sec){
   if(sec==null)return null;
   const d=Math.floor(sec/86400), h=Math.floor(sec%86400/3600), m=Math.floor(sec%3600/60);
   if(d)return `${d}d ${h}h`;
   if(h)return `${h}h ${String(m).padStart(2,'0')}m`;
   return `${m}m`;
 }
-async function loadHost(){
+export async function loadHost(){
   const grid=document.getElementById('hgrid');
   if(!grid)return;
   try{
@@ -72,7 +82,7 @@ async function loadHost(){
     grid.innerHTML='<p class="rmuted">Device stats unavailable.</p>';
   }
 }
-function renderLightPlan(j){
+export function renderLightPlan(j){
   const box=document.getElementById('lplan');
   if(!box)return;
   const p=j.light_plan;
@@ -99,7 +109,7 @@ function renderLightPlan(j){
 // Daily light through today (solid) and yesterday (dashed) against the target:
 // the band the day should end in, and the wedge where the total should be by
 // each hour of the photoperiod.
-function drawDliChart(day){
+export function drawDliChart(day){
   const svg=document.getElementById('dlichart');
   if(!svg)return;
   const cv=day&&day.curve;
@@ -131,7 +141,7 @@ function drawDliChart(day){
   }
   svg.innerHTML=h;
 }
-function renderDayProgress(j){
+export function renderDayProgress(j){
   const wrap=document.getElementById('dayprog');
   if(!wrap||!S.on||!S.off)return;
   const on=+S.on, off=+S.off, now=Date.now();
@@ -238,13 +248,13 @@ function renderDayProgress(j){
     stats.style.display=h2?'':'none';
   }
 }
-function durStr(ms){
+export function durStr(ms){
   const m=Math.max(0,Math.round(ms/60000));
   if(m<60)return m+' min';
   return Math.floor(m/60)+'h '+String(m%60).padStart(2,'0')+'m';
 }
-let fanDragging=false, fanDragTimer=null, fanDragPending=null;
-function renderFan(j){
+export let fanDragging=false, fanDragTimer=null, fanDragPending=null;
+export function renderFan(j){
   const row=document.getElementById('fanrow');
   const sl=document.getElementById('fanslider');
   if(!row)return;
@@ -274,7 +284,7 @@ function renderFan(j){
     if(lbl)lbl.textContent=(f.mode==='on')?'speed':'auto speed';
   }
 }
-function renderHeat(j){
+export function renderHeat(j){
   const row=document.getElementById('heatrow');
   if(!row)return;
   const h=j.heat;
@@ -300,7 +310,7 @@ function renderHeat(j){
   info.innerHTML=t;
   info.title=plugBad&&h.plug_error?h.plug_error:'';
 }
-async function setHeat(mode){
+export async function setHeat(mode){
   const info=document.getElementById('heatinfo');
   if(info)info.textContent='\u2026';
   try{
@@ -312,7 +322,7 @@ async function setHeat(mode){
   }catch(e){if(info)info.textContent='request failed';}
   setTimeout(refresh,1500);            // the plug takes a moment to answer
 }
-function pushFanSpeed(v){
+export function pushFanSpeed(v){
   fanDragPending=v;
   if(fanDragTimer)return;
   fanDragTimer=setTimeout(()=>{
@@ -321,7 +331,7 @@ function pushFanSpeed(v){
     if(val!=null)sendFanSpeed(val);
   },150);
 }
-async function sendFanSpeed(v){
+export async function sendFanSpeed(v){
   const mode=(document.querySelector('.fanbtn.on')||{dataset:{}}).dataset.mode||'auto';
   const body=(mode==='on')?{speed:v}:{auto_speed:v};
   try{
@@ -329,7 +339,7 @@ async function sendFanSpeed(v){
       body:JSON.stringify(body)});
   }catch(e){}
 }
-async function setFan(mode){
+export async function setFan(mode){
   const info=document.getElementById('faninfo');
   if(info)info.textContent='\u2026';
   try{
@@ -341,8 +351,8 @@ async function setFan(mode){
   }catch(e){if(info)info.textContent='request failed';}
   refresh();
 }
-let focusRunning=false;
-async function startFocusSweep(){
+export let focusRunning=false;
+export async function startFocusSweep(){
   const info=document.getElementById('focusinfo');
   if(focusRunning){
     await fetch('/api/focus_sweep',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -359,7 +369,7 @@ async function startFocusSweep(){
     if(info)info.textContent=`sweeping\u2026 (~${j.estimate_seconds}s; timelapse pauses)`;
   }catch(e){if(info)info.textContent='request failed';}
 }
-function renderFocus(j){
+export function renderFocus(j){
   const btn=document.getElementById('focusbtn');
   const info=document.getElementById('focusinfo');
   const f=j.focus||{};
@@ -374,34 +384,34 @@ function renderFocus(j){
     else info.textContent='cancelled';
   }
 }
-function renderSweep(j){
+export function renderSweep(j){
   const btn=document.getElementById('sweepbtn');
   const info=document.getElementById('sweepinfo');
   const sw=j.sweep||{};
-  const was=sweepRunning; sweepRunning=!!sw.running;
+  const was=sweepRunning; set_sweepRunning(!!sw.running);
   if(btn)btn.textContent=sweepRunning?'Cancel':'Calibrate';
   if(sweepRunning&&info)info.textContent=`measuring\u2026 ${sw.pct}%`;
   if(was&&!sweepRunning&&info&&sw.error)info.textContent=sw.error;
   // with a calibration in use, chart what the dashboard DELIVERS (a straight
   // line if it worked) rather than the raw fixture, which never changes shape
-  lastCurve = j.light_curve_effective
+  set_lastCurve(j.light_curve_effective
     ? {points:j.light_curve_effective, ts:(j.light_curve||{}).ts, calibrated:true,
        rawPoints:(j.light_curve||{}).points||[]}
-    : (j.light_curve ? {...j.light_curve, stale:!!j.light_linear_stale} : null);
+    : (j.light_curve ? {...j.light_curve, stale:!!j.light_linear_stale} : null));
   if(!dragging)                                   // a drag owns the marker
     drawLightCurve(lastCurve, sweepRunning,
                    sweepRunning?null:(j.brightness!=null?j.brightness:null));
 }
-function showScheduleMode(mode){
+export function showScheduleMode(mode){
   document.querySelectorAll('.modeblock').forEach(b=>{
     b.style.display=(b.dataset.mode===mode)?'':'none';
   });
 }
 // show a manual block only when its auto checkbox is clear
-const USB_AUTO=[['usb_auto_focus','manual-focus'],
+export const USB_AUTO=[['usb_auto_focus','manual-focus'],
                 ['usb_auto_exposure_on','manual-exposure'],
                 ['usb_auto_white_balance','manual-wb']];
-function syncUsbAuto(){
+export function syncUsbAuto(){
   const f=document.getElementById('cfgform');
   if(!f)return;
   const usb=(f.elements['camera_backend']||{}).value==='usb';
@@ -411,7 +421,7 @@ function syncUsbAuto(){
       el.style.display=(usb && !on)?'':'none');
   }
 }
-function initCameraBackend(){
+export function initCameraBackend(){
   for(const [name] of USB_AUTO){
     const cb=document.querySelector(`[name=${name}]`);
     if(cb && !cb.dataset.bound){cb.dataset.bound='1';
@@ -428,7 +438,7 @@ function initCameraBackend(){
 }
 // A field's label as the page shows it ("Cut-off (\u00b0F)"), for messages that
 // would otherwise show the setting's internal name
-function fieldLabel(f, k){
+export function fieldLabel(f, k){
   if(k==='setups')return 'Setups:';
   const el=f.elements[k];
   const lab=el&&el.closest&&el.closest('label');
@@ -440,22 +450,20 @@ function fieldLabel(f, k){
   t=t.replace(/\s+/g,' ').trim();
   return t?t+':':k;
 }
-{const f=document.getElementById('cfgform');
- if(f)f.addEventListener('input',e=>{if(e.target.removeAttribute)e.target.removeAttribute('aria-invalid');});}
+
 // Photo brightness only matters when photos set the light
-function syncCaptureLight(){
+export function syncCaptureLight(){
   const cb=document.querySelector('#cfgform [name=capture_set_light]');
   document.querySelectorAll('.capbright').forEach(el=>
     el.style.display=(cb&&cb.checked)?'':'none');
 }
-{const cb=document.querySelector('#cfgform [name=capture_set_light]');
- if(cb)cb.addEventListener('change',syncCaptureLight);}
-function initSchedule(){
+
+export function initSchedule(){
   const sm=document.querySelector('[name=schedule_mode]');
   if(!sm)return;
   sm.addEventListener('change',()=>showScheduleMode(sm.value));
 }
-function initLight(){
+export function initLight(){
   {const row=document.getElementById('lightctl')||document.body;
    if(row.dataset.lightBound)return;            // double-binding would fire
    row.dataset.lightBound='1';}                 // every click twice
@@ -494,12 +502,12 @@ function initLight(){
   const rng=document.getElementById('lcrange');
   const val=document.getElementById('lcval');
   if(!rng)return;
-  const startDrag=()=>{dragging=true;};
+  const startDrag=()=>{set_dragging(true);};
   const endDrag=()=>{
     if(!dragging)return;
-    dragging=false;
-    if(dragTimer){clearTimeout(dragTimer);dragTimer=null;}
-    dragPending=null;
+    set_dragging(false);
+    if(dragTimer){clearTimeout(dragTimer);set_dragTimer(null);}
+    set_dragPending(null);
     setLight(null, +rng.value);        // final value, with UI sync
   };
   rng.addEventListener('pointerdown',startDrag);
@@ -525,6 +533,15 @@ function initLight(){
     if(!dragging)setLight(null, +rng.value);
   });
 }
+
+
+// what ran at load time as a plain script; main.js calls it in the old order
+export function start(){
+{const f=document.getElementById('cfgform');
+ if(f)f.addEventListener('input',e=>{if(e.target.removeAttribute)e.target.removeAttribute('aria-invalid');});}
+{const cb=document.querySelector('#cfgform [name=capture_set_light]');
+ if(cb)cb.addEventListener('change',syncCaptureLight);}
 [initAuth, initSensors, initGridSvg, initReport, initLight, initTrays, initSchedule, initTrayConfig, initCameraBackend, initPlantings, initBackup, initPlug, initTheme, initStorm, startWalker].forEach(fn=>{  try{ fn(); }catch(e){ console.error(fn.name+' init failed:', e); }
 });
 refresh();
+}

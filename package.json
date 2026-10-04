@@ -1,0 +1,13 @@
+{
+  "name": "openseedling-dev",
+  "private": true,
+  "description": "Development tools only (the Pi needs none of this): lint the dashboard's scripts.",
+  "scripts": {
+    "lint": "eslint static/js static/screen.js"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9",
+    "eslint": "^9",
+    "globals": "^16"
+  }
+}

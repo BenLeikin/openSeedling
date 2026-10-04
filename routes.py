@@ -180,6 +180,16 @@ def index():
 
 
 @app.after_request
+def _revalidate_scripts(resp):
+    """The dashboard's modules import each other by plain path (no ?v=), so a
+    browser must check each script is current on every load (a 304 when it
+    is) rather than keep running an old one after an update."""
+    if request.path.startswith("/static/js/") or request.path.startswith("/static/screen"):
+        resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
+@app.after_request
 def _changed(resp):
     """Any change through the API announces a new status: open tabs and the
     touchscreen update at once, and the shared status build is not reused

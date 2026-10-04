@@ -1,16 +1,22 @@
 // openSeedling dashboard: The planting map and the planting history.
-// One of several plain scripts loaded in order by index.html; they share one
-// global scope (the split of the former app.js, 4 Oct). A function used at
-// load time must be defined in this file or an earlier one.
+// An ES module: what it uses from the others is imported at the top, and what
+// it offers is exported. Another module cannot assign one of its variables
+// directly; it calls the set_<name>() exported at the bottom. Code that runs
+// at page load is in start(), which main.js calls in a fixed order.
 // ---- planting map: two trays, editable seed / equipment / sow date ----
-let trays={}, trayDirty={}, trayTimer=null, trayPending=0;
-function daysSince(iso){
+import { curSetup, setupsList, trayInSetup } from './setups.js';
+import { canEdit } from './photos.js';
+import { clearCellUI } from './devices.js';
+import { colL, refresh } from './grid.js';
+
+export let trays={}, trayDirty={}, trayTimer=null, trayPending=0;
+export function daysSince(iso){
   if(!iso)return null;
   const d=new Date(iso+'T00:00:00'), now=new Date();
   if(isNaN(d))return null;
   return Math.floor((new Date(now.getFullYear(),now.getMonth(),now.getDate())-d)/86400000);
 }
-function renderTrays(j){
+export function renderTrays(j){
   const t=(j.settings&&j.settings.trays)||{};
   const cs0=curSetup();
   const sig=JSON.stringify(t)+'|'+(setupsList.length>1&&cs0?JSON.stringify(cs0.trays||[]):'');
@@ -112,11 +118,11 @@ function renderTrays(j){
 // Single definition on purpose: a second `function esc` later in the file
 // would silently win for the whole scope and (if weaker) let a quote in a
 // seed name break out of an HTML attribute.
-function esc(s){
+export function esc(s){
   return String(s==null?'':s).replace(/&/g,'&amp;').replace(/"/g,'&quot;')
     .replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
-function collectTray(id){
+export function collectTray(id){
   const cells={};
   document.querySelectorAll(`#trayswrap .tcell[data-tray="${id}"]`).forEach(el=>{
     const seed=el.querySelector('.tseed').value.trim();
@@ -135,7 +141,7 @@ function collectTray(id){
   });
   return cells;
 }
-async function saveTray(id){
+export async function saveTray(id){
   const info=document.getElementById('trayinfo');
   trayPending++;
   try{
@@ -151,7 +157,7 @@ async function saveTray(id){
   }catch(e){if(info)info.textContent='save failed';}
   finally{trayPending=Math.max(0,trayPending-1);}
 }
-async function trayLayout(body){
+export async function trayLayout(body){
   const info=document.getElementById('trayaddinfo')||document.getElementById('trayinfo');
   try{
     const r=await fetch('/api/tray_layout',{method:'POST',
@@ -175,7 +181,7 @@ async function trayLayout(body){
     refresh();
   }catch(e){if(info)info.textContent='request failed';}
 }
-function renderTrayConfig(cfg){
+export function renderTrayConfig(cfg){
   const box=document.getElementById('traycfg');
   if(!box)return;
   const trays=(cfg&&cfg.trays)||{};
@@ -207,7 +213,7 @@ function renderTrayConfig(cfg){
         <span id="trayaddinfo" role="status"></span></div>`;
   box.innerHTML=h;
 }
-function initTrayConfig(){
+export function initTrayConfig(){
   const box=document.getElementById('traycfg');
   if(!box||box.dataset.bound)return;
   box.dataset.bound='1';
@@ -230,7 +236,7 @@ function initTrayConfig(){
           trayLayout({action:'resize',tray:l.dataset.tray,label:l.value});}
   });
 }
-function initTrays(){
+export function initTrays(){
   const wrap=document.getElementById('trayswrap');
   if(!wrap||wrap.dataset.bound)return;   // binding twice would make every
   wrap.dataset.bound='1';                // toggle immediately undo itself
@@ -372,8 +378,8 @@ function initTrays(){
 // ---- planting history ----
 // Cells are cleared when a plant is transplanted or lost, so this is where the
 // record of what grew where actually lives.
-let plantingHistory=[];
-async function loadPlantings(){
+export let plantingHistory=[];
+export async function loadPlantings(){
   try{
     const r=await fetch('/api/plantings');
     const j=await r.json();
@@ -381,7 +387,7 @@ async function loadPlantings(){
   }catch(e){plantingHistory=[];}
   renderPlantings();
 }
-function renderPlantings(){
+export function renderPlantings(){
   const wrap=document.getElementById('histwrap');
   const body=document.getElementById('histbody');
   const sum=document.getElementById('histsummary');
@@ -412,6 +418,6 @@ function renderPlantings(){
   body.innerHTML=h;
   applyAuthTo(body);
 }
-function applyAuthTo(el){
+export function applyAuthTo(el){
   el.querySelectorAll('.editonly').forEach(e=>{e.style.display=canEdit?'':'none';});
 }

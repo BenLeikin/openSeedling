@@ -708,15 +708,7 @@
 
 <!-- config.FORM: what each Settings field is, for the scripts' save and fill -->
 <script id="formspec" type="application/json">{{ form_spec|tojson }}</script>
-<script src="{{ url_for('static', filename='js/light.js', v=v) }}"></script>
-<script src="{{ url_for('static', filename='js/setups.js', v=v) }}"></script>
-<script src="{{ url_for('static', filename='js/photos.js', v=v) }}"></script>
-<script src="{{ url_for('static', filename='js/charts.js', v=v) }}"></script>
-<script src="{{ url_for('static', filename='js/trays.js', v=v) }}"></script>
-<script src="{{ url_for('static', filename='js/devices.js', v=v) }}"></script>
-<script src="{{ url_for('static', filename='js/grid.js', v=v) }}"></script>
-<script src="{{ url_for('static', filename='js/live.js', v=v) }}"></script>
-<script src="{{ url_for('static', filename='js/buddy.js', v=v) }}"></script>
-<script src="{{ url_for('static', filename='js/cards.js', v=v) }}"></script>
+<!-- the dashboard: ES modules under static/js, entered through main.js -->
+<script type="module" src="{{ url_for('static', filename='js/main.js', v=v) }}"></script>
 </body>
 </html>

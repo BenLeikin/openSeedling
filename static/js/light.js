@@ -1,13 +1,21 @@
 // openSeedling dashboard: The status object, the schedule curve and the lighting-stage graphics.
-// One of several plain scripts loaded in order by index.html; they share one
-// global scope (the split of the former app.js, 4 Oct). A function used at
-// load time must be defined in this file or an earlier one.
-let S=null;
+// An ES module: what it uses from the others is imported at the top, and what
+// it offers is exported. Another module cannot assign one of its variables
+// directly; it calls the set_<name>() exported at the bottom. Code that runs
+// at page load is in start(), which main.js calls in a fixed order.
+import { ctlTarget } from './setups.js';
+import { aligning, canEdit, cropping, parseRoi } from './photos.js';
+import { camHealth, capMin, capOn, lightBackend, set_camHealth } from './charts.js';
+import { esc } from './trays.js';
+import { drawGrid, grid, gridEditable, refresh } from './grid.js';
+import { durStr } from './cards.js';
 
-function fmt(d){return d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});}
-function mins(d){return d.getHours()*60+d.getMinutes()+d.getSeconds()/60;}
+export let S=null;
 
-function curve(t,on,off,ramp,max){
+export function fmt(d){return d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});}
+export function mins(d){return d.getHours()*60+d.getMinutes()+d.getSeconds()/60;}
+
+export function curve(t,on,off,ramp,max){
   if(t<=on||t>=off)return 0;
   const fs=on+ramp, fe=off-ramp;
   if(fs>=fe){const mid=(on+off)/2;
@@ -17,7 +25,7 @@ function curve(t,on,off,ramp,max){
   return max;
 }
 
-function draw(){
+export function draw(){
   if(!S)return;
   const W=640,H=240,L=34,R=12,T=20,B=34;
   const on=mins(S.on),off=mins(S.off),now=mins(S.now);
@@ -50,11 +58,11 @@ function draw(){
   bindSchedDrag();
 }
 // the on/off edges are draggable in the modes where those are real settings
-function schedDraggable(){
+export function schedDraggable(){
   return canEdit && S && (S.schedule_mode==='fixed'||S.schedule_mode==='duration'
     ||(S.schedule_mode==='light2'&&S.off>S.on));
 }
-function schedHandles(x,y,on,off,T,H,B){
+export function schedHandles(x,y,on,off,T,H,B){
   if(!schedDraggable())return '';
   const top=T, bot=H-B;
   const h=(m,id,label)=>`
@@ -69,8 +77,8 @@ function schedHandles(x,y,on,off,T,H,B){
   // in duration mode the start edge sets the day length, the end edge moves the anchor
   return h(on,'on',S.schedule_mode==='duration'?'\u21c6':'\u25b8')+h(off,'off','\u25c2');
 }
-let schedDrag=null;
-function bindSchedDrag(){
+export let schedDrag=null;
+export function bindSchedDrag(){
   const svg=document.getElementById('chart');
   if(!svg||svg.dataset.schedBound)return;
   svg.dataset.schedBound='1';
@@ -137,14 +145,14 @@ function bindSchedDrag(){
   svg.addEventListener('pointerup',finish);
   svg.addEventListener('pointercancel',finish);
 }
-function minsToDate(ref,m){
+export function minsToDate(ref,m){
   const d=new Date(ref);
   d.setHours(Math.floor(m/60),m%60,0,0);
   return d;
 }
 
 // ---- lighting-stage graphics: graphic follows the actual phase ----
-const BULB={
+export const BULB={
   day:'<svg viewBox="0 0 100 100" class="sunsvg"><g class="raygroup"><path d="M61.0 32.0 Q50.0 3.0 50.0 3.0 L39.0 32.0 Z"/><path d="M68.5 39.9 Q73.5 9.3 73.5 9.3 L49.5 28.9 Z"/><path d="M71.1 50.5 Q90.7 26.5 90.7 26.5 L60.1 31.5 Z"/><path d="M68.0 61.0 Q97.0 50.0 97.0 50.0 L68.0 39.0 Z"/><path d="M60.1 68.5 Q90.7 73.5 90.7 73.5 L71.1 49.5 Z"/><path d="M49.5 71.1 Q73.5 90.7 73.5 90.7 L68.5 60.1 Z"/><path d="M39.0 68.0 Q50.0 97.0 50.0 97.0 L61.0 68.0 Z"/><path d="M31.5 60.1 Q26.5 90.7 26.5 90.7 L50.5 71.1 Z"/><path d="M28.9 49.5 Q9.3 73.5 9.3 73.5 L39.9 68.5 Z"/><path d="M32.0 39.0 Q3.0 50.0 3.0 50.0 L32.0 61.0 Z"/><path d="M39.9 31.5 Q9.3 26.5 9.3 26.5 L28.9 50.5 Z"/><path d="M50.5 28.9 Q26.5 9.3 26.5 9.3 L31.5 39.9 Z"/></g>'
      +'<circle class="sundisk" cx="50" cy="50" r="23"/>'
      +'<g class="face"><circle cx="43" cy="48" r="3"/><circle cx="57" cy="48" r="3"/>'
@@ -166,7 +174,7 @@ const BULB={
      +'<path d="M45 59 Q50 63 55 59" fill="none" stroke-width="2.4" stroke-linecap="round"/></g>'
      +'<line class="horizon" x1="8" y1="73" x2="92" y2="73"/></svg>'
 };
-function moonPhase(date){
+export function moonPhase(date){
   // illuminated fraction (0 new .. 1 full) and waxing flag, from the synodic month
   const synodic=29.530588853;
   const knownNew=Date.UTC(2000,0,6,18,14,0)/86400000;  // a reference new moon (days)
@@ -174,7 +182,7 @@ function moonPhase(date){
   let age=((days-knownNew)%synodic+synodic)%synodic;
   return {fraction:(1-Math.cos(2*Math.PI*age/synodic))/2, waxing:age<synodic/2, age};
 }
-function litMoonPath(cx,cy,R,f,waxing){
+export function litMoonPath(cx,cy,R,f,waxing){
   if(f<=0.005)return '';                                   // new moon: nothing lit
   if(f>=0.995)return `M ${cx} ${cy-R} A ${R} ${R} 0 1 1 ${cx} ${cy+R} A ${R} ${R} 0 1 1 ${cx} ${cy-R} Z`;
   const rx=(R*Math.abs(2*f-1)).toFixed(2);
@@ -184,7 +192,7 @@ function litMoonPath(cx,cy,R,f,waxing){
   const inner=bulgeRight?0:1;
   return `M ${cx} ${cy-R} A ${R} ${R} 0 0 ${outer} ${cx} ${cy+R} A ${rx} ${R} 0 0 ${inner} ${cx} ${cy-R} Z`;
 }
-function moonSvg(){
+export function moonSvg(){
   const {fraction,waxing}=moonPhase(new Date());
   const cx=50,cy=48,R=30, lit=litMoonPath(cx,cy,R,fraction,waxing);
   return '<svg viewBox="0 0 100 100" class="moonsvg">'
@@ -195,7 +203,7 @@ function moonSvg(){
     +'<circle class="star" cx="86" cy="56" r="1.4"/></svg>';
 }
 
-function setBulb(stage){
+export function setBulb(stage){
   const el=document.getElementById('bulb');
   if(!el||el.dataset.stage===stage)return;   // only swap on change (keeps animation steady)
   el.dataset.stage=stage;
@@ -203,7 +211,7 @@ function setBulb(stage){
   el.innerHTML=stage==='night'?moonSvg():(BULB[stage]||BULB.day);
 }
 
-function phaseOf(){
+export function phaseOf(){
   const on=mins(S.on),off=mins(S.off),now=mins(S.now);
   if(now<on)return['Night','Lights come on at '+fmt(S.on),'night'];
   if(now<on+S.ramp)return['Morning ramp','Full brightness at '+fmt(new Date(S.on.getTime()+S.ramp*60000)),'rise'];
@@ -212,7 +220,7 @@ function phaseOf(){
   return['Night','Lights come on tomorrow around '+fmt(S.on),'night'];
 }
 
-function render(){
+export function render(){
   if(!S)return;
   document.getElementById('pct').textContent=Math.round(S.brightness)+'%';
   {const ph=document.querySelector('.aphase');
@@ -242,9 +250,9 @@ function render(){
   draw();
 }
 
-let lightMode='auto', dragging=false;
-let pendingMode=null;   // mode the user just picked, held until status agrees
-function showLightMode(mode, bright, fromStatus){
+export let lightMode='auto', dragging=false;
+export let pendingMode=null;   // mode the user just picked, held until status agrees
+export function showLightMode(mode, bright, fromStatus){
   mode = mode || 'auto';
   lightMode = mode;
   document.querySelectorAll('.lcbtn:not(.fanbtn):not(.heatbtn)').forEach(b=>
@@ -305,14 +313,14 @@ function showLightMode(mode, bright, fromStatus){
 // The brightness the user asked for, held until the server confirms it. A
 // status built before the POST landed would otherwise repaint the old value
 // and then correct itself, which reads as the slider jumping back.
-let brightHold=null, brightHoldTimer=null;
-function holdBright(v){
+export let brightHold=null, brightHoldTimer=null;
+export function holdBright(v){
   brightHold=v;
   clearTimeout(brightHoldTimer);
   brightHoldTimer=setTimeout(()=>{brightHold=null; refresh();}, 6000);
 }
 
-async function setLight(mode, brightness, quiet){
+export async function setLight(mode, brightness, quiet){
   if(ctlTarget==='second')return setLight2(mode, brightness, quiet);
   const info=document.getElementById('lightinfo');
   if(info && !quiet)info.textContent='...';
@@ -341,7 +349,7 @@ async function setLight(mode, brightness, quiet){
 }
 // The second light has no /api/light of its own: its mode and brightness are
 // the light2_override and light2_bright settings.
-async function setLight2(mode, brightness, quiet){
+export async function setLight2(mode, brightness, quiet){
   const info=document.getElementById('lightinfo');
   const body={};
   if(mode!=null)body.light2_override=mode;
@@ -359,8 +367,8 @@ async function setLight2(mode, brightness, quiet){
 }
 // While dragging, push the level at ~8/sec so the light tracks the slider
 // instead of waiting for release. Trailing call guarantees the final value.
-let dragTimer=null, dragPending=null;
-function pushBrightness(v){
+export let dragTimer=null, dragPending=null;
+export function pushBrightness(v){
   dragPending=v;
   if(dragTimer)return;
   dragTimer=setTimeout(()=>{
@@ -369,16 +377,16 @@ function pushBrightness(v){
     if(val!=null)setLight(null, val, true);
   }, 120);
 }
-function agoStr(d){
+export function agoStr(d){
   const m=Math.max(0,Math.round((Date.now()-d)/60000));
   if(m<60)return m+' min ago';
   const h=Math.floor(m/60);
   if(h<48)return h+'h '+(m%60)+'m ago';
   return Math.floor(h/24)+' days ago';
 }
-function renderPhoto(j){  const card=document.getElementById('photocard');
+export function renderPhoto(j){  const card=document.getElementById('photocard');
   const img=document.getElementById('photo');
-  camHealth=j.camera||null;
+  set_camHealth(j.camera||null);
   {const warn=document.getElementById('camwarn');
    if(warn){
     let msg='', cls='';
@@ -446,7 +454,7 @@ function renderPhoto(j){  const card=document.getElementById('photocard');
        :(img.dataset.crop?' \u00b7 cropped'
        :(flatOn&&!editing?' \u00b7 raw frame (unlock grid to place corners)':' \u00b7 raw frame')));
 }
-async function capturePhoto(){
+export async function capturePhoto(){
   const btn=document.getElementById('capturebtn');
   const info=document.getElementById('captureinfo');
   if(!btn||btn.disabled)return;
@@ -469,3 +477,9 @@ async function capturePhoto(){
     btn.disabled=false;
   }
 }
+
+// setters: other modules cannot assign an imported binding
+export function set_S(v){ S=v; return v; }
+export function set_dragPending(v){ dragPending=v; return v; }
+export function set_dragTimer(v){ dragTimer=v; return v; }
+export function set_dragging(v){ dragging=v; return v; }

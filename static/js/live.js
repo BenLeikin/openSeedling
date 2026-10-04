@@ -1,18 +1,23 @@
 // openSeedling dashboard: Live updates: the event stream, polling fallback, and the light curve.
-// One of several plain scripts loaded in order by index.html; they share one
-// global scope (the split of the former app.js, 4 Oct). A function used at
-// load time must be defined in this file or an earlier one.
+// An ES module: what it uses from the others is imported at the top, and what
+// it offers is exported. Another module cannot assign one of its variables
+// directly; it calls the set_<name>() exported at the bottom. Code that runs
+// at page load is in start(), which main.js calls in a fixed order.
 // ---- live updates ----
 // EventSource pushes a status the moment something changes. The poll stays,
 // slowed right down: a stream that dies quietly would otherwise freeze the
 // page, and this way the worst case is the old 15-second behaviour.
-const POLL_FAST=15000, POLL_SLOW=60000;
-let pollTimer=null, es=null, streamOk=false;
-function setPoll(ms){
+import { render } from './light.js';
+import { lightBackend, pollFloat } from './charts.js';
+import { applyStatus, refresh } from './grid.js';
+
+export const POLL_FAST=15000, POLL_SLOW=60000;
+export let pollTimer=null, es=null, streamOk=false;
+export function setPoll(ms){
   if(pollTimer)clearInterval(pollTimer);
   pollTimer=setInterval(refresh, ms);
 }
-function initStream(){
+export function initStream(){
   if(!('EventSource' in window))return;        // old browser: polling only
   try{ es=new EventSource('/api/stream'); }catch(e){ return; }
   es.addEventListener('status', ev=>{
@@ -29,27 +34,16 @@ function initStream(){
 }
 // The server fixes a stream's signed-in state when it opens, so a login or
 // logout has to reopen it, or the next push would show the old view.
-function restartStream(){
+export function restartStream(){
   if(es){ es.close(); es=null; }
   streamOk=false; setPoll(POLL_FAST);
   initStream();
 }
 // A hidden tab keeps no stream: each one holds a server thread and one of six
 // slots. Closed a minute after hiding, reopened with a fresh status on return.
-let hideTimer=null;
-document.addEventListener('visibilitychange',()=>{
-  if(document.hidden){
-    hideTimer=setTimeout(()=>{ if(es){ es.close(); es=null; streamOk=false; } },60000);
-  }else{
-    clearTimeout(hideTimer); hideTimer=null;
-    if(!es){ restartStream(); refresh(); }
-  }
-});
-setPoll(POLL_FAST);
-initStream();
-setInterval(render,60000);
-setInterval(pollFloat,1500);
-function curveLuxAt(pts, pct){
+export let hideTimer=null;
+
+export function curveLuxAt(pts, pct){
   // linear interpolation between the two measured points either side
   if(!pts.length)return null;
   if(pct<=pts[0][0])return pts[0][1];
@@ -62,7 +56,7 @@ function curveLuxAt(pts, pct){
   }
   return pts[pts.length-1][1];
 }
-function drawLightCurve(curve, sweeping, nowPct){
+export function drawLightCurve(curve, sweeping, nowPct){
   const svg=document.getElementById('lcurve');
   const wrap=document.getElementById('lcurvewrap');
   if(!svg||!wrap)return;
@@ -140,7 +134,7 @@ function drawLightCurve(curve, sweeping, nowPct){
     }
   }
 }
-async function startSweep(){
+export async function startSweep(){
   const info=document.getElementById('sweepinfo');
   const btn=document.getElementById('sweepbtn');
   if(sweepRunning){
@@ -163,4 +157,24 @@ async function startSweep(){
     if(btn)btn.textContent='Cancel';
   }catch(e){if(info)info.textContent='request failed';}
 }
-let sweepRunning=false, lastCurve=null;
+export let sweepRunning=false, lastCurve=null;
+
+// setters: other modules cannot assign an imported binding
+export function set_lastCurve(v){ lastCurve=v; return v; }
+export function set_sweepRunning(v){ sweepRunning=v; return v; }
+
+// what ran at load time as a plain script; main.js calls it in the old order
+export function start(){
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden){
+    hideTimer=setTimeout(()=>{ if(es){ es.close(); es=null; streamOk=false; } },60000);
+  }else{
+    clearTimeout(hideTimer); hideTimer=null;
+    if(!es){ restartStream(); refresh(); }
+  }
+});
+setPoll(POLL_FAST);
+initStream();
+setInterval(render,60000);
+setInterval(pollFloat,1500);
+}

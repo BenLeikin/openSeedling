@@ -307,7 +307,16 @@ and sensor smoothing), **Camera**, **Setups**, **Trays**, **Alerts**, and
   units, Setups, charts, the phone layout and the touchscreen summary are
   checked by what happens on screen, not by how the code is written. Without
   Playwright it skips and exits 0.
-- `ruff check .` lints with the rules in `ruff.toml`.
+- `ruff check .` lints the Python with the rules in `ruff.toml`.
+- The dashboard's scripts are ES modules (`static/js/`, entered through
+  `main.js`): each imports what it uses and exports what it offers, so a
+  missing or renamed function is an error at load, not a silent global. A
+  module cannot assign another module's variable; it calls that module's
+  `set_<name>()`. Code that runs at page load sits in each module's
+  `start()`, which `main.js` calls in a fixed order. Scripts are served with
+  `Cache-Control: no-cache`, so a browser revalidates each one after an
+  update. Lint them with `npm install && npm run lint` (ESLint, rules in
+  `eslint.config.mjs`; development only, nothing installs on the Pi).
 
 ### Memory and storage
 
@@ -957,7 +966,7 @@ routes_garden.py    probes, floats, plantings, tray map, pumps, auto-water
 routes_climate.py   light, schedule, sweeps, smart plug, fan, heat mat
 routes_data.py      AI report, backups, readings history, host stats
 templates/index.html, templates/screen.html
-static/js/*.js      the dashboard, ten plain scripts loaded in order (see index.html)
+static/js/*.js      the dashboard: ES modules, entered through main.js
 static/{style.css,screen.js,screen.css}
 scripts/{setup.sh,update.sh,set_password.py,test_ramp.py}
 deploy/             box config applied by setup.sh (boot, unit, packages, env reference)

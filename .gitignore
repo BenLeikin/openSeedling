@@ -26,3 +26,7 @@ config.json.bak
 
 # lint cache
 .ruff_cache/
+
+# development tools (npm install), never deployed
+node_modules/
+package-lock.json
