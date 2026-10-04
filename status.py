@@ -205,6 +205,8 @@ def status_payload(authed=None):
         photo_count=count,
         latest_photo_time=latest_time.isoformat() if latest_time else None,
         camera={"fails": cam["fails"], "last_err": cam["last_err"],
+                "usb_speed": (camera_mod.usb_link_speed(cfg.get("usb_device", "/dev/video0"))
+                              if cfg.get("camera_backend", "rpicam") == "usb" else None),
                 "last_ok": (datetime.fromtimestamp(cam["last_ok"], tz).isoformat()
                             if cam["last_ok"] else None)},
         capturing=camera_mod.capturing,

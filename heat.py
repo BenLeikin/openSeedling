@@ -1,6 +1,6 @@
 """Heat mat: a thermostat on the smart plug, driven by a soil temperature probe.
 
-The plug was the light's on/off backend. Settings, Smart plug, "Use the plug
+The plug was the light's on/off backend. Settings, System, Smart plug, "Use the plug
 for" now gives it to one job: the light, or the heat mat. With the heat mat
 the light code never touches it, and this module is its only writer.
 

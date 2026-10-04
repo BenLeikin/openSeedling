@@ -591,6 +591,30 @@ def _capture_tick(last_shot):
     return last_shot
 
 
+SYSFS_V4L = Path("/sys/class/video4linux")
+
+
+def usb_link_speed(dev):
+    """The USB link speed of a V4L2 device in Mbit/s (1.5, 12, 480, 5000...),
+    or None if it is not a USB device or cannot be read.
+
+    A camera behind the wrong hub enumerates at 12 Mbit/s (USB 1.1) and then
+    offers only tiny MJPEG sizes (160x120 on Ben's camera, 4 Sep), which looks
+    like a camera fault rather than the hub's. The status and an alert carry
+    this number so that failure is named for what it is."""
+    try:
+        node = SYSFS_V4L / Path(dev).name / "device"
+        p = node.resolve()
+        for _ in range(4):                  # interface dir -> device dir with "speed"
+            sp = p / "speed"
+            if sp.exists():
+                return float(sp.read_text().strip())
+            p = p.parent
+    except Exception:
+        pass
+    return None
+
+
 MIN_FREE_GB = 1.0          # stop taking photos below this much free space
 LOW_FREE_GB = 3.0          # alert below this
 _disk_warned = [0.0]

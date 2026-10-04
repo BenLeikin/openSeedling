@@ -275,6 +275,20 @@ def check_all(snapshot, cfg, unit_temp="F"):
             out.append((act, "res_fault", "Reservoir sensors agree again",
                         f"Level reads {res}.", "good"))
 
+    if snapshot.get("_camera_slow_link"):
+        act = evaluate("camera_slow_link", True, now)
+        if act in ("fire", "remind"):
+            out.append((act, "camera_slow_link", "Camera on a slow USB link",
+                        f"The camera is connected at {snapshot['_camera_slow_link']} instead of "
+                        "480 Mbit/s, so large photo sizes are missing or fail. A USB hub or "
+                        "cable is holding it back: plug the camera in directly, or use a "
+                        "USB 2.0 high-speed hub (scripts/usbcheck.sh tests one).", "error"))
+    else:
+        act = evaluate("camera_slow_link", False, now)
+        if act == "clear":
+            out.append((act, "camera_slow_link", "Camera USB link back to full speed",
+                        "The camera is connected at 480 Mbit/s again.", "good"))
+
     if snapshot.get("_disk_low"):
         act = evaluate("disk_low", True, now)
         if act in ("fire", "remind"):

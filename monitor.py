@@ -786,6 +786,9 @@ def run_alerts(readings):
         # was; the sustain window absorbs a wifi blip, repeated failures do not
         # the plug is worth alerting on whether it is the main light or the
         # third fixture: either way a dead plug means a light stuck on or off
+        spd = (camera_mod.usb_link_speed(cfg.get("usb_device", "/dev/video0"))
+               if cfg.get("camera_enabled") and cfg.get("camera_backend", "rpicam") == "usb" else None)
+        snap["_camera_slow_link"] = (f"{spd:g} Mbit/s" if spd is not None and spd < 480 else "")
         free = camera_mod.disk_free_gb()
         snap["_disk_low"] = (f"{free:.1f} GB free on the SD card"
                              + (" (photos have stopped)" if free < camera_mod.MIN_FREE_GB else "")

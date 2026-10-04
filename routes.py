@@ -1393,7 +1393,7 @@ def api_heat():
     with config.settings_lock:
         if config.settings.get("plug_use", "light") != "heat":
             return jsonify(ok=False, error="the smart plug is not set to the heat mat "
-                           "(Settings, Smart plug)"), 200
+                           "(Settings, System, Smart plug)"), 200
         config.settings["heat_mode"] = mode
         config.save_config()
     threading.Thread(target=heat_mod.heat_pass, daemon=True).start()   # act now

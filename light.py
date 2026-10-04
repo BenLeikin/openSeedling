@@ -316,7 +316,7 @@ def set_brightness_raw(percent):
             dim = percent if mode == "dim" else (l2_level if l2 == "dim" else 0.0)
             # the dim line: 0% duty is full brightness, so dark is 100
             hardware.pwm2.change_duty_cycle(100.0 - dim)
-    # The plug is the light's only when Settings, Smart plug gives it to the
+    # The plug is the light's only when Settings, System, Smart plug gives it to the
     # light. Given to the heat mat, heat.py is its only writer: driving it
     # off here with every light write would switch the mat off each 30 s.
     if (KASA_HOST_ENV or cfg.get("kasa_host")) and cfg.get("plug_use", "light") == "light":

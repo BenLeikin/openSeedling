@@ -3352,7 +3352,7 @@ async function genReport(){
     document.getElementById('reportbody').innerHTML='<p class="rmuted">Request timed out, but it may still be generating. Reload in a moment to see it.</p>';
   }
 }
-// The seedling DLI target band, from Settings, Targets. The bar's scale grows
+// The seedling DLI target band, from the setup (Settings, Setups). The bar's scale grows
 // to fit a high band: 16 mol for a 6 to 12 band, 24 for 15 to 20, and so on.
 var dliBand={lo:15,hi:20,max:24};   // var: read by renders that can run before this line
 function setDliBand(s){
@@ -4019,7 +4019,7 @@ function renderDayProgress(j){
   const lit=document.getElementById('dplit');
   if(lit)lit.textContent=(day&&day.lit_minutes)?durStr(day.lit_minutes*60000)+' lit':'';
 
-  // DLI against the seedling target band from Settings, Targets
+  // DLI against the setup's target band (Settings, Setups)
   const {lo:BLO,hi:BHI,max:BMAX}=dliBand;
   const d=(day&&day.dli!=null)?day.dli:(lightMetrics&&lightMetrics.dli);
   const dfill=document.getElementById('dlifill');

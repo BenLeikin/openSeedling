@@ -2115,6 +2115,67 @@ def _kiosk():
           f"anything through a proxy or from another machine still needs the password "
           f"(off {off}, local {local}, proxied {proxied}, remote {remote})")
 
+
+def _usb_link():
+    """The camera behind a hub at USB 1.1 speed offered only 160x120 (4 Sep).
+    The link speed is now in the status, alerted, and checked by usbcheck.sh."""
+    root = WORK / "sysfs"
+    iface = root / "devices" / "usb1" / "1-1" / "1-1.3" / "1-1.3:1.0"
+    iface.mkdir(parents=True, exist_ok=True)
+    (root / "v4l" / "video9").mkdir(parents=True, exist_ok=True)
+    link = root / "v4l" / "video9" / "device"
+    if not link.exists():
+        link.symlink_to(iface)
+    real = camera_mod.SYSFS_V4L
+    camera_mod.SYSFS_V4L = root / "v4l"
+    try:
+        (iface.parent / "speed").write_text("12\n")
+        slow = camera_mod.usb_link_speed("/dev/video9")
+        (iface.parent / "speed").write_text("480\n")
+        fast = camera_mod.usb_link_speed("/dev/video9")
+        none = camera_mod.usb_link_speed("/dev/video7")
+    finally:
+        camera_mod.SYSFS_V4L = real
+    check(slow == 12.0 and fast == 480.0 and none is None,
+          f"the camera's USB link speed is read from sysfs (12 -> {slow}, 480 -> {fast}, missing -> {none})")
+    import alerts
+    alerts.reset()
+    fired = [a for a in alerts.check_all({"_camera_slow_link": "12 Mbit/s"},
+                                         dict(alerts.DEFAULTS, sustain_seconds=0))
+             if a[1] == "camera_slow_link"]
+    alerts.reset()
+    st = c.get("/api/status").get_json()
+    sh = (APP / "scripts" / "usbcheck.sh").read_text()
+    sjs = (APP / "static" / "screen.js").read_text()
+    check(fired and fired[0][0] == "fire" and "480 Mbit/s" in fired[0][3]
+          and "usb_speed" in st["camera"]
+          and subprocess.run(["bash", "-n", str(APP / "scripts" / "usbcheck.sh")]).returncode == 0
+          and "must be 480" in sh and "bits >> 53 & 1" in sh
+          and "Camera on a slow USB link" in sjs,
+          "a camera on a slow USB link is alerted and shown on the touchscreen; usbcheck.sh "
+          "tests a hub (camera speed, configured size offered, touch seen, undervoltage)")
+
+
+def _settings_layout():
+    """3 Oct: fifteen settings groups merged into eight, nothing lost."""
+    html = (APP / "templates" / "index.html").read_text()
+    form = html[html.index('<form id="cfgform"'):html.index("</form>", html.index('<form id="cfgform"'))]
+    titles = re.findall(r"<summary><h3>(.*?)</h3></summary>", form)
+    subs = re.findall(r'<h4 class="fsub">(.*?)</h4>', form)
+    names = set(re.findall(r'name="(\w+)"', form))
+    must = {"light_backend", "schedule_mode", "light2_start", "lux_to_ppfd_k", "heat_target_f",
+            "fan_min_speed", "soil_temp_low_f", "moisture_threshold_pct", "probe_median_depth",
+            "camera_backend", "alerts_enabled", "latitude", "plug_use", "units"}
+    sec = lambda t: form[form.index(f"<summary><h3>{t}</h3>"):]
+    check(titles == ["Light", "Climate", "Watering", "Camera", "Setups", "Trays", "Alerts", "System"]
+          and {"Fixture", "Schedule", "Second light", "Light metrics", "Heat mat", "Fan",
+               "Target bands", "Location", "Smart plug", "Display", "Backup"} <= set(subs)
+          and must <= names and len(re.findall(r'name="(\w+)"', form)) >= 78
+          and 'name="probe_median_depth"' in sec("Watering").split("</details>")[0]
+          and 'name="probe_median_depth"' not in sec("Alerts").split("</details>")[0],
+          f"settings are in eight sections with subheadings, every field still present "
+          f"({len(names)} fields), sensor smoothing now under Watering")
+
 def run(name, fn):
     """A section that crashes counts as one failure; the rest still run."""
     section(name)
@@ -2156,6 +2217,8 @@ run('Review fixes', _review_fixes)
 run('Settings form validity', _form_validity)
 run('Phone layout', _phone_layout)
 run('Touchscreen kiosk', _kiosk)
+run('USB link', _usb_link)
+run('Settings layout', _settings_layout)
 run('Shutdown', _shutdown)
 
 # --------------------------------------------------------------------------

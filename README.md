@@ -124,8 +124,9 @@ the watering controls, and the daily AI plant-health report.*
 
 ### Heat mat
 
-- The smart plug can run a heat mat instead of the light: Settings, Smart plug,
-  "Use the plug for", then Settings, Heat mat for the target and cut-off, and
+- The smart plug can run a heat mat instead of the light: Settings, System,
+  Smart plug, "Use the plug for", then Settings, Climate, Heat mat for the
+  target and cut-off, and
   Auto, On and Off on the Light card. With the plug given to the heat mat the
   light code never touches it (before, every light write drove the plug off).
 - Auto is time-proportional control on a soil probe: every 15 minutes it sets
@@ -272,8 +273,21 @@ pressure but cannot take the controller down. The screen counts as signed in
 (`GROWLIGHT_TRUST_LOCALHOST=1` in `.env`, set by the script): only a process
 on the Pi itself connects from 127.0.0.1; the public site still needs the
 password. On a Zero the touch panel's USB needs a hub on the single port the
-camera uses: a powered USB 2.0 high-speed hub, checked with `lsusb -t`
-(the camera must show `480M`).
+camera uses. Check any hub before relying on it:
+
+    bash scripts/usbcheck.sh
+
+It passes only if the camera links at 480 Mbit/s, still offers the size the
+app captures at, a touchscreen is seen, and there was no undervoltage. A
+camera on a slower link also raises the "Camera on a slow USB link" alert and
+shows on the touchscreen's attention line.
+
+### Settings layout
+
+Eight collapsible sections: **Light** (fixture, schedule, second light, light
+metrics), **Climate** (heat mat, fan, target bands), **Watering** (auto-watering
+and sensor smoothing), **Camera**, **Setups**, **Trays**, **Alerts**, and
+**System** (location, smart plug, display, backup).
 
 ### Safeguards against a bad day
 

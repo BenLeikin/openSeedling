@@ -146,6 +146,7 @@ function drawAttention() {
   if (r.state === 'empty') bad('Reservoir empty');
   if (r.state === 'fault') warn('Reservoir sensor fault');
   if (cam.fails > 0 && cam.last_err) warn('Camera: ' + cam.last_err);
+  if (cam.usb_speed != null && cam.usb_speed < 480) bad(`Camera on a slow USB link (${cam.usb_speed} Mbit/s)`);
   const thr = w.moisture_threshold_pct || 30;
   Object.keys((S.settings || {}).trays || {}).forEach(t => {
     const m = trayMoisture(t);

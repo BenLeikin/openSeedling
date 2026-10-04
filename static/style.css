@@ -1252,3 +1252,7 @@ svg.cmini .cnight{fill:var(--fir);opacity:.07}
 .kioskback{position:fixed;left:12px;bottom:12px;z-index:50;padding:12px 18px;border-radius:12px;
   background:var(--glass);color:var(--fir);border:1px solid var(--line-2);font-weight:700;text-decoration:none;
   box-shadow:0 4px 14px rgba(0,0,0,.35)}
+/* a combined settings group: one subheading per former group */
+.fgroup h4.fsub{margin:16px 0 4px;padding-top:10px;border-top:1px solid var(--line);font-size:13px;
+  font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--leaf)}
+.fgroup summary+h4.fsub{border-top:0;padding-top:0;margin-top:6px}
