@@ -689,8 +689,8 @@ KIOSK_CGROUP = Path("/sys/fs/cgroup/system.slice/growlight-kiosk.service/memory.
 def memory_readings():
     """Memory every sample interval, in MB: what the kernel still has to give
     (MemAvailable), swap in use, the controller's own resident size, and the
-    touchscreen's whole session if it runs. The 26 Sep out-of-memory kill of
-    the controller left no trend behind; the next one will."""
+    touchscreen's whole session if it runs, so an out-of-memory kill leaves
+    the trend that led to it."""
     out = {}
     try:
         mi = {}

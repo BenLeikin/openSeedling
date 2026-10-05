@@ -436,11 +436,9 @@ export function initTrays() {
       end.blur();
       const tr = cell.dataset.tray,
         cid = cell.dataset.cell;
-      // Hold off tray re-renders until our own refresh lands. A poll started
-      // before this POST returns pre-delete data, and without the guard it
-      // repaints the cell straight back in.
-      // Held across the refresh, not just the POST: releasing it earlier lets a
-      // poll that started before the delete repaint the cell straight back in.
+      // Hold off tray re-renders until our own refresh lands, not just until
+      // the POST returns: a poll started before the delete carries the old
+      // data and would repaint the cell straight back in.
       trayPending++;
       let done = false;
       try {

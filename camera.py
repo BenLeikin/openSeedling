@@ -121,9 +121,8 @@ def oom_first(cmd):
     """Run cmd as the kernel's first choice to kill when memory runs out.
 
     The Pi has little memory the kernel can hand to drivers, and a big camera
-    capture or an image job can exhaust it. On 25 Sep the camera's buffer
-    request tipped the box over three times and the kernel killed the whole
-    controller (lights, pumps, dashboard) each time. A helper started through
+    capture or an image job can exhaust it; without this the kernel may kill
+    the whole controller (lights, pumps, dashboard) instead. A helper started through
     this raises its own oom_score_adj to the maximum before exec, so the
     helper dies instead, the job fails and is logged, and the controller keeps
     running. Raising one's own score needs no privilege.
@@ -638,9 +637,8 @@ def capture_loop():
             last_shot = _capture_tick(last_shot)
         except Exception:
             # One bad tick (a full disk, an odd file) must not end the
-            # timelapse for good: the thread dying used to leave photos
-            # stopped with the dashboard up and nothing in the journal
-            # after the traceback. Log it and carry on.
+            # timelapse: if this thread dies, photos stop while the dashboard
+            # looks fine. Log it and carry on.
             log.exception("capture loop error")
         time.sleep(15)
 
@@ -705,9 +703,9 @@ def usb_link_speed(dev):
     or None if it is not a USB device or cannot be read.
 
     A camera behind the wrong hub enumerates at 12 Mbit/s (USB 1.1) and then
-    offers only tiny MJPEG sizes (160x120 on Ben's camera, 4 Sep), which looks
-    like a camera fault rather than the hub's. The status and an alert carry
-    this number so that failure is named for what it is."""
+    offers only tiny MJPEG sizes (160x120 is typical), which looks like a
+    camera fault rather than the hub's. The status and an alert carry this
+    number so that failure is named for what it is."""
     try:
         node = SYSFS_V4L / Path(dev).name / "device"
         p = node.resolve()

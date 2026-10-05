@@ -1,7 +1,8 @@
 // openSeedling dashboard entry point (loaded by index.html as a module).
-// Each module declares its functions and state and exports them; what used to
-// run at load time is in each module's start(), called here in the order the
-// plain scripts used to load, after every module has been evaluated.
+// Each module declares its functions and state and exports them; code that
+// runs at page load is in each module's start(), called here in a fixed order
+// once every module has been evaluated, so no start() meets an uninitialized
+// binding in another module.
 import * as m_light from './light.js';
 import * as m_setups from './setups.js';
 import * as m_photos from './photos.js';

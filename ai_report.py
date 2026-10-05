@@ -423,10 +423,10 @@ def _extract_json(text):
         return None
 
 
-# Output budget for thinking plus the JSON reply. Current models (Claude
-# Sonnet 5 and later) think by default, and thinking tokens count against
-# max_tokens: at the old 2048 the whole budget went on thinking and the reply
-# came back with no text at all. The JSON itself is about 1,000 tokens.
+# Output budget for thinking plus the JSON reply. Current models think by
+# default and thinking counts against max_tokens, so the budget must leave room
+# for the JSON (about 1,000 tokens) after the model has thought; too small a
+# budget returns no text at all.
 MAX_TOKENS = 8000
 TIMEOUT_S = 240
 

@@ -17,9 +17,9 @@ import hardware
 fill_failure = {"msg": ""}
 
 # What a restart must not forget. last_run drives the auto-water cooldown and
-# today_seconds the daily pump cap; both used to live only in memory, so a
-# restart reset them, and a service that restarted repeatedly could water past
-# the cap. "running" is deliberately not kept: after a restart no pump is on.
+# today_seconds the daily pump cap; kept only in memory, a service that
+# restarted repeatedly could water past the cap. "running" is deliberately not
+# kept: after a restart no pump is on.
 PERSIST_PUMP_KEYS = ("last_run", "today_seconds", "day", "last_detail")
 
 
@@ -67,8 +67,8 @@ def restore_persistent_state():
     log.info(f"restored pump state: today {restored}s")
 
 
-# Auto-watering used to be one switch for every tray. A config from then with
-# it on arms every tray with a pump, once, so an upgrade changes nothing.
+# Migration: older configs have one auto-watering switch for every tray. With it
+# on, every tray with a pump is armed, once, so upgrading changes nothing.
 if config.settings.get("auto_water") and "auto_water_trays" not in config._file_keys:
     config.settings["auto_water_trays"] = sorted(hardware.PUMP_PINS)
     try:

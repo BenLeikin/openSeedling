@@ -3526,6 +3526,31 @@ def _project_hygiene():
     )
 
 
+def _comments():
+    """Comments say why the code is the way it is; history (who, when, which
+    update) lives in the changelog, git and docs/."""
+    srcs = sorted(
+        [p for p in APP.glob("*.py")]
+        + [p for p in (APP / "scripts").glob("*")]
+        + [p for p in (APP / "static").rglob("*.js")]
+        + [APP / "static" / "style.css", APP / "templates" / "index.html"]
+    )
+    months = "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec"
+    pat = re.compile(r"\bBen'?s?\b|\b\d{1,2} (%s)\b|\b(%s) \d{1,2}\b" % (months, months))
+    hits = [
+        f"{p.relative_to(APP)}:{i}"
+        for p in srcs
+        if p.is_file()
+        for i, line in enumerate(p.read_text(errors="replace").split("\n"), 1)
+        if pat.search(line)
+    ]
+    check(
+        not hits and (APP / "docs" / "heat-tuning.md").exists(),
+        f"no names or dates in the code's comments; the heat mat's tuning story is in "
+        f"docs/heat-tuning.md ({hits[:5]})",
+    )
+
+
 def run(name, fn):
     """A section that crashes counts as one failure; the rest still run."""
     section(name)
@@ -3572,6 +3597,7 @@ run("Settings layout", _settings_layout)
 run("Settings field definitions", _form_definitions)
 run("Dashboard modules", _page_modules)
 run("Project hygiene", _project_hygiene)
+run("Comments", _comments)
 run("Optimizations", _optimizations)
 run("Shutdown", _shutdown)
 

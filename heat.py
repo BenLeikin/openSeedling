@@ -21,24 +21,10 @@ import monitor
 
 LOOP_S = 30  # how often the thermostat decides
 
-# Auto is time-proportional control, not on/off. Each WINDOW_S the mat gets a
-# duty (0 to 1) and is on for that share of the window, once, so the soil sees
-# the average power instead of full-on/full-off swings.
-#
-# Tuning history (Ben's rig, 26 Sep):
-# - Update 21 tuned on a model fitted to 10 h of on/off data (slow soil,
-#   soil = air + 6.4C at full power). It predicted 0.9F peak to peak; the rig
-#   swung 2.8F at a ~70 min period. That model had the lag wrong.
-# - Replaying update 21's own decisions over the 09:14-13:48 readings
-#   (the replay matched the live 77% duty) and fitting to that period gives a
-#   faster, delayed rig: about 12 min dead time and two ~15 min lags, soil
-#   settling near 16.5 + 0.38 x air + 3.69 x duty (C). In a closed-loop
-#   simulation that model reproduces the observed swing (2.75F), which is
-#   what makes it worth tuning on.
-# - Retuned on it: KP 0.25 per C (was 0.6), TI 2 h (was 1 h), and the
-#   feed-forward from that fit. Simulated over the same day: about 0.4F peak
-#   to peak, mean on target; under 1F with the rig's gain off by 30%, its
-#   lags 40-60% off, or its delay 50% off. About 165 plug switches a day.
+# Auto is time-proportional PI control, not on/off: each WINDOW_S the mat gets
+# a duty (0 to 1) and is on for that share of the window, in one pulse, so the
+# soil responds to the average power. Gains and feed-forward come from a model
+# fitted to the rig's measured response; see docs/heat-tuning.md.
 WINDOW_S = 900  # one on-pulse per 15 min
 MIN_PULSE_S = 60  # skip on or off pulses shorter than this (relay wear)
 KP_PER_C = 0.25  # duty per degree C below target

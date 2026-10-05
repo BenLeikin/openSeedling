@@ -453,7 +453,7 @@ export function renderReport(j) {
             `${v.why ? ` &mdash; ${esc(v.why)}` : ''}</li>`
         )
         .join('')}</ul></div>`;
-    // tolerate reports generated before this change
+    // reports saved by older versions lack this field
     if (!r.variety_check && r.species && r.species.length)
       h += `<div class="rsec"><h4>Species guesses</h4><ul>${r.species
         .map(sp => `<li><b>${esc(sp.cell || '')}</b> ${esc(sp.guess || 'unsure')}</li>`)
@@ -608,7 +608,7 @@ export function initReport() {
   fetchReport();
 }
 
-// what ran at load time as a plain script; main.js calls it in the old order
+// Runs once at page load; main.js calls each module's start() in a fixed order.
 export function start() {
   document.getElementById('cfgform').addEventListener('submit', async ev => {
     ev.preventDefault();
@@ -616,7 +616,7 @@ export function start() {
       msg = document.getElementById('msg');
     const body = {};
     // Setups have their own Save button, but a change there must not be lost
-    // when the main Save is the one pressed (it used to be, silently)
+    // when the main Save is the one pressed
     if (setupDirty && setupDraft) body.setups = setupDraft;
     // every Settings field, read the way config.FORM says it is stored
     for (const k of Object.keys(FORM)) {

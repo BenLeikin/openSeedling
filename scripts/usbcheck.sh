@@ -4,8 +4,8 @@
 #   bash scripts/usbcheck.sh
 #
 # Pass/fail on what matters: the camera's link speed (it must be 480 Mbit/s;
-# behind a hub that drops it to 12 Mbit/s the camera offers only tiny sizes,
-# which is what happened on 4 Sep), whether the camera still offers the size
+# behind a hub that drops it to 12 Mbit/s the camera offers only tiny sizes),
+# whether the camera still offers the size
 # the app is set to capture, whether a touchscreen is seen, and undervoltage
 # since boot. Read-only: it changes nothing and does not stop the app.
 

@@ -658,7 +658,7 @@ export function set_playerFps(v) {
   return v;
 }
 
-// what ran at load time as a plain script; main.js calls it in the old order
+// Runs once at page load; main.js calls each module's start() in a fixed order.
 export function start() {
   {
     const svg = document.getElementById('guidesvg');

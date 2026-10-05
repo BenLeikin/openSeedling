@@ -1149,7 +1149,7 @@ export function renderWater(j) {
     if (dead) info.textContent = 'no pump hardware';
     else if (tw.last && !tw.running) {
       // when as well as what: "how long since it was watered" is the question
-      // the tray card is usually asked, and it now survives a restart
+      // the tray card is usually asked (last_run survives a restart)
       // agoStr takes a timestamp in milliseconds; last_run is in seconds
       const ago = tw.last_run ? agoStr(tw.last_run * 1000) : '';
       info.textContent = 'last: ' + tw.last + (ago ? ` \u00b7 ${ago}` : '');

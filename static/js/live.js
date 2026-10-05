@@ -6,7 +6,7 @@
 // ---- live updates ----
 // EventSource pushes a status the moment something changes. The poll stays,
 // slowed right down: a stream that dies quietly would otherwise freeze the
-// page, and this way the worst case is the old 15-second behaviour.
+// page, and this way the worst case is a 15-second refresh.
 import { render } from './light.js';
 import { lightBackend, pollFloat } from './charts.js';
 import { applyStatus, refresh } from './grid.js';
@@ -219,7 +219,7 @@ export function set_sweepRunning(v) {
   return v;
 }
 
-// what ran at load time as a plain script; main.js calls it in the old order
+// Runs once at page load; main.js calls each module's start() in a fixed order.
 export function start() {
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {

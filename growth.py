@@ -59,7 +59,7 @@ def imread_min(cv2, path, min_side):
     """Decode a JPEG at the smallest scale (1/8, 1/4, 1/2 or full) whose
     longest side is still at least min_side. libjpeg decodes those scales
     directly, so an 8-megapixel photo needed at 1000 px costs 6 MB of pixels
-    instead of 24, on a 512 MB board that ran out of memory on 26 Sep."""
+    instead of 24, on a 512 MB board."""
     try:
         size = jpeg_size(path)
     except Exception:

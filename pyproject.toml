@@ -3,7 +3,7 @@
 # eslint.config.mjs and .prettierrc.json.
 [project]
 name = "openseedling"
-version = "39"
+version = "40"
 description = "Raspberry Pi seedling controller and web dashboard: grow light, watering, heat mat, camera and timelapse"
 requires-python = ">=3.11"
 readme = "README.md"

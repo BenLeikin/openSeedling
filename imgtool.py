@@ -2,8 +2,8 @@
 """Image work for the controller, run as a separate short-lived process.
 
 OpenCV costs about 40 MB the moment it is imported and never gives it back,
-on a 512 MB board where the controller was killed for memory on 26 Sep. So
-the controller never imports it: every warp, crop, rotation, resize and
+on a 512 MB board where memory is the scarcest resource. So the controller
+never imports it: every warp, crop, rotation, resize and
 sharpness score happens here, launched through camera.oom_first() so that
 under pressure the kernel kills this, not the controller. Memory is returned
 when the process exits.

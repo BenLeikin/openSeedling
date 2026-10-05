@@ -254,10 +254,9 @@ export function renderDayProgress(j) {
     dfill.style.width = Math.max(0, Math.min(100, ((d || 0) / BMAX) * 100)).toFixed(1) + '%';
 
   // Follow the schedule. During the photoperiod the fair comparison is not the
-  // whole day's target band but where the total should be by NOW: that band
-  // scaled by how far through the lit day we are. Judging a noon total of 5.0
-  // against the full-day 6 called it "below target" while it was exactly on
-  // pace. After lights out the full band applies again.
+  // whole day's target band but where the total should be by now: that band
+  // scaled by how far through the lit day we are (a noon total exactly on pace
+  // is not "below target"). After lights out the full band applies again.
   const lo = BLO * frac,
     hi = BHI * frac;
   const during = frac > 0 && frac < 1;
@@ -731,7 +730,7 @@ export function initLight() {
   });
 }
 
-// what ran at load time as a plain script; main.js calls it in the old order
+// Runs once at page load; main.js calls each module's start() in a fixed order.
 export function start() {
   {
     const f = document.getElementById('cfgform');

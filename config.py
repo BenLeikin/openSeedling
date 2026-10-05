@@ -270,9 +270,9 @@ if CONFIG_PATH.exists():
         settings.update(_saved)
 
 
-# Update 24 had one speed for both, as a percentage (100 = player 8 frames/s,
-# video 24). Carry the video's over; the player gets its own default (Ben
-# found the shared 33% too slow on the page).
+# Migration: version 24 had one speed for both, as a percentage (100 = player
+# 8 frames/s, video 24). The video keeps its speed; the player gets its own
+# default, since the shared slow speed was too slow on the page.
 if "timelapse_speed_pct" in settings:
     _pct = settings.pop("timelapse_speed_pct")
     if "video_fps" not in _file_keys:
@@ -344,9 +344,9 @@ if _old:
         log.warning(f"probe name update not persisted ({e})")
 
 
-# config.json stores every key, so the old default model was written into it
-# and would stay forever. Move that one value (and only that value) to the
-# current default; a model chosen deliberately is left alone.
+# Migration: config.json stores every key, so an earlier default model was
+# written into it and would otherwise stay forever. Move that one value (and
+# only that value) to the current default; a model chosen deliberately stays.
 _RETIRED_AI_DEFAULTS = ("claude-opus-4-8",)
 if settings.get("ai_model") in _RETIRED_AI_DEFAULTS:
     log.info(
@@ -359,9 +359,9 @@ if settings.get("ai_model") in _RETIRED_AI_DEFAULTS:
     except Exception as e:
         log.warning(f"AI model change not persisted ({e})")
 
-# the soil low bound used to live under an alerts-only key; adopt it once so
-# the chart and the alerts can never disagree. Checked against the file's own
-# keys, since DEFAULTS always supplies soil_temp_low_f after the merge.
+# Migration: older configs keep the soil low bound under an alerts-only key;
+# adopt it once so the chart and the alerts can never disagree. Checked against
+# the file's own keys, since DEFAULTS always supplies soil_temp_low_f.
 if "alert_soil_low_f" in settings:
     _old = settings.pop("alert_soil_low_f")
     if _file_keys and "soil_temp_low_f" not in _file_keys:
@@ -390,9 +390,8 @@ def _today_str():
 # ---- per-field settings validation ----
 # Each validator returns the cleaned value or raises ValueError with a short,
 # user-facing reason. update_settings applies every valid field and reports
-# the invalid ones by name: the old all-or-nothing form silently discarded a
-# whole save when one field was bad, which twice shipped stale settings
-# (cam_rotate stuck at 0, soil band stuck at 80-85).
+# the invalid ones by name: rejecting a whole save for one bad field silently
+# throws away every other change in it.
 
 
 def _v_bool(v):
@@ -696,8 +695,8 @@ FORM = {
     "timezone": {"kind": "text", "check": "_v_timezone"},
     "plug_use": {"kind": "choice", "choices": ["light", "heat"]},
     "kasa_host": {"kind": "text", "check": "_v_host"},
-    # never sent to the page (status.SECRET_SETTINGS), so a blank field keeps
-    # the stored one: as plain text it was blanked by every save
+    # never sent to the page (status.SECRET_SETTINGS), so the form shows it
+    # blank; a blank field must keep the stored value, not overwrite it
     "kasa_user": {"kind": "secret", "check": "_v_trimmed"},
     "kasa_pass": {"kind": "secret", "check": "_v_secret"},
     "little_buddy": {"kind": "bool"},

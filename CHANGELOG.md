@@ -4,6 +4,11 @@ One entry per update zip, newest first. Install any update with
 `bash scripts/update.sh openSeedling-update-N.zip`; each is cumulative from
 the 4-17 baseline. The installer commits each one with the heading below.
 
+## 40 (2026-10-05): Comments explain why
+- History in code comments (names, dates, which update changed what) rewritten as the reason the code is that way; migrations are labeled as such.
+- The heat mat's tuning story and current constants moved to `docs/heat-tuning.md`.
+- A suite check keeps names and dates out of code comments.
+
 ## 39 (2026-10-05): Formatting and project hygiene
 - Python formatted with `ruff format`, JavaScript and CSS with Prettier (`.prettierrc.json`); no behavior change.
 - `pyproject.toml` with the version, this changelog, pre-commit hooks (`.pre-commit-config.yaml`).

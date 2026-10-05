@@ -542,16 +542,11 @@ def build_linear_table(points):
                 return p0 + (p1 - p0) * (target - f0) / (f1 - f0)
         return norm[-1][0]
 
-    # The dashboard spans the fixture's USABLE range: 1% is the dimmest level
-    # it can hold and 100% is full. Mapping to a fraction of maximum instead
-    # left 1-20% all producing the same minimum, because the driver cannot go
-    # lower than that without cutting out. Every step now changes the light.
-    # The DLI forecast converts through this same table, so it stays correct
-    # even though 50% on the dashboard is no longer half the photons.
     # Dashboard percent is a fraction of full output, so the response follows
     # the straight line from zero to peak. Below the driver's minimum the table
     # holds the lowest lit level, and set_brightness reaches the line by
-    # cycling between off and that level so the average lands on it.
+    # cycling between off and that level so the average lands on it. The DLI
+    # forecast converts through this same table.
     table = [0.0] + [round(raw_for(i / 100.0), 3) for i in range(1, 101)]
     # where light first appears, and where it stops increasing
     cutoff = next((p for p, f in norm if f > 0.01), pts[-1][0])
