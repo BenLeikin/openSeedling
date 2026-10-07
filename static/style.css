@@ -4028,17 +4028,20 @@ svg.cmini .cnight {
 }
 /* chart rows: each row fills the width with equal-size charts; the column
    count (--cols) is set per section by layoutChartRows() */
-#chartgrid .cgrid {
+#chartgrid .cgrid,
+#devcharts .cgrid {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
 }
-#chartgrid .cgrid > .ccard {
+#chartgrid .cgrid > .ccard,
+#devcharts .cgrid > .ccard {
   flex: 1 1 calc((100% - (var(--cols, 3) - 1) * 10px) / var(--cols, 3));
   min-width: 0;
   box-sizing: border-box;
 }
-#chartgrid .cgrid > .ccard.expanded {
+#chartgrid .cgrid > .ccard.expanded,
+#devcharts .cgrid > .ccard.expanded {
   flex-basis: 100%;
 }
 /* Phones: a tray keeps its real column count and scrolls sideways inside
@@ -4084,4 +4087,16 @@ svg.cmini .cnight {
   border-top: 0;
   padding-top: 0;
   margin-top: 6px;
+}
+
+/* the Device card's memory charts, under the health tiles */
+.devcharts:empty {
+  display: none;
+}
+.devcharts {
+  margin-top: 12px;
+}
+.devcharts .csection h3 {
+  font-size: 13px;
+  margin: 0 0 6px;
 }

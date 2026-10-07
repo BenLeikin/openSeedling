@@ -459,12 +459,13 @@ def charts(page, base):
     page.wait_for_timeout(500)
     sections = page.evaluate("""()=>Object.fromEntries([...document.querySelectorAll('#chartgrid .csection')]
         .map(s=>[s.querySelector('h3').textContent,[...s.querySelectorAll('.ccard')].map(c=>c.textContent.slice(0,40))]))""")
-    flat = json.dumps(sections)
+    dev = page.evaluate("()=>document.getElementById('devcharts')?.textContent||''")
     check(
         "Heat mat power" in json.dumps(sections.get("Soil", []))
-        and "Device" in sections
-        and "Memory free" in flat,
-        f"Heat mat power charts with Soil, memory under Device ({list(sections)})",
+        and "Device" not in sections
+        and "Memory free" in dev,
+        f"Heat mat power charts with Soil; memory charts sit in the Device card, not the "
+        f"chart grid ({list(sections)})",
     )
     sized = page.evaluate("""()=>[...document.querySelectorAll('svg.cmini')].every(s=>{
         const r=s.getBoundingClientRect(),vb=s.getAttribute('viewBox').split(' ').map(Number);

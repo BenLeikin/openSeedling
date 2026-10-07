@@ -2807,7 +2807,7 @@ def _charts():
     check(
         lay
         and "const rows=Math.ceil(n/cmax), cols=Math.ceil(n/rows);" in lay.group(0)
-        and "#chartgrid .cgrid{display:flex;flex-wrap:wrap;gap:10px}" in css
+        and "#chartgrid .cgrid,#devcharts .cgrid{display:flex;flex-wrap:wrap;gap:10px}" in css
         and "var(--cols,3)" in css
         and "rowRO.observe(grid)" in js
         and 'class="cgl"' in js

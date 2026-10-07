@@ -474,16 +474,18 @@ export function renderChartGrid() {
   }
   const used = new Set();
   let h = '';
+  let dh = ''; // the Pi's own charts go in the Device card, not the grid
   for (const sec of CHART_SECTIONS) {
     const mine = keys.filter(k => !used.has(k) && sec.match(k));
     if (!mine.length) continue;
     mine.forEach(k => used.add(k));
-    h +=
-      `<div class="csection${sec.id === 'soil' ? ' primary' : ''}"><h3>${sec.title}</h3>` +
+    const dev = sec.id === 'device';
+    let s =
+      `<div class="csection${sec.id === 'soil' ? ' primary' : ''}"><h3>${dev ? 'Memory' : sec.title}</h3>` +
       `<div class="cgrid">`;
     for (const k of mine) {
       const m = sensorMeta(k, 0);
-      h += `<div class="ccard" id="cc-${cssId(k)}">
+      s += `<div class="ccard" id="cc-${cssId(k)}">
             <div class="chead"><span>${esc(m.label)}<span class="cunit">${chartHeadUnit(k)}</span></span>
               <span class="cstats" id="cs-${cssId(k)}">&mdash;</span>
               <button type="button" class="cexpand" data-key="${cssId(k)}"
@@ -492,9 +494,13 @@ export function renderChartGrid() {
                  preserveAspectRatio="none" role="img" aria-label="${esc(m.label)} history"></svg>
           </div>`;
     }
-    h += '</div></div>';
+    s += '</div></div>';
+    if (dev) dh += s;
+    else h += s;
   }
   grid.innerHTML = h;
+  const devGrid = document.getElementById('devcharts');
+  if (devGrid) devGrid.innerHTML = dh;
   for (const id of expandedCharts) {
     const c = document.getElementById(id);
     if (c) {
@@ -514,12 +520,15 @@ export function renderChartGrid() {
   // (preserveAspectRatio none), its text came out squashed or stretched.
   if (chartRO) {
     chartRO.disconnect();
-    grid.querySelectorAll('svg.cmini').forEach(s => chartRO.observe(s));
+    document
+      .querySelectorAll('#chartgrid svg.cmini, #devcharts svg.cmini')
+      .forEach(s => chartRO.observe(s));
   }
   layoutChartRows();
   if (rowRO) {
     rowRO.disconnect();
     rowRO.observe(grid);
+    if (devGrid) rowRO.observe(devGrid);
   }
 }
 // Every row of charts fills the width, the charts in a row the same size,
@@ -527,7 +536,7 @@ export function renderChartGrid() {
 // The column count per section comes from the width available and the
 // smallest readable chart (340 px for Soil, 260 px for the rest).
 export function layoutChartRows() {
-  document.querySelectorAll('#chartgrid .cgrid').forEach(g => {
+  document.querySelectorAll('#chartgrid .cgrid, #devcharts .cgrid').forEach(g => {
     const cards = [...g.children].filter(
       c => c.classList.contains('ccard') && !c.classList.contains('expanded')
     );

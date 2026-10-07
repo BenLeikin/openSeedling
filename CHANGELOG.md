@@ -4,6 +4,9 @@ One entry per update zip, newest first. Install any update with
 `bash scripts/update.sh openSeedling-update-N.zip`; each is cumulative from
 the 4-17 baseline. The installer commits each one with the heading below.
 
+## 43 (2026-10-06): Memory charts in the Device card
+- The Pi's memory charts (free memory, swap, controller, touchscreen) moved from the chart grid into the Device card, under the health tiles; same range buttons, crosshair and expand.
+
 ## 42 (2026-10-06): Little Buddy redrawn
 - Colors: each sprite's own leg color now wins over the shared leaf green (Avey's legs, the snail's eye stalks, the raindrop's and the gnome's legs had been green); faces keep dark ink on the dark theme.
 - Anatomy: a tapered chile pod with a calyx cap and curved stem; Avey on four legs with a rounded body and an S tail; a snail with its foot, feelers and a spiral inside the shell; a seven-spot ladybug with a pronotum; a bee striped within its body, with a stinger; a gnome with a tall pointed hat and a full beard.

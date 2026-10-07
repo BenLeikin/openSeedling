@@ -450,20 +450,15 @@ export function initSensors() {
         }, 150);
       });
     }
-    hc.addEventListener('click', ev => {
-      const b = ev.target.closest('.cexpand');
-      if (!b) return;
-      const card = document.getElementById('cc-' + b.dataset.key);
-      if (!card) return;
-      const nowBig = card.classList.toggle('expanded');
-      layoutChartRows(); // an expanded chart takes its own row
-      if (nowBig) expandedCharts.add(card.id);
-      else expandedCharts.delete(card.id);
-      b.textContent = nowBig ? '\u2921' : '\u2922';
-      b.title = nowBig ? 'Shrink this chart' : 'Expand this chart';
-      const key = Object.keys(seriesData).find(k => cssId(k) === b.dataset.key);
-      if (key) drawMini(key); // redraw at the new size
-    });
+    hc.addEventListener('click', chartExpandClick);
+  }
+  // the Device card's memory charts behave like the grid's
+  const dc = document.getElementById('devcharts');
+  if (dc) {
+    dc.addEventListener('mousemove', chartMove);
+    dc.addEventListener('mouseleave', chartLeave);
+    dc.addEventListener('pointerdown', chartMove);
+    dc.addEventListener('click', chartExpandClick);
   }
   loadChart(); // initial draw; range buttons reload
   document.querySelectorAll('#ranges button').forEach(b => {
@@ -474,4 +469,20 @@ export function initSensors() {
       loadChart();
     });
   });
+}
+
+// Expand or shrink one chart card (the grid's or the Device card's)
+export function chartExpandClick(ev) {
+  const b = ev.target.closest('.cexpand');
+  if (!b) return;
+  const card = document.getElementById('cc-' + b.dataset.key);
+  if (!card) return;
+  const nowBig = card.classList.toggle('expanded');
+  layoutChartRows(); // an expanded chart takes its own row
+  if (nowBig) expandedCharts.add(card.id);
+  else expandedCharts.delete(card.id);
+  b.textContent = nowBig ? '\u2921' : '\u2922';
+  b.title = nowBig ? 'Shrink this chart' : 'Expand this chart';
+  const key = Object.keys(seriesData).find(k => cssId(k) === b.dataset.key);
+  if (key) drawMini(key); // redraw at the new size
 }
