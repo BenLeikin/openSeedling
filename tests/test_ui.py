@@ -494,6 +494,39 @@ def charts(page, base):
     )
 
 
+def buddies(pw, base):
+    """Little Buddy's colors hold in both themes: each sprite's own leg colour
+    (not the shared leaf green), dark faces on the dark theme, a seven-spot
+    ladybug."""
+    b = pw.chromium.launch()
+    ctx = b.new_context(
+        viewport={"width": 900, "height": 600}, color_scheme="dark", reduced_motion="reduce"
+    )
+    page = ctx.new_page()
+    page.goto(base + "/")
+    page.wait_for_timeout(2500)
+    got = page.evaluate("""async ()=>{
+        const m = await import('/static/js/buddy.js');
+        const box = document.createElement('div');
+        box.innerHTML = ['cat','snail','ladybug','sprout'].map(k=>m.walkerSvg(k)).join('');
+        document.body.appendChild(box);
+        const cs = (sel, prop) => getComputedStyle(box.querySelector(sel))[prop];
+        return {catLeg: cs('.buddy-cat .legs .cleg:not(.cleg-far)', 'stroke'),
+                stalk: cs('.buddy-snail .legs .stalk', 'stroke'),
+                eye: cs('.buddy-sprout .eye', 'fill'),
+                spots: box.querySelectorAll('.buddy-ladybug .spot').length};
+    }""")
+    check(
+        got["catLeg"] == "rgb(154, 168, 162)"
+        and got["stalk"] == "rgb(216, 196, 156)"
+        and got["eye"] == "rgb(38, 48, 31)"
+        and got["spots"] == 8,
+        f"buddies keep their own leg colours, dark faces on the dark theme, and the "
+        f"ladybug has seven spots (one split across the halves) ({got})",
+    )
+    b.close()
+
+
 def phone(pw, base):
     b = pw.chromium.launch()
     ctx = b.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
@@ -574,6 +607,8 @@ def main():
                     check(False, f"{name}: crashed with {type(e).__name__}: {e}")
             check(not errs, f"no script errors on the dashboard ({errs[:2]})")
             b.close()
+            print("Little Buddy")
+            buddies(pw, base)
             print("Phone")
             phone(pw, base)
             print("Touchscreen")

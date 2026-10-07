@@ -2849,11 +2849,16 @@ body.readonly .tcell textarea {
 .walker .leaf-r {
   fill: #a8d08a;
 }
+/* Faces keep one dark ink in both themes: the bodies are mid-tones either
+   way, and the theme's text colour turned eyes and mouths pale in dark mode. */
 .walker .eye {
-  fill: var(--fir);
+  fill: #26301f;
+}
+.walker .eye-shine {
+  fill: #fff;
 }
 .walker .mouth {
-  stroke: var(--fir);
+  stroke: #26301f;
   stroke-width: 1.2;
   stroke-linecap: round;
   fill: none;
@@ -2878,9 +2883,16 @@ body.readonly .tcell textarea {
 .walker .pot-rim {
   fill: #b87a56;
 }
-/* chile pepper */
+/* chile pepper: a ripe superhot red with a soft highlight */
 .walker .pod {
-  fill: #d85a30;
+  fill: #c9301f;
+}
+.walker .pglint {
+  stroke: #fff;
+  stroke-opacity: 0.45;
+  stroke-width: 1.1;
+  stroke-linecap: round;
+  fill: none;
 }
 .walker .calyx {
   fill: var(--leaf);
@@ -2889,12 +2901,13 @@ body.readonly .tcell textarea {
   stroke: var(--leaf);
   stroke-width: 1.5;
   stroke-linecap: round;
+  fill: none;
 }
 .walker .peye {
   fill: #4a1b0c;
 }
 .walker .pcheek {
-  fill: #993c1d;
+  fill: #8a1c12;
   opacity: 0.45;
 }
 .walker .pmouth {
@@ -2919,9 +2932,24 @@ body.readonly .tcell textarea {
   stroke-linecap: round;
   fill: none;
 }
-.walker .cleg {
+/* the leg classes need .legs in the selector to beat .walker .legs line,
+   which would otherwise paint every sprite's legs leaf green */
+.walker .legs .cleg {
   stroke: #9aa8a2;
   stroke-width: 2.4;
+}
+.walker .legs .cleg-far {
+  stroke: #7f8c87;
+}
+.walker .nose {
+  fill: #e48f8f;
+}
+.walker .cat-cheek {
+  fill: #e9a17c;
+  opacity: 0.45;
+}
+.walker .cat-mouth {
+  stroke-width: 0.6;
 }
 .walker .tail {
   stroke: #7c8a85;
@@ -3215,28 +3243,48 @@ body.readonly .tcell textarea {
   fill: #c9b79a;
 }
 .walker .shell {
-  fill: #cb8f6a;
+  fill: #c58a5c;
+}
+.walker .snail-body {
+  fill: #d8c49c;
+}
+.walker .feeler {
+  stroke: #d8c49c;
+  stroke-width: 0.9;
+  stroke-linecap: round;
+}
+.walker .stalk-eye {
+  fill: #26301f;
+  stroke: #d8c49c; /* a rim of body colour keeps the eyes visible on the dark theme */
+  stroke-width: 0.4;
 }
 .walker .snail-head {
   fill: #c9b79a;
 }
 .walker .shell-line {
-  stroke: #b87a56;
-  stroke-width: 1.4;
+  stroke: #8a5634;
+  stroke-width: 1.1;
+  stroke-linecap: round;
 }
-.walker .stalk {
-  stroke: #c9b79a;
-  stroke-width: 1;
+.walker .legs .stalk {
+  stroke: #d8c49c;
+  stroke-width: 1.1;
   stroke-linecap: round;
 }
 .walker .stalk-wave {
-  stroke: #c9b79a;
-  stroke-width: 1;
+  stroke: #d8c49c;
+  stroke-width: 1.1;
   stroke-linecap: round;
 }
-/* ladybug */
+/* seven-spot ladybug */
 .walker .shell-red {
-  fill: #d85a30;
+  fill: #d93a2b;
+}
+.walker .pronotum {
+  fill: #1f1d1b;
+}
+.walker .pron-white {
+  fill: #f4f1ea;
 }
 .walker .shell-dark {
   fill: #c14d27;
@@ -3273,10 +3321,13 @@ body.readonly .tcell textarea {
   opacity: 1;
 }
 .walker .spot {
-  fill: #4a1b0c;
+  fill: #1f1d1b;
 }
+/* a faint edge keeps the black head visible on the dark theme */
 .walker .head-dark {
-  fill: #3d3a35;
+  fill: #2a2725;
+  stroke: #5c5853;
+  stroke-width: 0.3;
 }
 .walker .eye-white {
   fill: #fff;
@@ -3305,7 +3356,7 @@ body.readonly .tcell textarea {
   fill: #6f9db0;
   opacity: 0.5;
 }
-.walker .drop-leg {
+.walker .legs .drop-leg {
   stroke: #6f9db0;
   stroke-width: 2.2;
 }
@@ -3321,10 +3372,11 @@ body.readonly .tcell textarea {
   opacity: 0.85;
   stroke: none;
 }
-.walker .stripe {
-  stroke: #412402;
-  stroke-width: 1.9;
-  fill: none;
+.walker .band {
+  fill: #412402;
+}
+.walker .stinger {
+  fill: #412402;
 }
 .walker .beye {
   fill: #412402;
@@ -3341,7 +3393,7 @@ body.readonly .tcell textarea {
 }
 /* garden gnome */
 .walker .coat {
-  fill: var(--leaf);
+  fill: #3f7a46;
 }
 .walker .beard {
   fill: #f0e6d8;
@@ -3354,17 +3406,20 @@ body.readonly .tcell textarea {
   opacity: 0.6;
 }
 .walker .hat {
-  fill: #d85a30;
+  fill: #c8392b;
 }
 .walker .hat-brim {
-  fill: #c14d27;
+  fill: #a52e22;
 }
-.walker .boot {
+.walker .gnose {
+  fill: #e7a08a;
+}
+.walker .legs .boot {
   stroke: #4a3826;
   stroke-width: 2.2;
 }
 .walker .coat-arm {
-  stroke: var(--leaf);
+  stroke: #3f7a46;
 }
 .cstats .alt2 {
   color: var(--muted);
