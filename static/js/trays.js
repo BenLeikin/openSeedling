@@ -292,9 +292,12 @@ export function renderTrayConfig(cfg) {
   let h = '';
   for (const id of Object.keys(trays).sort()) {
     const t = trays[id] || {};
-    const filled = Object.keys(t.cells || {}).length;
+    // cells that hold something (a cleared cell keeps an empty record)
+    const filled = Object.values(t.cells || {}).filter(
+      v => v && (v.seed || v.equipment || v.planted || v.sprouted)
+    ).length;
     const wired = id === '1' || id === '2';
-    h += `<div class="trayrow" data-tray="${id}">
+    h += `<div class="trayrow" data-tray="${id}" data-filled="${filled}">
           <input class="tlabelin" type="text" value="${esc(t.label || 'Tray ' + id)}"
                  data-tray="${id}" aria-label="Tray ${id} name" maxlength="40">
           <span class="tdims">
@@ -322,7 +325,21 @@ export function initTrayConfig() {
       return;
     }
     const rm = ev.target.closest('.trm');
-    if (rm) trayLayout({ action: 'remove', tray: rm.dataset.tray });
+    if (rm) {
+      const id = rm.dataset.tray;
+      const row = rm.closest('.trayrow');
+      const label = (row && row.querySelector('.tlabelin')?.value) || `Tray ${id}`;
+      const filled = row ? parseInt(row.dataset.filled, 10) || 0 : 0;
+      const msg =
+        `Remove "${label}"?` +
+        (filled
+          ? `\n\nIts ${filled} planted cell${filled === 1 ? '' : 's'} will be discarded ` +
+            `(record them as transplanted or died first to keep them in the history).`
+          : '');
+      // one question covers it: the server's own filled-cells check is answered here
+      if (window.confirm(msg))
+        trayLayout({ action: 'remove', tray: rm.dataset.tray, confirm: true });
+    }
   });
   box.addEventListener('change', ev => {
     const d = ev.target.closest('.tdim');

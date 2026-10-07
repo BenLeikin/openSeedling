@@ -369,6 +369,14 @@ export function start() {
       box.addEventListener('click', ev => {
         if (!ev.target.classList.contains('setuprm')) return;
         const fs = ev.target.closest('fieldset[data-i]');
+        const name = (setupDraft[+fs.dataset.i] || {}).name || 'this setup';
+        if (
+          !window.confirm(
+            `Remove the setup "${name}"?\n\nIts lights, trays and sensors stay; only the ` +
+              `grouping goes. Nothing changes until you save.`
+          )
+        )
+          return;
         setupDraft.splice(+fs.dataset.i, 1);
         setupDirty = true;
         drawSetupConfig();

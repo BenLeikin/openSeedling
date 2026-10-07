@@ -410,6 +410,46 @@ def setups_by_main_save(page, base, app):
     )
 
 
+def remove_asks(page, base, app):
+    """Removing a setup or a tray asks first; cancelling changes nothing, and
+    a tray with plants says how many it would discard, in one question."""
+    page.goto(base + "/")
+    page.wait_for_timeout(2500)
+    open_all(page)
+    asked = []
+
+    def answer(d, ok):
+        asked.append(d.message)
+        d.accept() if ok else d.dismiss()
+
+    page.once("dialog", lambda d: answer(d, False))
+    page.locator('#setupcfg fieldset[data-i="0"] .setuprm').click()
+    page.wait_for_timeout(500)
+    kept = page.locator("#setupcfg fieldset[data-i]").count()
+    page.once("dialog", lambda d: answer(d, False))
+    page.locator('.trayrow[data-tray="3"] .trm').click()
+    page.wait_for_timeout(1000)
+    tray_kept = "3" in saved(app)["trays"]
+    page.once("dialog", lambda d: answer(d, True))
+    page.locator('.trayrow[data-tray="3"] .trm').click()
+    page.wait_for_timeout(2000)
+    gone = "3" not in saved(app)["trays"]
+    check(
+        len(asked) == 3
+        and kept == 2
+        and tray_kept
+        and gone
+        and 'Remove the setup "Transplants"' in asked[0]
+        and "20 planted cells" in asked[1],
+        f"Remove asks first and Cancel keeps it; a planted tray says what it discards "
+        f"({[a.split(chr(10))[0] for a in asked]})",
+    )
+    opts = page.evaluate(
+        "()=>[...document.querySelectorAll('#cfgform [name=plug_use] option')].map(o=>o.textContent)"
+    )
+    check(opts == ["Light", "Heat Mat"], f"the smart plug's uses read Light and Heat Mat ({opts})")
+
+
 def charts(page, base):
     page.goto(base + "/")
     page.wait_for_timeout(3500)
@@ -525,6 +565,7 @@ def main():
                 ("Units", lambda: metric_temperature(page, base, app)),
                 ("Setups", lambda: setups_by_main_save(page, base, app)),
                 ("Charts", lambda: charts(page, base)),
+                ("Removing", lambda: remove_asks(page, base, app)),
             ):
                 print(name)
                 try:

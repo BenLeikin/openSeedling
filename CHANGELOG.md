@@ -4,6 +4,11 @@ One entry per update zip, newest first. Install any update with
 `bash scripts/update.sh openSeedling-update-N.zip`; each is cumulative from
 the 4-17 baseline. The installer commits each one with the heading below.
 
+## 41 (2026-10-06): Confirm before removing
+- Removing a setup or a tray asks first. A tray with plants says how many planted cells it would discard, in one question.
+- The Trays list's "filled" count ignores cleared cells.
+- The smart plug's uses read "Light" and "Heat Mat".
+
 ## 40 (2026-10-05): Comments explain why
 - History in code comments (names, dates, which update changed what) rewritten as the reason the code is that way; migrations are labeled as such.
 - The heat mat's tuning story and current constants moved to `docs/heat-tuning.md`.
