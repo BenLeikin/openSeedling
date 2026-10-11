@@ -264,7 +264,10 @@ Off, power), each setup's light (Auto / On / Off, today's light against its
 target) with its trays' moisture, the fan, the reservoir, and the soil
 temperature over the heat mat's power for the last 24 hours. "Full dashboard"
 opens the normal page with a button back, and it returns to the summary by
-itself after three minutes untouched.
+itself after three minutes untouched. The page fits whatever the panel's
+fonts, the number of setups and trays, or the length of the attention line:
+the soil chart takes the leftover height, the page tightens in steps when
+that is too little, and the chart is dropped only as a last resort.
 
 It runs cog (a WebKit browser) inside cage (a one-window Wayland compositor),
 no desktop, first in line for the out-of-memory killer, so the screen may

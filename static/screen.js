@@ -243,7 +243,33 @@ function draw() {
   drawSetups();
   drawFanRes();
   drawAttention();
+  fit();
+  drawTrend();
 }
+
+// Everything must fit the screen with nothing cut off, whatever the fonts,
+// the number of setups and trays, or the length of the attention line. The
+// chart takes the space left over; when that is too little to read, the page
+// tightens step by step, and as a last resort the chart is dropped.
+const FIT_STEPS = ['tight', 'tighter', 'notrend'];
+function overflowing() {
+  const b = document.body,
+    t = $('t-trend');
+  if (b.scrollHeight > b.clientHeight + 1) return true;
+  return t.offsetParent !== null && t.getBoundingClientRect().height < 110;
+}
+function fit() {
+  const b = document.body;
+  FIT_STEPS.forEach(c => b.classList.remove(c));
+  for (const c of FIT_STEPS) {
+    if (!overflowing()) break;
+    b.classList.add(c);
+  }
+}
+addEventListener('resize', () => {
+  fit();
+  drawTrend();
+});
 
 // Soil temperature (line) over the heat mat's power (shaded), last 24 hours,
 // drawn at the box's real pixel size.

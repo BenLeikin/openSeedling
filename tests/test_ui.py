@@ -586,6 +586,36 @@ def screen(pw, base, app):
     page.on("pageerror", lambda e: errs.append(str(e)))
     page.goto(base + "/screen")
     page.wait_for_timeout(2500)
+    # it must fit with nothing cut off on a shorter screen or with a long
+    # attention line too: the chart shrinks, the page tightens, the chart goes last
+    fits = []
+    for hgt, heavy in ((1024, False), (880, False), (1024, True)):
+        page.set_viewport_size({"width": 600, "height": hgt})
+        page.evaluate(
+            """(heavy)=>{ if(heavy){ S.camera=Object.assign({},S.camera,{fails:2,
+                 last_err:'USB capture timed out after 30 s; the camera may be unplugged or on a slow hub',
+                 usb_speed:12}); S.water=Object.assign({},S.water,{reservoir:{state:'fault',wired:true}}); }
+               draw(); }""",
+            heavy,
+        )
+        page.wait_for_timeout(300)
+        fits.append(
+            page.evaluate(
+                """()=>{const t=document.getElementById('t-trend');
+                return {over: document.body.scrollHeight > document.body.clientHeight + 1,
+                  foot: document.querySelector('footer').getBoundingClientRect().bottom <= innerHeight,
+                  chart: t.offsetParent ? t.getBoundingClientRect().height >= 100 : 'hidden'}}"""
+            )
+        )
+    check(
+        all(not f["over"] and f["foot"] and f["chart"] in (True, "hidden") for f in fits)
+        and fits[0]["chart"] is True,
+        f"the summary fits 600x1024 and a shorter screen, chart readable or dropped, never "
+        f"cut off ({fits})",
+    )
+    page.set_viewport_size({"width": 600, "height": 1024})
+    page.evaluate("()=>refresh()")
+    page.wait_for_timeout(800)
     h = page.evaluate("()=>document.documentElement.scrollHeight")
     check(
         h <= 1024 and not errs, f"the touchscreen summary fits 600x1024 without scrolling ({h} px)"

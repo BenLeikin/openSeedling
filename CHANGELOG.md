@@ -4,6 +4,10 @@ One entry per update zip, newest first. Install any update with
 `bash scripts/update.sh openSeedling-update-N.zip`; each is cumulative from
 the 4-17 baseline. The installer commits each one with the heading below.
 
+## 46 (2026-10-11): Touchscreen summary always fits
+- The soil chart takes the height left over instead of a fixed minimum that pushed it off the bottom.
+- When that is too little to read, the page tightens in steps (smaller spacing and numbers, then fewer detail lines and a two-line attention line), and only as a last resort drops the chart.
+
 ## 45 (2026-10-11): Sensors per tray
 - Settings, Setups: each tray picks its moisture probe and float, and any other sensor placed in it (`tray_sensors`).
 - Auto-watering, fills, post-fill checks and wet recalibration read the tray's assigned probe and float; the pump stays the tray's own.
