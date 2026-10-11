@@ -470,6 +470,8 @@ def stitch_of(cfg):
 
 
 STITCH_MAX_W = 3840  # the stitched frame's widest; bounds memory on the Zero
+# each camera's frame from the last Align cameras, shown in Settings
+ALIGN_FRAMES = [PREVIEW_PATH.with_name(f"align_cam{i}.jpg") for i in (1, 2)]
 
 
 def _usb_capture_view(cfg, out_path, width, height, warmup=None):
@@ -570,7 +572,7 @@ def align_cameras():
     if devs[0] == devs[1] or Path(devs[0]).resolve() == Path(devs[1]).resolve():
         return {"ok": False, "error": "camera 1 and camera 2 are the same device"}
     w, h = int(cfg.get("usb_width", 2048)), int(cfg.get("usb_height", 1536))
-    parts = [PREVIEW_PATH.with_name(f"_align_cam{i}.jpg") for i in (1, 2)]
+    parts = [ALIGN_FRAMES[0], ALIGN_FRAMES[1]]
     global capturing
     if not capture_lock.acquire(timeout=120):
         return {"ok": False, "error": "the camera is busy; try again in a minute"}
@@ -619,8 +621,12 @@ def align_cameras():
         db.log_event("camera", f"cameras aligned ({res['inliers']} points)")
         return res
     finally:
+        # the two frames stay for Settings to show, so a failed match can be
+        # judged by eye; turned the right way up for viewing (aligning and
+        # stitching used them as captured)
         for part in parts:
-            part.unlink(missing_ok=True)
+            if part.exists():
+                _rotate_file(part, int(cfg.get("cam_rotate", 0)))
         capturing = False
         capture_lock.release()
         config.wake.set()

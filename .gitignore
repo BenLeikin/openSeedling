@@ -12,6 +12,8 @@ ai_report.json
 .discord_webhook
 preview.jpg
 preview.tmp.jpg
+align_cam1.jpg
+align_cam2.jpg
 
 # setup.sh writes pins and secrets here
 .env

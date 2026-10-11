@@ -3373,6 +3373,14 @@ def _two_cameras():
             f"Align cameras fits camera 2 onto camera 1 and saves it "
             f"({res.get('inliers')} points, {res.get('overlap_pct')}% overlap, x {x_at[0] / x_at[2]:.0f})",
         )
+        f1 = c.get("/align_frame/1.jpg")
+        f2 = c.get("/align_frame/2.jpg")
+        check(
+            f1.status_code == 200
+            and f2.status_code == 200
+            and c.get("/align_frame/3.jpg").status_code == 404,
+            "the two frames Align cameras used can be opened from Settings, to judge the overlap",
+        )
         # the grid stays over the same part of the trays (rotated 180 here)
         back = camera_mod.regrid_for_stitch(
             {"grid": {"corners": corners}, "cam_rotate": 180, "usb_width": 1200, "usb_height": 900},
@@ -3443,6 +3451,8 @@ def _two_cameras():
         with config.settings_lock:
             config.settings.update(saved)
         camera_mod.PREVIEW_PATH.unlink(missing_ok=True)
+        for f in camera_mod.ALIGN_FRAMES:
+            f.unlink(missing_ok=True)
     sh = (APP / "scripts" / "usbcheck.sh").read_text()
     cam = (APP / "camera.py").read_text()
     check(

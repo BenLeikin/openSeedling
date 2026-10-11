@@ -125,16 +125,22 @@ def align(p1, p2):
         clahe.apply(cv2.resize(x, None, fx=s, fy=s, interpolation=cv2.INTER_AREA)) for x in (a, b)
     ]
     del a, b
-    orb = cv2.ORB_create(nfeatures=5000)
-    (k1, d1), (k2, d2) = (orb.detectAndCompute(x, None) for x in small)
+    # SIFT finds about twice the matches of ORB in a thin overlap of soil and
+    # leaves; ORB only where this OpenCV lacks it
+    if hasattr(cv2, "SIFT_create"):
+        det, norm = cv2.SIFT_create(nfeatures=4000), cv2.NORM_L2
+    else:
+        det, norm = cv2.ORB_create(nfeatures=5000), cv2.NORM_HAMMING
+    (k1, d1), (k2, d2) = (det.detectAndCompute(x, None) for x in small)
     if d1 is None or d2 is None or len(k1) < MIN_INLIERS or len(k2) < MIN_INLIERS:
         return {"ok": False, "error": "too little detail in the frames to match (is the light on?)"}
-    pairs = cv2.BFMatcher(cv2.NORM_HAMMING).knnMatch(d2, d1, k=2)
-    good = [m for m, n in (p for p in pairs if len(p) == 2) if m.distance < 0.75 * n.distance]
+    pairs = cv2.BFMatcher(norm).knnMatch(d2, d1, k=2)
+    good = [m for m, n in (p for p in pairs if len(p) == 2) if m.distance < 0.8 * n.distance]
     if len(good) < MIN_INLIERS:
         return {
             "ok": False,
-            "error": f"only {len(good)} matching points; the views need to overlap more",
+            "error": f"only {len(good)} matching points; the views need to overlap more "
+            "(about a fifth of each frame)",
         }
     src = np.float32([k2[m.queryIdx].pt for m in good])
     dst = np.float32([k1[m.trainIdx].pt for m in good])

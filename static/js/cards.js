@@ -554,6 +554,10 @@ export async function loadCameraList(ev) {
   }
 }
 let pairMsg = ''; // the last Align cameras outcome, kept over status redraws
+// links to the two frames the last Align cameras used, to judge the overlap by eye
+const pairFrames = () =>
+  ` \u00b7 frames: <a href="/align_frame/1.jpg?t=${Date.now()}" target="_blank">camera 1</a>` +
+  ` <a href="/align_frame/2.jpg?t=${Date.now()}" target="_blank">camera 2</a>`;
 function pairOutcome(j) {
   return j.ok
     ? `aligned: ${j.inliers} matching points, ${j.overlap_pct}% overlap, ${j.canvas[0]}\u00d7${j.canvas[1]}`
@@ -561,9 +565,9 @@ function pairOutcome(j) {
 }
 export async function alignCameras() {
   const info = document.getElementById('pairinfo');
-  const say = t => {
-    pairMsg = t;
-    if (info) info.textContent = t;
+  const say = (t, frames) => {
+    pairMsg = esc(t) + (frames ? pairFrames() : '');
+    if (info) info.innerHTML = pairMsg;
   };
   if (
     !window.confirm(
@@ -592,7 +596,7 @@ export async function alignCameras() {
         .json()
         .catch(() => ({}));
       if (p.running === false && p.result) {
-        say(pairOutcome(p.result));
+        say(pairOutcome(p.result), !/^camera \d:/.test(p.result.error || ''));
         refresh();
         return;
       }
@@ -608,8 +612,9 @@ export function renderCameraPair(j) {
   const btn = document.getElementById('pairbtn');
   if (btn) btn.disabled = !cam.second;
   if (!info) return;
-  if (pairMsg) info.textContent = pairMsg;
-  else if (!cam.second) info.textContent = 'one camera';
+  if (pairMsg) {
+    if (info.innerHTML !== pairMsg) info.innerHTML = pairMsg;
+  } else if (!cam.second) info.textContent = 'one camera';
   else if (!cam.stitch) info.textContent = 'not aligned yet: photos use camera 1 only';
   else
     info.textContent = `aligned: ${cam.stitch.inliers} matching points, ${cam.stitch.overlap_pct}% overlap`;

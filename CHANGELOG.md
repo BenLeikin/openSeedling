@@ -4,6 +4,10 @@ One entry per update zip, newest first. Install any update with
 `bash scripts/update.sh openSeedling-update-N.zip`; each is cumulative from
 the 4-17 baseline. The installer commits each one with the heading below.
 
+## 52 (2026-10-11): Camera alignment finds more matches, shows its frames
+- Align cameras matches with SIFT (ORB only where OpenCV lacks it) and a looser ratio test: about twice the matches in a thin overlap of soil and leaves.
+- The two frames it used stay viewable from links beside the button, so a failed match can be judged by eye.
+
 ## 51 (2026-10-11): Align cameras button fixed
 - Settings' Align cameras button shared its id with the camera card's Align button, so it did nothing and the camera card's button ran the camera alignment instead. Both work now; a check fails on any repeated id on the dashboard.
 - Aligning runs in the background and the page polls for the outcome, so a reverse proxy's request timeout cannot cut it off. The outcome (or the error) stays shown beside the button.
