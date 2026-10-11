@@ -578,6 +578,50 @@ def phone(pw, base):
     b.close()
 
 
+def camera_pair(page, base, app):
+    """With a second camera set, Settings' Align cameras asks and then aligns,
+    and the camera card's own Align button still opens the align view."""
+    page.goto(base + "/")
+    page.wait_for_timeout(2000)
+    page.evaluate(
+        """async()=>{ await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
+           body: JSON.stringify({camera_backend:'usb',
+             usb_device2:'/dev/v4l/by-path/platform-3f980000.usb-usb-0:1.1:1.0-video-index0'})}); }"""
+    )
+    page.goto(base + "/")
+    page.wait_for_timeout(2500)
+    open_all(page)
+    asked, posted = [], []
+    page.on(
+        "dialog",
+        lambda d: (asked.append(d.message), d.dismiss() if len(asked) == 1 else d.accept()),
+    )
+    page.on(
+        "request",
+        lambda r: (
+            posted.append(r.url)
+            if r.method == "POST" and r.url.endswith("/api/align_cameras")
+            else None
+        ),
+    )
+    page.click("#pairbtn")
+    page.wait_for_timeout(500)
+    page.click("#pairbtn")
+    page.wait_for_timeout(2500)
+    info = page.inner_text("#pairinfo")
+    card = page.evaluate("()=>document.getElementById('alignbtn').disabled")
+    check(
+        len(asked) == 2 and "Align the two cameras" in asked[0] and len(posted) == 1 and info,
+        f"Settings' Align cameras asks first, Cancel does nothing, OK aligns ({len(asked)} asked, "
+        f"{len(posted)} sent, says {info!r})",
+    )
+    check(not card, "the camera card's own Align button is left alone")
+    page.evaluate(
+        """async()=>{ await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
+           body: JSON.stringify({usb_device2:''})}); }"""
+    )
+
+
 def screen(pw, base, app):
     b = pw.chromium.launch()
     ctx = b.new_context(viewport={"width": 600, "height": 1024}, has_touch=True)
@@ -736,6 +780,7 @@ def main():
                 ("Charts", lambda: charts(page, base)),
                 ("Sensors per tray", lambda: tray_sensors(page, base, app)),
                 ("Removing", lambda: remove_asks(page, base, app)),
+                ("Two cameras", lambda: camera_pair(page, base, app)),
             ):
                 print(name)
                 try:

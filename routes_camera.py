@@ -391,20 +391,42 @@ def api_cameras():
     return jsonify(cameras=out)
 
 
-@routes.app.route("/api/align_cameras", methods=["POST"])
-@routes.require_auth
-def api_align_cameras():
-    """Fit camera 2 onto camera 1 from a fresh frame of each (about half a
-    minute on the Zero). Photos are stitched from then on."""
-    with config.settings_lock:
-        if not config.settings.get("camera_enabled"):
-            return jsonify(ok=False, error="camera features are disabled in settings"), 200
+# Aligning takes half a minute or more on the Zero, longer than a reverse
+# proxy may hold a request open, so it runs in the background and the page polls.
+align_job = {"running": False, "result": None}
+_align_lock = threading.Lock()
+
+
+def _run_align():
     try:
         res = camera_mod.align_cameras()
     except Exception as e:
         log.exception("align cameras")
         res = {"ok": False, "error": str(e)[:200]}
-    return jsonify(res), 200
+    with _align_lock:
+        align_job.update(running=False, result=res)
+
+
+@routes.app.route("/api/align_cameras", methods=["GET", "POST"])
+@routes.require_auth
+def api_align_cameras():
+    """POST starts fitting camera 2 onto camera 1 from a fresh frame of each;
+    GET reports whether that is still running and how it ended."""
+    if request.method == "POST":
+        with config.settings_lock:
+            if not config.settings.get("camera_enabled"):
+                return jsonify(ok=False, error="camera features are disabled in settings"), 200
+            second = config.settings.get("usb_device2")
+        if not second:
+            return jsonify(ok=False, error="set the second camera first"), 200
+        with _align_lock:
+            if align_job["running"]:
+                return jsonify(ok=True, started=False, running=True)
+            align_job.update(running=True, result=None)
+        threading.Thread(target=_run_align, daemon=True, name="align").start()
+        return jsonify(ok=True, started=True, running=True)
+    with _align_lock:
+        return jsonify(ok=True, **align_job)
 
 
 @routes.app.route("/preview.jpg")

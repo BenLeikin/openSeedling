@@ -3258,11 +3258,18 @@ def _two_cameras():
     js = page_js()
     check(
         'name="usb_device2"' in html
-        and 'id="alignbtn"' in html
+        and 'id="pairbtn"' in html
         and 'data-for="usb_device2"' in html
         and "/api/align_cameras" in js
         and "/api/cameras" in js,
         "Settings, Camera has camera 2, a camera picker by port and Align cameras",
+    )
+    ids = re.findall(r'\bid="([^"{}]+)"', html)
+    dups = sorted({i for i in ids if ids.count(i) > 1})
+    check(
+        not dups,
+        f"no two elements on the dashboard share an id (a second Align button once took the "
+        f"camera card's id, so it did nothing and hijacked the other) ({dups})",
     )
     r = c.get("/api/cameras").get_json()
     check(isinstance(r.get("cameras"), list), "the camera list answers (empty with no cameras)")
@@ -3398,6 +3405,18 @@ def _two_cameras():
             and not list(WORK.glob("pair.jpg.cam*")),
             f"once aligned, each photo reads camera 1 then camera 2 and stitches them; the "
             f"seam matches the scene (mean difference {diff:.1f})",
+        )
+        # through the page: started in the background, then polled
+        started = c.post("/api/align_cameras", json={}).get_json()
+        for _ in range(120):
+            job = c.get("/api/align_cameras").get_json()
+            if not job.get("running"):
+                break
+            time.sleep(0.5)
+        check(
+            started.get("started") and job.get("running") is False and job["result"]["ok"],
+            "Align cameras from the page runs in the background (a proxy would cut off a "
+            f"minute-long request) and the page polls for the outcome ({job.get('result', {}).get('inliers')} points)",
         )
         # a different second camera: the alignment no longer applies
         r = c.post("/api/settings", json={"usb_device2": "/dev/video4"}).get_json()

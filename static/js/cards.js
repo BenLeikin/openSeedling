@@ -553,8 +553,18 @@ export async function loadCameraList(ev) {
     sel.dataset.loaded = '';
   }
 }
+let pairMsg = ''; // the last Align cameras outcome, kept over status redraws
+function pairOutcome(j) {
+  return j.ok
+    ? `aligned: ${j.inliers} matching points, ${j.overlap_pct}% overlap, ${j.canvas[0]}\u00d7${j.canvas[1]}`
+    : j.error || 'failed';
+}
 export async function alignCameras() {
-  const info = document.getElementById('aligninfo');
+  const info = document.getElementById('pairinfo');
+  const say = t => {
+    pairMsg = t;
+    if (info) info.textContent = t;
+  };
   if (
     !window.confirm(
       'Align the two cameras now?\n\nIt takes a frame from each (have the light on). ' +
@@ -563,36 +573,45 @@ export async function alignCameras() {
     )
   )
     return;
-  if (info) info.textContent = 'aligning\u2026 (about half a minute)';
+  say('aligning\u2026 (about a minute)');
   try {
     const r = await fetch('/api/align_cameras', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({})
     });
-    if (r.status === 401) {
-      if (info) info.textContent = 'log in first';
-      return;
-    }
+    if (r.status === 401) return say('log in first');
     const j = await r.json().catch(() => ({}));
-    if (info)
-      info.textContent = j.ok
-        ? `aligned: ${j.inliers} matching points, ${j.overlap_pct}% overlap, ${j.canvas[0]}\u00d7${j.canvas[1]}`
-        : j.error || 'failed';
+    if (!j.ok) return say(j.error || 'failed');
+    // runs in the background; ask how it is going every two seconds
+    for (let i = 0; i < 150; i++) {
+      await new Promise(res => setTimeout(res, 2000));
+      const p = await (
+        await fetch('/api/align_cameras', { cache: 'no-store' })
+      )
+        .json()
+        .catch(() => ({}));
+      if (p.running === false && p.result) {
+        say(pairOutcome(p.result));
+        refresh();
+        return;
+      }
+    }
+    say('still aligning; check again in a minute');
   } catch (e) {
-    if (info) info.textContent = 'request failed';
+    say('request failed');
   }
-  refresh();
 }
 export function renderCameraPair(j) {
-  const info = document.getElementById('aligninfo');
+  const info = document.getElementById('pairinfo');
   const cam = j.camera || {};
-  const btn = document.getElementById('alignbtn');
+  const btn = document.getElementById('pairbtn');
   if (btn) btn.disabled = !cam.second;
-  if (!info || info.textContent.endsWith('\u2026 (about half a minute)')) return;
-  if (!cam.second) info.textContent = 'one camera';
+  if (!info) return;
+  if (pairMsg) info.textContent = pairMsg;
+  else if (!cam.second) info.textContent = 'one camera';
   else if (!cam.stitch) info.textContent = 'not aligned yet: photos use camera 1 only';
-  else if (!info.textContent.startsWith('aligned'))
+  else
     info.textContent = `aligned: ${cam.stitch.inliers} matching points, ${cam.stitch.overlap_pct}% overlap`;
 }
 export function renderSweep(j) {
@@ -720,8 +739,8 @@ export function initLight() {
     if (fb) fb.addEventListener('click', startFocusSweep);
   }
   {
-    const ab = document.getElementById('alignbtn');
-    if (ab) ab.addEventListener('click', alignCameras);
+    const pb = document.getElementById('pairbtn');
+    if (pb) pb.addEventListener('click', alignCameras);
     document.querySelectorAll('.campick').forEach(sel => {
       sel.addEventListener('focus', loadCameraList);
       sel.addEventListener('pointerdown', loadCameraList);

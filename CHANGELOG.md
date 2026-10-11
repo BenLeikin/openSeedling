@@ -4,6 +4,10 @@ One entry per update zip, newest first. Install any update with
 `bash scripts/update.sh openSeedling-update-N.zip`; each is cumulative from
 the 4-17 baseline. The installer commits each one with the heading below.
 
+## 51 (2026-10-11): Align cameras button fixed
+- Settings' Align cameras button shared its id with the camera card's Align button, so it did nothing and the camera card's button ran the camera alignment instead. Both work now; a check fails on any repeated id on the dashboard.
+- Aligning runs in the background and the page polls for the outcome, so a reverse proxy's request timeout cannot cut it off. The outcome (or the error) stays shown beside the button.
+
 ## 50 (2026-10-11): Two cameras stitched into one view
 - Settings, Camera: a second camera (`usb_device2`), a picker listing USB cameras by port, and Align cameras.
 - Align cameras matches the two views once and saves the fit (`cam_stitch`); every photo and preview is then both cameras stitched into one wide photo, used for the grid, crop, canopy, timelapse and AI report.
