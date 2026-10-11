@@ -4,6 +4,12 @@ One entry per update zip, newest first. Install any update with
 `bash scripts/update.sh openSeedling-update-N.zip`; each is cumulative from
 the 4-17 baseline. The installer commits each one with the heading below.
 
+## 50 (2026-10-11): Two cameras stitched into one view
+- Settings, Camera: a second camera (`usb_device2`), a picker listing USB cameras by port, and Align cameras.
+- Align cameras matches the two views once and saves the fit (`cam_stitch`); every photo and preview is then both cameras stitched into one wide photo, used for the grid, crop, canopy, timelapse and AI report.
+- Cameras can be set by USB port (`/dev/v4l/by-path/...`). Status, the slow-link alert, the touchscreen and `usbcheck.sh` cover camera 2.
+- The timelapse video keeps one frame size when a run changes shape (letterboxed).
+
 ## 49 (2026-10-11): Touchscreen charts rotate
 - The chart slot turns every 15 s through soil temperature with the heat mat, soil moisture per tray (with the dry line), light (PPFD when the light is calibrated, otherwise thousand lux) and air temperature with humidity. A tap turns it and holds that chart for a minute; dots beside the title show which one is up.
 - Charts with no data in the last day are skipped.

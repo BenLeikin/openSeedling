@@ -418,6 +418,13 @@ def update_settings():
                 config.settings["roi"] = ""
                 crop_reset = True
                 log.info("capture size changed: crop reset to full frame")
+            # a camera removed or swapped, or a new size: the alignment of the
+            # two cameras no longer fits, so photos go back to camera 1 alone
+            if camera_mod.unstitch(config.settings):
+                if config.settings.get("roi"):
+                    config.settings["roi"] = ""
+                    crop_reset = True
+                log.info("camera pair changed: stitching off until the cameras are aligned again")
             now_backend = light_mod.light_backend(config.settings)
             flat_changed = (
                 config.settings.get("timelapse_flatten", True) != flat_was

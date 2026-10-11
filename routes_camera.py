@@ -4,6 +4,7 @@ Registered on routes.app when routes.py imports this module.
 """
 
 import json
+import re
 import subprocess
 import sys
 import threading
@@ -293,7 +294,7 @@ def api_preview():
             # camera reads a different part of its sensor in each mode: the
             # old 1280x720 preview showed a wider 16:9 view than the 4:3
             # photos, so what you aligned was not what got captured.
-            ok, err = camera_mod._usb_capture(
+            ok, err = camera_mod._usb_capture_view(
                 cfg_snapshot,
                 tmp,
                 int(cfg_snapshot.get("usb_width", 2048)),
@@ -359,6 +360,51 @@ def api_camera_modes():
         modes=[f"{w}x{h}" for w, h in modes],
         error=None if modes else "no MJPEG modes reported",
     )
+
+
+@routes.app.route("/api/cameras")
+@routes.require_auth
+def api_cameras():
+    """USB cameras by the port they are plugged into, for picking camera 1
+    and camera 2. One entry per camera (its capture node)."""
+    out, seen = [], set()
+    root = Path("/dev/v4l/by-path")
+    for p in sorted(root.glob("*usb*-video-index0")) if root.exists() else []:
+        node = p.resolve()
+        if node in seen:
+            continue  # the same camera under the older and newer udev names
+        seen.add(node)
+        try:
+            name = (camera_mod.SYSFS_V4L / node.name / "name").read_text().strip()
+        except Exception:
+            name = ""
+        port = re.search(r"usb\w*-[\d]+:([\d.]+):", p.name)
+        out.append(
+            {
+                "path": str(p),
+                "node": str(node),
+                "name": name,
+                "port": port.group(1) if port else "",
+                "speed": camera_mod.usb_link_speed(str(node)),
+            }
+        )
+    return jsonify(cameras=out)
+
+
+@routes.app.route("/api/align_cameras", methods=["POST"])
+@routes.require_auth
+def api_align_cameras():
+    """Fit camera 2 onto camera 1 from a fresh frame of each (about half a
+    minute on the Zero). Photos are stitched from then on."""
+    with config.settings_lock:
+        if not config.settings.get("camera_enabled"):
+            return jsonify(ok=False, error="camera features are disabled in settings"), 200
+    try:
+        res = camera_mod.align_cameras()
+    except Exception as e:
+        log.exception("align cameras")
+        res = {"ok": False, "error": str(e)[:200]}
+    return jsonify(res), 200
 
 
 @routes.app.route("/preview.jpg")

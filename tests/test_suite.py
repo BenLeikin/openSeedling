@@ -3240,6 +3240,201 @@ def _kiosk_bringup():
     )
 
 
+def _two_cameras():
+    """Two USB cameras side by side (11 Oct): picked by port, aligned once,
+    stitched into one wide photo; the grid follows and the crop resets."""
+    ok = config._v_usb_device("/dev/v4l/by-path/platform-3f980000.usb-usb-0:1.2:1.0-video-index0")
+    bad = []
+    for v in ("/dev/sda", "video0", "/dev/v4l/by-path/../../etc/passwd x"):
+        try:
+            config._v_usb_device(v)
+        except ValueError:
+            bad.append(v)
+    check(
+        ok.endswith("index0") and len(bad) == 3 and config._v_usb_device2("") == "",
+        "a camera can be set by USB port (/dev/v4l/by-path); the second camera may be blank",
+    )
+    html = (APP / "templates" / "index.html").read_text()
+    js = page_js()
+    check(
+        'name="usb_device2"' in html
+        and 'id="alignbtn"' in html
+        and 'data-for="usb_device2"' in html
+        and "/api/align_cameras" in js
+        and "/api/cameras" in js,
+        "Settings, Camera has camera 2, a camera picker by port and Align cameras",
+    )
+    r = c.get("/api/cameras").get_json()
+    check(isinstance(r.get("cameras"), list), "the camera list answers (empty with no cameras)")
+    with config.settings_lock:
+        saved = {
+            k: config.settings.get(k)
+            for k in (
+                "camera_backend",
+                "usb_device",
+                "usb_device2",
+                "usb_width",
+                "usb_height",
+                "cam_stitch",
+                "grid",
+                "roi",
+                "cam_rotate",
+                "camera_enabled",
+            )
+        }
+    r = c.post("/api/align_cameras", json={}).get_json()
+    check(
+        not r["ok"] and "second camera" in r["error"],
+        f"Align cameras without a second camera says so ({r.get('error')})",
+    )
+    try:
+        import cv2
+        import numpy as np
+    except Exception:
+        skip("aligning and stitching two cameras (OpenCV not installed here)")
+        return
+    rng = np.random.default_rng(7)
+    scene = np.full((900, 1800, 3), (60, 80, 70), np.uint8)
+    for _ in range(500):
+        col = tuple(int(x) for x in rng.integers(0, 255, 3))
+        cv2.circle(
+            scene,
+            (int(rng.integers(0, 1800)), int(rng.integers(0, 900))),
+            int(rng.integers(4, 30)),
+            col,
+            -1,
+        )
+    frames = {"/dev/cam1": scene[:, :1200].copy()}
+    M = cv2.getPerspectiveTransform(
+        np.float32([[600, 0], [1800, 0], [1800, 900], [600, 900]]),
+        np.float32([[8, 12], [1195, 0], [1200, 900], [0, 885]]),
+    )
+    frames["/dev/cam2"] = (cv2.warpPerspective(scene, M, (1200, 900)) * 0.9).astype(np.uint8)
+    shots = []
+
+    def fake_capture(cfg, out, w, h, warmup=None, dev=None):
+        dev = dev or cfg.get("usb_device")
+        shots.append(dev)
+        cv2.imwrite(str(out), frames[dev])
+        return True, None
+
+    real = camera_mod._usb_capture
+    camera_mod._usb_capture = fake_capture
+    try:
+        with config.settings_lock:
+            config.settings.update(
+                camera_backend="usb",
+                camera_enabled=True,
+                usb_device="/dev/cam1",
+                usb_device2="/dev/cam2",
+                usb_width=1200,
+                usb_height=900,
+                cam_stitch={},
+                cam_rotate=180,
+                roi="0.1,0.1,0.5,0.5",
+                grid=dict(
+                    config.settings.get("grid") or {},
+                    corners=[[0.2, 0.2], [0.8, 0.2], [0.8, 0.8], [0.2, 0.8]],
+                ),
+            )
+            cfg = dict(config.settings)
+        # not aligned yet: camera 1 alone, so the timelapse never mixes views
+        out = WORK / "pair.jpg"
+        okc, _ = camera_mod._usb_capture_view(cfg, out, 1200, 900)
+        single = cv2.imread(str(out)).shape[:2]
+        check(
+            okc and single == (900, 1200) and shots == ["/dev/cam1"],
+            "with a second camera set but not aligned, photos are camera 1's alone",
+        )
+        res = camera_mod.align_cameras()
+        with config.settings_lock:
+            st = dict(config.settings.get("cam_stitch") or {})
+            corners = config.settings["grid"]["corners"]
+            roi = config.settings["roi"]
+            cfg = dict(config.settings)
+        H = np.array(st.get("h") or np.eye(3))
+        # camera 2's left edge sits 600 px into camera 1's view
+        x_at = H @ np.array([0, 450, 1.0])
+        check(
+            res.get("ok")
+            and res["inliers"] >= 25
+            and abs(x_at[0] / x_at[2] - 600) < 15
+            and 1750 <= res["canvas"][0] <= 1850
+            and st.get("devices") == ["/dev/cam1", "/dev/cam2"]
+            and camera_mod.stitch_of(cfg)
+            and camera_mod.PREVIEW_PATH.exists(),
+            f"Align cameras fits camera 2 onto camera 1 and saves it "
+            f"({res.get('inliers')} points, {res.get('overlap_pct')}% overlap, x {x_at[0] / x_at[2]:.0f})",
+        )
+        # the grid stays over the same part of the trays (rotated 180 here)
+        back = camera_mod.regrid_for_stitch(
+            {"grid": {"corners": corners}, "cam_rotate": 180, "usb_width": 1200, "usb_height": 900},
+            st,
+            None,
+        )
+        check(
+            roi == ""
+            and corners != [[0.2, 0.2], [0.8, 0.2], [0.8, 0.8], [0.2, 0.8]]
+            and all(
+                abs(a - b) < 0.002
+                for p, q in zip(back, [[0.2, 0.2], [0.8, 0.2], [0.8, 0.8], [0.2, 0.8]])
+                for a, b in zip(p, q)
+            ),
+            f"aligning moves the grid onto the wide view and resets the crop; the move is "
+            f"exact both ways ({corners})",
+        )
+        shots.clear()
+        okc, err = camera_mod._usb_capture_view(cfg, out, 1200, 900)
+        got = cv2.imread(str(out))
+        x0, y0 = st["offset"]
+        seam = got[100 - y0 : 800 - y0, 800 - x0 : 1000 - x0].astype(int)
+        truth = scene[100:800, 800:1000].astype(int)
+        diff = float(np.abs(seam - truth).mean()) if seam.shape == truth.shape else 999
+        check(
+            okc
+            and shots == ["/dev/cam1", "/dev/cam2"]
+            and got.shape[1] == st["canvas"][0]
+            and diff < 6
+            and not list(WORK.glob("pair.jpg.cam*")),
+            f"once aligned, each photo reads camera 1 then camera 2 and stitches them; the "
+            f"seam matches the scene (mean difference {diff:.1f})",
+        )
+        # a different second camera: the alignment no longer applies
+        r = c.post("/api/settings", json={"usb_device2": "/dev/video4"}).get_json()
+        with config.settings_lock:
+            gone = config.settings.get("cam_stitch")
+            moved = config.settings["grid"]["corners"]
+        check(
+            r.get("ok")
+            and not gone
+            and all(
+                abs(a - b) < 0.002
+                for p, q in zip(moved, [[0.2, 0.2], [0.8, 0.2], [0.8, 0.8], [0.2, 0.8]])
+                for a, b in zip(p, q)
+            ),
+            "changing camera 2 drops the alignment and moves the grid back to camera 1's view",
+        )
+        stt = c.get("/api/status").get_json()["camera"]
+        check(
+            stt.get("second") is True and stt.get("stitch") is None,
+            "the status says a second camera is set and not aligned",
+        )
+    finally:
+        camera_mod._usb_capture = real
+        with config.settings_lock:
+            config.settings.update(saved)
+        camera_mod.PREVIEW_PATH.unlink(missing_ok=True)
+    sh = (APP / "scripts" / "usbcheck.sh").read_text()
+    cam = (APP / "camera.py").read_text()
+    check(
+        'check_camera "Camera 2" "$dev2"' in sh
+        and "force_original_aspect_ratio=decrease" in cam
+        and "pad=1280:" in cam,
+        "usbcheck.sh checks both cameras; the video keeps one frame size when a run changes "
+        "shape (letterboxed)",
+    )
+
+
 def _usb_link():
     """The camera behind a hub at USB 1.1 speed offered only 160x120 (4 Sep).
     The link speed is now in the status, alerted, and checked by usbcheck.sh."""
@@ -3286,7 +3481,8 @@ def _usb_link():
         and subprocess.run(["bash", "-n", str(APP / "scripts" / "usbcheck.sh")]).returncode == 0
         and "must be 480" in sh
         and "bits >> 53 & 1" in sh
-        and "Camera on a slow USB link" in sjs,
+        and "on a slow USB link" in sjs
+        and "Camera 2 on a slow USB link" in sjs,
         "a camera on a slow USB link is alerted and shown on the touchscreen; usbcheck.sh "
         "tests a hub (camera speed, configured size offered, touch seen, undervoltage)",
     )
@@ -3877,6 +4073,7 @@ run("Touchscreen kiosk", _kiosk)
 run("Kiosk bring-up", _kiosk_bringup)
 run("Sensors per tray", _tray_sensor_map)
 run("USB link", _usb_link)
+run("Two cameras", _two_cameras)
 run("Settings layout", _settings_layout)
 run("Settings field definitions", _form_definitions)
 run("Dashboard modules", _page_modules)

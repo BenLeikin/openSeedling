@@ -280,6 +280,18 @@ def status_payload(authed=None):
             "last_ok": (
                 datetime.fromtimestamp(cam["last_ok"], tz).isoformat() if cam["last_ok"] else None
             ),
+            # the second camera, when one is set, and whether the pair is aligned
+            "usb_speed2": (
+                camera_mod.usb_link_speed(cfg["usb_device2"])
+                if cfg.get("usb_device2") and cfg.get("camera_backend", "rpicam") == "usb"
+                else None
+            ),
+            "second": bool(cfg.get("usb_device2")),
+            "stitch": (
+                {k: st.get(k) for k in ("inliers", "overlap_pct", "canvas", "at")}
+                if (st := camera_mod.stitch_of(cfg))
+                else None
+            ),
         },
         capturing=camera_mod.capturing,
         # canopy readings are due only while photos are taken; null at night

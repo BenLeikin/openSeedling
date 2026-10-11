@@ -37,6 +37,7 @@ import {
   fieldLabel,
   loadHost,
   renderDayProgress,
+  renderCameraPair,
   renderFan,
   renderFocus,
   renderHeat,
@@ -350,6 +351,7 @@ export function applyStatus(j) {
     renderTrayConfig(j.settings);
     renderSweep(j);
     renderFocus(j);
+    renderCameraPair(j);
     renderFan(j);
     renderHeat(j);
     renderDayProgress(j);

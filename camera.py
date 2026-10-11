@@ -375,7 +375,7 @@ def _usb_apply_controls(cfg, dev):
         subprocess.run(["v4l2-ctl", "-d", dev] + args, capture_output=True, timeout=10)
 
 
-def _usb_capture(cfg, out_path, width, height, warmup=None):
+def _usb_capture(cfg, out_path, width, height, warmup=None, dev=None):
     """Grab one MJPEG frame from a UVC camera via v4l2-ctl.
 
     UVC sensors need a few frames before auto-gain settles, and the very first
@@ -383,7 +383,7 @@ def _usb_capture(cfg, out_path, width, height, warmup=None):
     short burst and keeping the last frame costs a second and removes that
     whole class of bad photo.
     """
-    dev = cfg.get("usb_device", "/dev/video0")
+    dev = dev or cfg.get("usb_device", "/dev/video0")
     if not Path(dev).exists():
         return False, f"{dev} not present"
     _usb_apply_controls(cfg, dev)
@@ -447,6 +447,199 @@ def _usb_capture(cfg, out_path, width, height, warmup=None):
     return True, None
 
 
+# ---- two cameras side by side ----------------------------------------------
+# With a second USB camera set (usb_device2) and the pair aligned (Settings,
+# Camera, Align cameras; stored in cam_stitch), every photo and preview is the
+# two frames stitched into one wide view, and everything downstream (corners,
+# crop, canopy, timelapse, AI report) works on that as if from one camera.
+# The cameras are read one after the other, never together, so they never
+# share the hub's bandwidth with each other.
+
+
+def stitch_of(cfg):
+    """The saved alignment when it applies to the current setup, else None.
+    It is made for one pair of devices at one capture size."""
+    st = cfg.get("cam_stitch") or {}
+    if not cfg.get("usb_device2") or cfg.get("camera_backend", "rpicam") != "usb":
+        return None
+    if not st.get("h") or st.get("devices") != [cfg.get("usb_device"), cfg.get("usb_device2")]:
+        return None
+    if st.get("size") != [int(cfg.get("usb_width", 2048)), int(cfg.get("usb_height", 1536))]:
+        return None
+    return st
+
+
+STITCH_MAX_W = 3840  # the stitched frame's widest; bounds memory on the Zero
+
+
+def _usb_capture_view(cfg, out_path, width, height, warmup=None):
+    """One frame of the whole view: camera 1 alone, or both cameras stitched
+    when a second camera is set and aligned. Until the pair is aligned the
+    photos stay camera 1's, so the timelapse never mixes the two kinds."""
+    st = stitch_of(cfg)
+    if not st:
+        return _usb_capture(cfg, out_path, width, height, warmup=warmup)
+    parts = [Path(f"{out_path}.cam{i}.jpg") for i in (1, 2)]
+    try:
+        for i, (dev, part) in enumerate(zip(st["devices"], parts), 1):
+            ok, err = _usb_capture(cfg, part, width, height, warmup=warmup, dev=dev)
+            if not ok:
+                return False, f"camera {i}: {err}"
+        r = imgtool(
+            [
+                "stitch",
+                parts[0],
+                parts[1],
+                out_path,
+                json.dumps(st["h"]),
+                "--max-w",
+                STITCH_MAX_W,
+                "--q",
+                92,
+            ]
+        )
+        if r.returncode != 0:
+            return False, killed_msg(r, "stitching") or f"stitching failed: {_imgtool_err(r)}"
+        return True, None
+    finally:
+        for part in parts:
+            part.unlink(missing_ok=True)
+
+
+def _rot_frac(pt, degrees, inverse=False):
+    """A point as fractions of a frame, through the capture rotation (or back)."""
+    x, y = pt
+    d = (-int(degrees or 0)) % 360 if inverse else int(degrees or 0) % 360
+    if d == 90:
+        return [1 - y, x]
+    if d == 180:
+        return [1 - x, 1 - y]
+    if d == 270:
+        return [y, 1 - x]
+    return [x, y]
+
+
+def _frame_to_cam1(pt, st, size):
+    """A point as fractions of a raw (unrotated) photo, in camera 1's pixels."""
+    if not st:
+        return [pt[0] * size[0], pt[1] * size[1]]
+    (x0, y0), (cw, ch) = st["offset"], st["canvas"]
+    return [pt[0] * cw + x0, pt[1] * ch + y0]
+
+
+def _cam1_to_frame(px, st, size):
+    if not st:
+        return [px[0] / size[0], px[1] / size[1]]
+    (x0, y0), (cw, ch) = st["offset"], st["canvas"]
+    return [(px[0] - x0) / cw, (px[1] - y0) / ch]
+
+
+def regrid_for_stitch(cfg, old_st, new_st):
+    """Move the grid corners from the old photo geometry to the new one, so
+    the grid stays over the same part of the trays when the photos switch
+    between one camera and the stitched pair. Returns the new corners, or
+    None when there are none. (The view crop is not moved: it is reset.)"""
+    corners = (cfg.get("grid") or {}).get("corners")
+    if not corners or len(corners) != 4:
+        return None
+    rot = int(cfg.get("cam_rotate", 0) or 0)
+    here = [int(cfg.get("usb_width", 2048)), int(cfg.get("usb_height", 1536))]
+    old_size = (old_st or {}).get("size") or here
+    # camera 1's pixels are at the size they were captured at
+    new_size = (new_st or {}).get("size") or old_size
+    out = []
+    for c in corners:
+        px = _frame_to_cam1(_rot_frac(c, rot, inverse=True), old_st, old_size)
+        nf = _cam1_to_frame(px, new_st, new_size)
+        out.append([round(min(1.0, max(0.0, v)), 4) for v in _rot_frac(nf, rot)])
+    return out
+
+
+def align_cameras():
+    """Capture both cameras, fit camera 2 onto camera 1, and save the result.
+    Returns the imgtool result (ok, inliers, overlap_pct, canvas or error).
+    On success the preview shows the stitched view, the grid follows, and
+    the crop is reset (it was drawn on the old view)."""
+    with config.settings_lock:
+        cfg = dict(config.settings)
+    devs = [cfg.get("usb_device", "/dev/video0"), cfg.get("usb_device2") or ""]
+    if cfg.get("camera_backend", "rpicam") != "usb":
+        return {"ok": False, "error": "two cameras need the USB camera type"}
+    if not devs[1]:
+        return {"ok": False, "error": "set the second camera first"}
+    if devs[0] == devs[1] or Path(devs[0]).resolve() == Path(devs[1]).resolve():
+        return {"ok": False, "error": "camera 1 and camera 2 are the same device"}
+    w, h = int(cfg.get("usb_width", 2048)), int(cfg.get("usb_height", 1536))
+    parts = [PREVIEW_PATH.with_name(f"_align_cam{i}.jpg") for i in (1, 2)]
+    global capturing
+    if not capture_lock.acquire(timeout=120):
+        return {"ok": False, "error": "the camera is busy; try again in a minute"}
+    try:
+        capturing = True
+        for i, (dev, part) in enumerate(zip(devs, parts), 1):
+            ok, err = _usb_capture(cfg, part, w, h, warmup=4, dev=dev)
+            if not ok:
+                return {"ok": False, "error": f"camera {i}: {err}"}
+        r = imgtool(["align", parts[0], parts[1]], timeout=180)
+        if r.returncode != 0:
+            return {"ok": False, "error": killed_msg(r, "aligning") or _imgtool_err(r)}
+        res = json.loads(r.stdout.decode(errors="replace") or "{}")
+        if not res.get("ok"):
+            return res
+        st = {
+            "h": res["h"],
+            "size": res["size"],
+            "canvas": res["canvas"],
+            "offset": res["offset"],
+            "devices": devs,
+            "inliers": res["inliers"],
+            "overlap_pct": res["overlap_pct"],
+            "at": int(time.time()),
+        }
+        tmp = PREVIEW_PATH.with_suffix(".tmp.jpg")
+        r = imgtool(
+            ["stitch", parts[0], parts[1], tmp, json.dumps(st["h"]), "--max-w", STITCH_MAX_W]
+        )
+        if r.returncode == 0:
+            _rotate_file(tmp, int(cfg.get("cam_rotate", 0)))
+            tmp.replace(PREVIEW_PATH)
+        with config.settings_lock:
+            old = stitch_of(config.settings)
+            corners = regrid_for_stitch(config.settings, old, st)
+            config.settings["cam_stitch"] = st
+            if corners:
+                config.settings["grid"] = dict(config.settings.get("grid") or {}, corners=corners)
+            config.settings["roi"] = ""
+            config.save_config()
+        rebuild_thumbs_async()
+        log.info(
+            f"cameras aligned: {res['inliers']} points, {res['overlap_pct']}% overlap, "
+            f"{res['canvas'][0]}x{res['canvas'][1]}"
+        )
+        db.log_event("camera", f"cameras aligned ({res['inliers']} points)")
+        return res
+    finally:
+        for part in parts:
+            part.unlink(missing_ok=True)
+        capturing = False
+        capture_lock.release()
+        config.wake.set()
+
+
+def unstitch(settings):
+    """Settings changed so the saved alignment no longer applies (a camera
+    removed or swapped, a new capture size): drop it, and move the grid back
+    to camera 1's view. Caller holds settings_lock; returns True if dropped."""
+    st = settings.get("cam_stitch") or {}
+    if not st.get("h") or stitch_of(settings):
+        return False
+    corners = regrid_for_stitch(settings, st, None)
+    settings["cam_stitch"] = {}
+    if corners:
+        settings["grid"] = dict(settings.get("grid") or {}, corners=corners)
+    return True
+
+
 def _postprocess_file(path, cfg):
     """Rotate a just-captured JPEG in place.
 
@@ -502,7 +695,7 @@ def take_photo(cfg, now, manual=False):
         cw = int(cfg.get("cam_width", 4608))
         ch = int(cfg.get("cam_height", 2592))
         if cfg.get("camera_backend", "rpicam") == "usb":
-            ok, err = _usb_capture(
+            ok, err = _usb_capture_view(
                 cfg, fname, int(cfg.get("usb_width", 2048)), int(cfg.get("usb_height", 1536))
             )
             if ok:
@@ -707,7 +900,8 @@ def usb_link_speed(dev):
     camera fault rather than the hub's. The status and an alert carry this
     number so that failure is named for what it is."""
     try:
-        node = SYSFS_V4L / Path(dev).name / "device"
+        # a /dev/v4l/by-path name is a link to the /dev/videoN node sysfs knows
+        node = SYSFS_V4L / Path(dev).resolve().name / "device"
         p = node.resolve()
         for _ in range(4):  # interface dir -> device dir with "speed"
             sp = p / "speed"
@@ -815,6 +1009,33 @@ def _flatten_frames_to(dest, frames, cfg):
     return dest
 
 
+def jpeg_size(path):
+    """(width, height) from a JPEG's header, without decoding it; None if
+    it cannot be read."""
+    try:
+        with open(path, "rb") as f:
+            if f.read(2) != b"\xff\xd8":
+                return None
+            while True:
+                b = f.read(1)
+                while b and b != b"\xff":
+                    b = f.read(1)
+                while b == b"\xff":
+                    b = f.read(1)
+                if not b:
+                    return None
+                marker = b[0]
+                if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7:
+                    continue
+                ln = int.from_bytes(f.read(2), "big")
+                if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+                    seg = f.read(5)
+                    return int.from_bytes(seg[3:5], "big"), int.from_bytes(seg[1:3], "big")
+                f.seek(ln - 2, 1)
+    except Exception:
+        return None
+
+
 def render_worker():
     import time as _t
 
@@ -841,6 +1062,20 @@ def render_worker():
         roi = None if flat_dir else crop_box(cfg_r)
         # lanczos: a sharper downscale than the default bicubic, same memory
         vf_scale = "scale=1280:-16:flags=lanczos:in_range=full:out_range=tv"
+        # One frame size for the whole video, from the newest frame: a run that
+        # changed shape (a second camera, a new capture size) is letterboxed
+        # instead of failing the encode when the size changes mid-stream.
+        srcs = sorted((flat_dir or TIMELAPSE_DIR).glob("*.jpg"))
+        size = jpeg_size(srcs[-1]) if srcs else None
+        if size:
+            fw, fh = size
+            if roi:
+                fw, fh = fw * roi[2], fh * roi[3]
+            oh = max(16, int(round(1280 * fh / fw / 16.0)) * 16)
+            vf_scale = (
+                f"scale=1280:{oh}:force_original_aspect_ratio=decrease:force_divisible_by=2"
+                f":flags=lanczos:in_range=full:out_range=tv,pad=1280:{oh}:(ow-iw)/2:(oh-ih)/2"
+            )
         vf = (crop_filter(roi) + "," + vf_scale) if roi else vf_scale
         tmp = TIMELAPSE_DIR / "_render_tmp.mp4"
         # Encode pass: small footprint so the 512MB Zero never OOMs.

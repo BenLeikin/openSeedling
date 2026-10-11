@@ -754,6 +754,32 @@ v4l2-ctl -d /dev/video0 --list-formats-ext
 v4l2-ctl -d /dev/video0 --list-ctrls
 ```
 
+#### Two cameras side by side
+
+When one camera cannot see all the trays, a second USB camera beside it widens
+the view. Set **Camera 2** in Settings, Camera (pick both by USB port: two
+cameras of the same model share one `/dev/v4l/by-id` name and can swap
+`/dev/videoN` numbers at boot, so the port path is the stable name), save, then
+press **Align cameras** with the light on. It takes a frame from each camera,
+matches features in the overlap (ORB, RANSAC homography, `imgtool.py align`)
+and saves the fit as `cam_stitch`. From then on every photo and preview reads
+camera 1, then camera 2 (never both at once, so they do not share the hub's
+bandwidth), and `imgtool.py stitch` warps camera 2 onto camera 1's plane,
+matches its brightness over the overlap and feathers the seam. Everything
+downstream (grid corners, crop, canopy, timelapse, AI report) uses the stitched
+photo as if it came from one wide camera.
+
+* Aligning moves the grid corners onto the wide view and resets the crop.
+  Start a new timelapse so the video does not mix one-camera and two-camera
+  frames (a mixed run renders letterboxed rather than failing).
+* Until the pair is aligned, photos stay camera 1's alone. Changing either
+  camera or the capture size drops the alignment and moves the grid back.
+* Redo Align cameras whenever a camera moves. The fit assumes the trays are
+  roughly flat; tall plants in the overlap can show a slight double edge.
+* The settings (exposure, focus, white balance) apply to both cameras; the
+  focus sweep scores camera 1.
+* `bash scripts/usbcheck.sh` checks the link speed and capture size of both.
+
 ### Canopy tracking
 
 `growth.py` runs as a subprocess against each scheduled frame and logs canopy

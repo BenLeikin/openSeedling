@@ -495,8 +495,20 @@
             <option value="rpicam">Pi camera (CSI ribbon)</option>
             <option value="usb">USB webcam (UVC)</option>
           </select></label></div>
-        <div class="usbonly"><label>Device
-          <input name="usb_device" type="text" placeholder="/dev/video0"></label></div>
+        <div class="usbonly"><label>Device (camera 1)
+          <input name="usb_device" type="text" placeholder="/dev/video0">
+          <select class="campick" data-for="usb_device"><option value="">pick a camera&hellip;</option></select></label></div>
+        <div class="usbonly"><label>Camera 2 (beside camera 1)
+          <input name="usb_device2" type="text" placeholder="none">
+          <select class="campick" data-for="usb_device2"><option value="">pick a camera&hellip;</option></select></label></div>
+        <div class="usbonly tzrow pairrow">
+          <button type="button" id="alignbtn">Align cameras</button>
+          <span id="aligninfo" role="status" class="fhint"></span>
+        </div>
+        <div class="usbonly tzrow"><span class="fhint">Two cameras side by side make one
+          wide photo. Pick them by USB port (the list shows each camera's port): two of
+          the same model can swap /dev/video numbers at boot. Save, then Align cameras
+          with the light on; redo it if a camera moves.</span></div>
         <div class="usbonly"><label>Capture size
           <span class="dimrow">
             <input {{ fa('usb_width') }}>

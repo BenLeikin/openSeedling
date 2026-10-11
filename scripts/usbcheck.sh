@@ -27,6 +27,7 @@ EOF
 }
 
 dev="$(cfg usb_device /dev/video0)"
+dev2="$(cfg usb_device2 "")"
 want_w="$(cfg usb_width 0)"
 want_h="$(cfg usb_height 0)"
 
@@ -34,40 +35,49 @@ echo "USB tree:"
 lsusb -t 2>/dev/null | sed 's/^/  /'
 echo
 
-echo "Camera ($dev):"
-if [[ ! -e "$dev" ]]; then
-  fail "$dev not present: the camera is not detected at all"
-else
-  node="$(readlink -f "/sys/class/video4linux/$(basename "$dev")/device" 2>/dev/null)"
-  speed=""
-  p="$node"
-  for _ in 1 2 3 4; do
-    [[ -f "$p/speed" ]] && { speed="$(cat "$p/speed")"; break; }
-    p="$(dirname "$p")"
-  done
-  if [[ -z "$speed" ]]; then
-    fail "could not read the camera's USB speed"
-  elif [[ "${speed%%.*}" -ge 480 ]]; then
-    pass "camera link speed ${speed} Mbit/s"
+check_camera() {   # check_camera LABEL DEVICE
+  local label="$1" dev="$2" node speed p sizes
+  echo "$label ($dev):"
+  if [[ ! -e "$dev" ]]; then
+    fail "$dev not present: the camera is not detected at all"
   else
-    fail "camera link speed ${speed} Mbit/s (must be 480): this hub or cable runs it at USB 1.1 speed"
-  fi
-  sizes="$(v4l2-ctl -d "$dev" --list-formats-ext 2>/dev/null \
-           | awk '/MJPG/{m=1;next} /\[[0-9]+\]:/{m=0} m && /Size/{print $3}' | sort -t x -k1,1n -u | tr '\n' ' ')"
-  if [[ -z "$sizes" ]]; then
-    fail "the camera offers no MJPEG sizes"
-  else
-    info "MJPEG sizes: $sizes"
-    if [[ "$want_w" != 0 && "$want_h" != 0 ]]; then
-      if grep -qw "${want_w}x${want_h}" <<< "$sizes"; then
-        pass "the configured size ${want_w}x${want_h} is offered"
-      else
-        fail "the configured size ${want_w}x${want_h} is not offered"
+    # a /dev/v4l/by-path name is a link to the /dev/videoN node sysfs knows
+    node="$(readlink -f "/sys/class/video4linux/$(basename "$(readlink -f "$dev")")/device" 2>/dev/null)"
+    speed=""
+    p="$node"
+    for _ in 1 2 3 4; do
+      [[ -f "$p/speed" ]] && { speed="$(cat "$p/speed")"; break; }
+      p="$(dirname "$p")"
+    done
+    if [[ -z "$speed" ]]; then
+      fail "could not read the camera's USB speed"
+    elif [[ "${speed%%.*}" -ge 480 ]]; then
+      pass "camera link speed ${speed} Mbit/s"
+    else
+      fail "camera link speed ${speed} Mbit/s (must be 480): this hub or cable runs it at USB 1.1 speed"
+    fi
+    sizes="$(v4l2-ctl -d "$dev" --list-formats-ext 2>/dev/null \
+             | awk '/MJPG/{m=1;next} /\[[0-9]+\]:/{m=0} m && /Size/{print $3}' | sort -t x -k1,1n -u | tr '\n' ' ')"
+    if [[ -z "$sizes" ]]; then
+      fail "the camera offers no MJPEG sizes"
+    else
+      info "MJPEG sizes: $sizes"
+      if [[ "$want_w" != 0 && "$want_h" != 0 ]]; then
+        if grep -qw "${want_w}x${want_h}" <<< "$sizes"; then
+          pass "the configured size ${want_w}x${want_h} is offered"
+        else
+          fail "the configured size ${want_w}x${want_h} is not offered"
+        fi
       fi
     fi
   fi
+  echo
+}
+
+check_camera "Camera 1" "$dev"
+if [[ -n "$dev2" ]]; then
+  check_camera "Camera 2" "$dev2"
 fi
-echo
 
 echo "Touchscreen:"
 # a touchscreen reports multitouch positions: ABS_MT_POSITION_X is bit 53

@@ -77,6 +77,10 @@ DEFAULTS = {
     "sunset_offset_min": 0,  # positive runs past sunset
     "camera_backend": "rpicam",  # rpicam (CSI ribbon) or usb (UVC webcam)
     "usb_device": "/dev/video0",
+    # a second camera beside the first ("" for none); photos are the two
+    # stitched once aligned (Settings, Camera, Align cameras -> cam_stitch)
+    "usb_device2": "",
+    "cam_stitch": {},
     "usb_width": 2048,
     "usb_height": 1536,
     "usb_warmup_frames": 4,  # frames discarded so exposure settles
@@ -477,11 +481,22 @@ def _v_host(v):
     return v
 
 
+# A camera by number (/dev/video0) or by the USB port it is plugged into
+# (/dev/v4l/by-path/...). Two cameras of the same model can swap numbers at
+# boot and share one by-id name, so a pair is best set by port.
+_DEV_RE = r"/dev/video\d+|/dev/v4l/by-(path|id)/[\w.:+-]+"
+
+
 def _v_usb_device(v):
     v = str(v or "").strip()
-    if not re.fullmatch(r"/dev/video\d+", v):
-        raise ValueError("must look like /dev/video0")
+    if not re.fullmatch(_DEV_RE, v):
+        raise ValueError("must look like /dev/video0 or /dev/v4l/by-path/...")
     return v
+
+
+def _v_usb_device2(v):
+    v = str(v or "").strip()
+    return _v_usb_device(v) if v else ""
 
 
 def _v_heat_sensor(v):
@@ -701,6 +716,7 @@ FORM = {
     "auto_wet_cal_max_move": {"kind": "float", "min": 0.01, "max": 1.0, "step": "0.01"},
     "camera_backend": {"kind": "choice", "choices": ["rpicam", "usb"]},
     "usb_device": {"kind": "text", "check": "_v_usb_device"},
+    "usb_device2": {"kind": "text", "check": "_v_usb_device2"},
     "usb_width": {"kind": "int", "min": 160, "max": 4096},
     "usb_height": {"kind": "int", "min": 120, "max": 4096},
     "usb_auto_focus": {"kind": "bool"},

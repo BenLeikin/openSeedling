@@ -15,7 +15,7 @@ import {
   set_dragTimer,
   set_dragging
 } from './light.js';
-import { initAuth } from './photos.js';
+import { formDirty, initAuth } from './photos.js';
 import { isMetric, lightMetrics, tDisp, tFromF, tUnit } from './charts.js';
 import { esc, initTrayConfig, initTrays } from './trays.js';
 import {
@@ -530,6 +530,71 @@ export function renderFocus(j) {
     else info.textContent = 'cancelled';
   }
 }
+// ---- two cameras: pick by USB port, align, show whether photos are stitched ----
+export async function loadCameraList(ev) {
+  const sel = ev && ev.currentTarget;
+  if (!sel || sel.dataset.loaded) return;
+  sel.dataset.loaded = '1';
+  try {
+    const j = await (await fetch('/api/cameras')).json();
+    const cams = j.cameras || [];
+    const opts = cams
+      .map(
+        c =>
+          `<option value="${esc(c.path)}">${esc(c.name || 'camera')} on USB port ${esc(c.port || '?')} ` +
+          `(${esc(c.node.replace('/dev/', ''))}${c.speed && c.speed < 480 ? ', slow link' : ''})</option>`
+      )
+      .join('');
+    sel.innerHTML =
+      '<option value="">pick a camera\u2026</option>' +
+      (sel.dataset.for === 'usb_device2' ? '<option value="-">none</option>' : '') +
+      (opts || '<option value="" disabled>no USB cameras found</option>');
+  } catch (e) {
+    sel.dataset.loaded = '';
+  }
+}
+export async function alignCameras() {
+  const info = document.getElementById('aligninfo');
+  if (
+    !window.confirm(
+      'Align the two cameras now?\n\nIt takes a frame from each (have the light on). ' +
+        'Photos are then the combined view: the grid is moved to match, the crop is reset, ' +
+        'and starting a new timelapse keeps the video from mixing the two views.'
+    )
+  )
+    return;
+  if (info) info.textContent = 'aligning\u2026 (about half a minute)';
+  try {
+    const r = await fetch('/api/align_cameras', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    if (r.status === 401) {
+      if (info) info.textContent = 'log in first';
+      return;
+    }
+    const j = await r.json().catch(() => ({}));
+    if (info)
+      info.textContent = j.ok
+        ? `aligned: ${j.inliers} matching points, ${j.overlap_pct}% overlap, ${j.canvas[0]}\u00d7${j.canvas[1]}`
+        : j.error || 'failed';
+  } catch (e) {
+    if (info) info.textContent = 'request failed';
+  }
+  refresh();
+}
+export function renderCameraPair(j) {
+  const info = document.getElementById('aligninfo');
+  const cam = j.camera || {};
+  const btn = document.getElementById('alignbtn');
+  if (btn) btn.disabled = !cam.second;
+  if (!info || info.textContent.endsWith('\u2026 (about half a minute)')) return;
+  if (!cam.second) info.textContent = 'one camera';
+  else if (!cam.stitch) info.textContent = 'not aligned yet: photos use camera 1 only';
+  else if (!info.textContent.startsWith('aligned'))
+    info.textContent = `aligned: ${cam.stitch.inliers} matching points, ${cam.stitch.overlap_pct}% overlap`;
+}
 export function renderSweep(j) {
   const btn = document.getElementById('sweepbtn');
   const info = document.getElementById('sweepinfo');
@@ -653,6 +718,21 @@ export function initLight() {
   {
     const fb = document.getElementById('focusbtn');
     if (fb) fb.addEventListener('click', startFocusSweep);
+  }
+  {
+    const ab = document.getElementById('alignbtn');
+    if (ab) ab.addEventListener('click', alignCameras);
+    document.querySelectorAll('.campick').forEach(sel => {
+      sel.addEventListener('focus', loadCameraList);
+      sel.addEventListener('pointerdown', loadCameraList);
+      sel.addEventListener('change', () => {
+        if (!sel.value) return;
+        const f = document.getElementById('cfgform');
+        f.elements[sel.dataset.for].value = sel.value === '-' ? '' : sel.value;
+        formDirty.add(sel.dataset.for); // set by code: no input event
+        sel.value = '';
+      });
+    });
   }
   document
     .querySelectorAll('.fanbtn')
