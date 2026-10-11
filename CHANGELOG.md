@@ -4,6 +4,11 @@ One entry per update zip, newest first. Install any update with
 `bash scripts/update.sh openSeedling-update-N.zip`; each is cumulative from
 the 4-17 baseline. The installer commits each one with the heading below.
 
+## 48 (2026-10-11): Touchscreen soil chart labelled
+- The soil chart has degree labels on the left, clock times along the bottom, the heat mat target labelled on its line, and a dot at the latest reading.
+- The heat mat's power moves out from under the temperature line into its own strip below it (full strip = 100%).
+- A key beside the title: soil, heat mat target, heat mat power.
+
 ## 47 (2026-10-11): Touchscreen summary fills the screen
 - The summary is sized in rem; on a screen bigger than its 600 px layout, the text grows until the soil chart is down to about a quarter of the height, instead of the chart taking all the spare room.
 - The kiosk session logs the display's modes, with the one in use marked, to the journal.

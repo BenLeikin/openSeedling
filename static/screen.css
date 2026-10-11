@@ -331,20 +331,56 @@ footer {
 #trend .soil {
   fill: none;
   stroke: #8fc196;
-  stroke-width: 2;
+  stroke-width: 2.5;
+  stroke-linejoin: round;
+}
+#trend .dot {
+  fill: #8fc196;
+}
+#trend .grid {
+  stroke: #2a3528;
+  stroke-width: 1;
+}
+#trend .strip {
+  fill: #141a15;
+  stroke: var(--line);
+  stroke-width: 1;
 }
 #trend .duty {
-  fill: rgba(232, 176, 75, 0.18);
+  fill: rgba(232, 176, 75, 0.55);
   stroke: none;
 }
 #trend .tgt {
   stroke: #e8b04b;
-  stroke-dasharray: 4 4;
-  stroke-width: 1;
+  stroke-dasharray: 5 4;
+  stroke-width: 1.5;
 }
 #trend text {
   fill: #94a48d;
   font-size: 0.75rem;
+}
+#trend .tgtl {
+  fill: #e8b04b;
+}
+/* the chart's key, beside its title */
+.key i {
+  display: inline-block;
+  vertical-align: middle;
+  width: 1.1em;
+  margin: 0 0.3em 0 0.7em;
+}
+.key i:first-child {
+  margin-left: 0;
+}
+.key .k-line {
+  border-top: 0.16em solid #8fc196;
+}
+.key .k-tgt {
+  border-top: 0.12em dashed #e8b04b;
+}
+.key .k-bar {
+  height: 0.7em;
+  background: rgba(232, 176, 75, 0.55);
 }
 .tray .tnp {
   font-size: 0.9375rem;
@@ -390,7 +426,6 @@ body.tight .btn {
   padding: 0.5rem 0.875rem;
 }
 body.tighter .tray .ts,
-body.tighter #trendsub,
 body.tighter #t-soil .sub,
 body.tighter #t-air .sub {
   display: none;

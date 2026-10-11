@@ -629,6 +629,32 @@ def screen(pw, base, app):
                         document.body.scrollWidth > document.body.clientWidth + 1}}"""
             )
         )
+    page.evaluate(
+        """()=>{ const now=Date.now()/1000, soil=[], duty=[];
+           for(let i=0;i<288;i++){ const t=now-86400+i*300;
+             soil.push([t, 25+1.5*Math.sin(i/30)]); duty.push([t, i<100?100:40]); }
+           trend={soil,duty,at:Date.now()}; S.heat=Object.assign({},S.heat,{use:true,target_f:85});
+           draw(); }"""
+    )
+    page.wait_for_timeout(200)
+    ax = page.evaluate(
+        """()=>{const q=s=>[...document.querySelectorAll('#trend '+s)];
+           return {deg: q('text.tick').filter(t=>/\\d\\u00b0$/.test(t.textContent)).length,
+             times: q('text.tick').filter(t=>/AM|PM|now/.test(t.textContent)).length,
+             target: q('text.tgtl').map(t=>t.textContent).join(),
+             strip: q('rect.strip').length, duty: q('path.duty').length,
+             key: document.getElementById('trendsub').textContent}}"""
+    )
+    check(
+        ax["deg"] >= 2
+        and ax["times"] >= 3
+        and ax["target"] == "target 85\u00b0"
+        and ax["strip"] == 1
+        and ax["duty"] == 1
+        and "heat mat power" in ax["key"],
+        f"the soil chart has degree and time labels, a labelled target, the heat mat's power "
+        f"in its own strip and a key ({ax})",
+    )
     check(
         all(f["size"] > 16 and 20 <= f["share"] <= 40 and not f["over"] for f in big),
         f"on a bigger screen the text grows and the chart keeps about a quarter ({big})",

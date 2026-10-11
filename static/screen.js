@@ -314,6 +314,17 @@ async function loadTrend() {
   }
   drawTrend();
 }
+function niceStep(span, n) {
+  const raw = span / n,
+    mag = 10 ** Math.floor(Math.log10(raw));
+  return [1, 2, 5, 10].map(m => m * mag).find(st => st >= raw) || 10 * mag;
+}
+function hourLabel(t) {
+  return new Date(t * 1000).toLocaleTimeString([], { hour: 'numeric' }).replace(':00', '');
+}
+// Soil temperature with the heat mat's target, and below it the heat mat's
+// power, over the last 24 hours, drawn at the box's real pixel size: degree
+// labels on the left, clock times along the bottom, the target line labelled.
 function drawTrend() {
   const svg = $('trend'),
     box = svg.getBoundingClientRect();
@@ -324,47 +335,93 @@ function drawTrend() {
   const pts = trend.soil.map(p => [p[0], tDisp(p[1])]);
   if (pts.length < 2) {
     svg.innerHTML = `<text x="${W / 2}" y="${H / 2}" text-anchor="middle">not enough data yet</text>`;
-    $('trendsub').textContent = '';
     return;
   }
+  const fs = parseFloat(getComputedStyle(svg).fontSize) || 12;
   const now = Date.now() / 1000,
     x0 = now - 86400;
   const h = S.heat || {};
   const tgt = h.use ? fToDisp(h.target_f) : null;
-  let lo = Math.min(...pts.map(p => p[1])),
-    hi = Math.max(...pts.map(p => p[1]));
+  const shown = pts.filter(p => p[0] >= x0);
+  const vals = (shown.length ? shown : pts).map(p => p[1]);
+  let lo = Math.min(...vals),
+    hi = Math.max(...vals);
   if (tgt != null) {
     lo = Math.min(lo, tgt);
     hi = Math.max(hi, tgt);
   }
-  const pad = Math.max(0.5, (hi - lo) * 0.15);
+  const pad = Math.max(0.5, (hi - lo) * 0.1);
   lo -= pad;
   hi += pad;
-  const sx = t => ((t - x0) / 86400) * W,
-    sy = v => H - 2 - ((v - lo) / (hi - lo)) * (H - 4);
+  // layout: degree labels in a left gutter; the plot; the heat mat strip; times
+  const L = Math.round(fs * 2.9),
+    R = W - Math.round(fs * 0.4),
+    top = Math.round(fs * 0.7),
+    timeH = Math.round(fs * 1.5),
+    small = H < fs * 11,
+    stripH = !trend.duty.length
+      ? 0
+      : small
+        ? Math.round(fs * 0.9)
+        : Math.max(Math.round(fs * 1.8), Math.round(H * 0.12)),
+    gap = stripH ? Math.round(fs * 0.5) : 0,
+    plotB = H - timeH - stripH - gap,
+    stripT = plotB + gap,
+    stripB = stripT + stripH;
+  const sx = t => L + ((t - x0) / 86400) * (R - L),
+    sy = v => plotB - ((v - lo) / (hi - lo)) * (plotB - top);
   let s = '';
-  if (trend.duty.length) {
-    const d = trend.duty.filter(p => p[0] >= x0);
-    let path = `M0,${H}`;
-    d.forEach((p, i) => {
-      const x = sx(p[0]),
-        y = H - (p[1] / 100) * H * 0.45,
-        nx = i + 1 < d.length ? sx(d[i + 1][0]) : Math.min(W, x + (W * 900) / 86400);
-      path += ` L${x.toFixed(1)},${H} L${x.toFixed(1)},${y.toFixed(1)} L${nx.toFixed(1)},${y.toFixed(1)} L${nx.toFixed(1)},${H}`;
-    });
-    s += `<path class="duty" d="${path} Z"/>`;
+  // degree gridlines and labels
+  const st = niceStep(hi - lo, Math.max(2, Math.min(6, Math.floor((plotB - top) / (fs * 2.5)))));
+  for (let v = Math.ceil(lo / st) * st; v <= hi; v += st) {
+    const y = sy(v).toFixed(1);
+    s += `<line class="grid" x1="${L}" x2="${R}" y1="${y}" y2="${y}"/>`;
+    s += `<text class="tick" x="${L - fs * 0.4}" y="${y}" dy="0.35em" text-anchor="end">${+v.toFixed(1)}\u00b0</text>`;
   }
-  if (tgt != null)
-    s += `<line class="tgt" x1="0" x2="${W}" y1="${sy(tgt).toFixed(1)}" y2="${sy(tgt).toFixed(1)}"/>`;
-  s += `<polyline class="soil" points="${pts
-    .filter(p => p[0] >= x0)
+  // clock times every 6 hours, with "now" at the right edge
+  const first = Math.ceil(x0 / 3600) * 3600;
+  for (let t = first; t < now; t += 3600) {
+    if (new Date(t * 1000).getHours() % 6) continue;
+    const x = sx(t);
+    if (x - L < fs * 1.5 || R - x < fs * 3.5) continue;
+    s += `<line class="grid" x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${top}" y2="${stripB || plotB}"/>`;
+    s += `<text class="tick" x="${x.toFixed(1)}" y="${H - fs * 0.35}" text-anchor="middle">${hourLabel(t)}</text>`;
+  }
+  s += `<text class="tick" x="${R}" y="${H - fs * 0.35}" text-anchor="end">now</text>`;
+  // heat mat power: its own strip, full height = 100%
+  if (stripH) {
+    s += `<rect class="strip" x="${L}" y="${stripT}" width="${R - L}" height="${stripH}"/>`;
+    const d = trend.duty.filter(p => p[0] >= x0);
+    let path = '';
+    d.forEach((p, i) => {
+      const x = Math.max(L, sx(p[0])),
+        nx = i + 1 < d.length ? sx(d[i + 1][0]) : Math.min(R, x + ((R - L) * 900) / 86400),
+        y = stripB - (Math.max(0, Math.min(100, p[1])) / 100) * stripH;
+      if (p[1] > 0)
+        path += `M${x.toFixed(1)},${stripB} V${y.toFixed(1)} H${nx.toFixed(1)} V${stripB} Z`;
+    });
+    if (path) s += `<path class="duty" d="${path}"/>`;
+    const mid = stripT + stripH / 2,
+      gx = L - fs * 0.4;
+    s += small
+      ? `<text class="tick" x="${gx}" y="${mid}" dy="0.35em" text-anchor="end">mat</text>`
+      : `<text class="tick" x="${gx}" y="${mid}" dy="-0.15em" text-anchor="end">heat</text>` +
+        `<text class="tick" x="${gx}" y="${mid}" dy="0.85em" text-anchor="end">mat</text>`;
+  }
+  if (tgt != null) {
+    const y = sy(tgt).toFixed(1);
+    s += `<line class="tgt" x1="${L}" x2="${R}" y1="${y}" y2="${y}"/>`;
+    const above = sy(tgt) - fs * 1.1 >= 0;
+    if (plotB - top >= fs * 4)
+      s += `<text class="tgtl" x="${L + fs * 0.4}" y="${y}" dy="${above ? '-0.4em' : '1.1em'}">target ${tgt.toFixed(0)}\u00b0</text>`;
+  }
+  s += `<polyline class="soil" points="${shown
     .map(p => `${sx(p[0]).toFixed(1)},${sy(p[1]).toFixed(1)}`)
     .join(' ')}"/>`;
+  const last = shown[shown.length - 1];
+  if (last)
+    s += `<circle class="dot" cx="${sx(last[0]).toFixed(1)}" cy="${sy(last[1]).toFixed(1)}" r="${(fs * 0.3).toFixed(1)}"/>`;
   svg.innerHTML = s;
-  const vals = pts.filter(p => p[0] >= x0).map(p => p[1]);
-  $('trendsub').textContent =
-    `${Math.min(...vals).toFixed(1)}–${Math.max(...vals).toFixed(1)}${tUnit()}` +
-    (tgt != null ? ` · target ${tgt.toFixed(0)}${tUnit()} · shaded: heat mat power` : '');
 }
 addEventListener('resize', drawTrend);
 
