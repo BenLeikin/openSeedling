@@ -106,6 +106,18 @@ def is_authed():
     )
 
 
+def on_screen():
+    """The request comes from the touchscreen on this Pi: the browser kiosk.sh
+    starts, on 127.0.0.1, with the kiosk's local trust switched on. Pages
+    rendered for it hide the mouse pointer."""
+    return bool(
+        config.TRUST_LOCALHOST
+        and has_request_context()
+        and request.remote_addr in ("127.0.0.1", "::1")
+        and not request.headers.get("X-Forwarded-For")
+    )
+
+
 def require_auth(fn):
     """Gate a route on the login, and gate every non-GET route on a JSON body.
 
@@ -198,6 +210,7 @@ def index():
         v=_asset_ver(),
         fa=form_attrs,
         form_spec=config.form_spec(),
+        onscreen=on_screen(),
     )
 
 
@@ -224,7 +237,7 @@ def _changed(resp):
 @app.route("/screen")
 def screen():
     """The touchscreen's one-page summary (scripts/kiosk.sh shows it)."""
-    return render_template("screen.html", v=_asset_ver())
+    return render_template("screen.html", v=_asset_ver(), onscreen=on_screen())
 
 
 @app.route("/favicon.ico")

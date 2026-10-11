@@ -4,6 +4,11 @@ One entry per update zip, newest first. Install any update with
 `bash scripts/update.sh openSeedling-update-N.zip`; each is cumulative from
 the 4-17 baseline. The installer commits each one with the heading below.
 
+## 44 (2026-10-11): Touchscreen working, no cursor
+- The kiosk unit carries what bring-up on the real screen needed: browser output to the journal, WebKit's sandbox off, CPU rendering; `kiosk.sh install` removes the hand-made drop-ins.
+- CMA raised to 128 MB in `deploy/boot-config.txt` (the GPU ran out at 64 MB).
+- No mouse pointer on the touchscreen: an invisible cursor theme for cage and cog, and `cursor: none` on pages served to the Pi's own screen.
+
 ## 43 (2026-10-06): Memory charts in the Device card
 - The Pi's memory charts (free memory, swap, controller, touchscreen) moved from the chart grid into the Device card, under the health tiles; same range buttons, crosshair and expand.
 

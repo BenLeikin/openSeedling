@@ -6,7 +6,7 @@
 <title>openSeedling · screen</title>
 <link rel="stylesheet" href="/static/screen.css?v={{ v }}">
 </head>
-<body>
+<body{% if onscreen %} class="onscreen"{% endif %}>
 <!-- The touchscreen's summary: everything at a glance on one 600 x 1024
      portrait screen, no scrolling. scripts/kiosk.sh points the kiosk here.
      Reads /api/status; the controls post to the same endpoints the

@@ -25,6 +25,8 @@ main() {
   : "${UNIT_PATH:=/etc/systemd/system/growlight-kiosk.service}"
   : "${PAM_PATH:=/etc/pam.d/cage}"
   : "${TOUCH_RULE:=/etc/udev/rules.d/99-openseedling-touch.rules}"
+  : "${CURSOR_DIR:=$HOME/.local/share/openseedling-cursor}"
+  : "${DROPIN_DIR:=${UNIT_PATH}.d}"
   case "$cmd" in
     install)      install_kiosk "$@" ;;
     touch-rotate) touch_rotate "${1:?touch-rotate needs 0, 90, 180 or 270}" ;;
@@ -49,7 +51,7 @@ set_trust() {       # set_trust 1|0: the screen counts as signed in (GROWLIGHT_T
 
 render_unit() {     # render_unit ROTATION: the unit with this box's paths filled in
   sed -e "s|@APP_DIR@|$APP_DIR|g" -e "s|@RUN_USER@|$RUN_USER|g" -e "s|@ROTATE@|$1|g" \
-    "$APP_DIR/deploy/growlight-kiosk.service"
+    -e "s|@CURSOR_DIR@|$CURSOR_DIR|g" "$APP_DIR/deploy/growlight-kiosk.service"
 }
 
 install_kiosk() {
@@ -87,8 +89,17 @@ install_kiosk() {
   echo "==> the screen may change settings without signing in (GROWLIGHT_TRUST_LOCALHOST)"
   set_trust 1
 
+  echo "==> invisible cursor ($CURSOR_DIR)"
+  python3 "$APP_DIR/scripts/blank_cursor.py" "$CURSOR_DIR" > /dev/null
+
   echo "==> service (portrait rotation $rot)"
   render_unit "$rot" | sudo tee "$UNIT_PATH" > /dev/null
+  # stopgaps from the first bring-up, now part of the unit itself
+  local d
+  for d in log.conf sandbox.conf render.conf; do
+    [[ -f "$DROPIN_DIR/$d" ]] && sudo rm -f "$DROPIN_DIR/$d" && echo "    removed $DROPIN_DIR/$d (now in the unit)"
+  done
+  sudo rmdir "$DROPIN_DIR" 2>/dev/null || true
   chmod +x "$APP_DIR/scripts/kiosk-session.sh"
   # tty1 belongs to the screen now: no login prompt drawn under the dashboard
   sudo systemctl mask --quiet getty@tty1.service
@@ -137,6 +148,7 @@ status() {
 remove_kiosk() {
   sudo systemctl disable --now --quiet growlight-kiosk 2>/dev/null || true
   sudo rm -f "$UNIT_PATH" "$TOUCH_RULE"
+  rm -rf "$CURSOR_DIR"
   sudo systemctl unmask --quiet getty@tty1.service
   sudo systemctl daemon-reload
   sudo systemctl start getty@tty1.service 2>/dev/null || true

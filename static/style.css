@@ -4100,3 +4100,9 @@ svg.cmini .cnight {
   font-size: 13px;
   margin: 0 0 6px;
 }
+
+/* the touchscreen on the Pi (routes.on_screen): no mouse pointer over the page */
+body.onscreen,
+body.onscreen * {
+  cursor: none !important;
+}

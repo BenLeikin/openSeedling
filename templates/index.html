@@ -11,7 +11,7 @@
 <meta name="theme-color" content="#f0f6ea">
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v=v) }}">
 </head>
-<body>
+<body{% if onscreen %} class="onscreen"{% endif %}>
 <header>
   <h1><span class="sprout">&#127793;</span> OpenSeedling</h1>
   <div class="hright">

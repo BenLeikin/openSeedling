@@ -2160,10 +2160,10 @@ def _oom():
     lines = out.splitlines()
     check(
         "#growlight# dtoverlay=vc4-kms-v3d" in lines
-        and "dtoverlay=vc4-kms-v3d,cma-64" in lines
+        and "dtoverlay=vc4-kms-v3d,cma-128" in lines
         and lines.count("dtoverlay=vc4-kms-v3d") == 0
         and "CmaTotal" in setup,
-        "the boot block sets CMA to 64 MB, comments out the stock KMS line, and setup.sh checks CmaTotal",
+        "the boot block sets CMA to 128 MB, comments out the stock KMS line, and setup.sh checks CmaTotal",
     )
 
 
@@ -3078,8 +3078,8 @@ def _kiosk():
         and "install_kiosk" in sh
         and "remove_kiosk" in sh
         and "touch_rotate" in sh,
-        "the kiosk installs as an opt-in service with a hard memory ceiling, first in line "
-        "for the OOM killer, portrait rotation, and a clean remove",
+        "the kiosk installs as an opt-in service, first in line for the OOM killer, with "
+        "portrait rotation and a clean remove",
     )
     r = c.get("/screen")
     page = r.get_data(as_text=True)
@@ -3126,6 +3126,95 @@ def _kiosk():
         f"with the kiosk on, the Pi's own screen may change things without signing in; "
         f"anything through a proxy or from another machine still needs the password "
         f"(off {off}, local {local}, proxied {proxied}, remote {remote})",
+    )
+
+
+def _kiosk_bringup():
+    """What the screen needed on the real Pi: the browser's errors in the
+    journal, WebKit's sandbox off, CPU rendering, an invisible cursor, and the
+    stopgap drop-ins cleaned up by a reinstall."""
+    unit = (APP / "deploy" / "growlight-kiosk.service").read_text()
+    sh = (APP / "scripts" / "kiosk.sh").read_text()
+    rendered = subprocess.run(
+        [
+            "sed",
+            "-e",
+            "s|@CURSOR_DIR@|/home/ben/.local/share/openseedling-cursor|g",
+            "-e",
+            "s|@APP_DIR@|/home/ben/growlight|g",
+            "-e",
+            "s|@RUN_USER@|ben|g",
+            "-e",
+            "s|@ROTATE@|0|g",
+            str(APP / "deploy" / "growlight-kiosk.service"),
+        ],
+        capture_output=True,
+        text=True,
+    ).stdout
+    check(
+        "StandardOutput=journal" in unit
+        and "StandardError=journal" in unit
+        and "Environment=WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1" in unit
+        and "Environment=WEBKIT_SKIA_ENABLE_CPU_RENDERING=1" in unit
+        and "Environment=XCURSOR_PATH=/home/ben/.local/share/openseedling-cursor" in rendered
+        and not re.search(r"@[A-Z_]+@", rendered)
+        and '-e "s|@CURSOR_DIR@|$CURSOR_DIR|g"' in sh
+        and 'python3 "$APP_DIR/scripts/blank_cursor.py" "$CURSOR_DIR"' in sh
+        and "for d in log.conf sandbox.conf render.conf; do" in sh,
+        "the kiosk unit logs to the journal, runs WebKit without its sandbox and with CPU "
+        "rendering, points at an invisible cursor theme, and a reinstall removes the stopgaps",
+    )
+    import importlib.util
+    import struct
+
+    spec = importlib.util.spec_from_file_location(
+        "blank_cursor", APP / "scripts" / "blank_cursor.py"
+    )
+    bc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bc)
+    d = bc.write_theme(WORK / "cursor")
+    data = (d / "left_ptr").read_bytes()
+    magic, hsize, _ver, ntoc = struct.unpack("<4sIII", data[:16])
+    typ, _sub, pos = struct.unpack("<III", data[16:28])
+    chunk = struct.unpack("<IIIIIIIII", data[pos : pos + 36])
+    pixel = struct.unpack("<I", data[pos + 36 : pos + 40])[0]
+    names = {p.name for p in d.iterdir()}
+    check(
+        magic == b"Xcur"
+        and hsize == 16
+        and ntoc == 1
+        and typ == 0xFFFD0002
+        and chunk[4:6] == (1, 1)
+        and pixel == 0
+        and {"default", "left_ptr", "pointer", "text", "hand2", "xterm"} <= names,
+        f"the cursor theme is valid Xcursor, 1x1 and fully transparent, for every common "
+        f"cursor name ({len(names)} names)",
+    )
+    was = config.TRUST_LOCALHOST
+    try:
+        c2 = routes.app.test_client()
+        config.TRUST_LOCALHOST = True
+        local = c2.get("/screen").get_data(as_text=True)
+        local_dash = c2.get("/").get_data(as_text=True)
+        proxied = c2.get("/screen", headers={"X-Forwarded-For": "203.0.113.9"}).get_data(
+            as_text=True
+        )
+        config.TRUST_LOCALHOST = False
+        off = c2.get("/screen").get_data(as_text=True)
+    finally:
+        config.TRUST_LOCALHOST = was
+    css = Code((APP / "static" / "screen.css").read_text())
+    dcss = Code((APP / "static" / "style.css").read_text())
+    rule = "body.onscreen,body.onscreen *{cursor:none !important}"
+    check(
+        '<body class="onscreen">' in local
+        and '<body class="onscreen">' in local_dash
+        and '<body class="onscreen">' not in proxied
+        and '<body class="onscreen">' not in off
+        and rule in css
+        and rule in dcss,
+        "pages for the Pi's own screen hide the pointer; through the proxy, or without the "
+        "kiosk, the pointer stays",
     )
 
 
@@ -3592,6 +3681,7 @@ run("Review fixes", _review_fixes)
 run("Settings form validity", _form_validity)
 run("Phone layout", _phone_layout)
 run("Touchscreen kiosk", _kiosk)
+run("Kiosk bring-up", _kiosk_bringup)
 run("USB link", _usb_link)
 run("Settings layout", _settings_layout)
 run("Settings field definitions", _form_definitions)

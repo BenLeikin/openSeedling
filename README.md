@@ -267,9 +267,27 @@ opens the normal page with a button back, and it returns to the summary by
 itself after three minutes untouched.
 
 It runs cog (a WebKit browser) inside cage (a one-window Wayland compositor),
-no desktop, under a hard memory ceiling (`MemoryMax=210M`) and first in line
-for the out-of-memory killer, so the screen may blank and restart under
-pressure but cannot take the controller down. The screen counts as signed in
+no desktop, first in line for the out-of-memory killer, so the screen may
+blank and restart under pressure but cannot take the controller down. The
+unit's `MemoryMax=210M` does not currently reach the browser: the PAM login
+session moves cage out of the service's cgroup.
+
+What the Zero 2 W needs, all set by the unit and `deploy/boot-config.txt`:
+
+- `cma-128`: the graphics driver allocates screen and render buffers from
+  contiguous memory; at 64 MB it ran out ("Failed to allocate from GEM DMA
+  helper" in `journalctl -k`) and the page showed cog's crash screen.
+- `WEBKIT_SKIA_ENABLE_CPU_RENDERING=1`: pages are drawn on the CPU, leaving the
+  GPU only the screen buffers.
+- `WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1`: WebKit's bubblewrap sandbox
+  refuses to start in this session ("bwrap: Unexpected capabilities but not
+  setuid") and the browser aborts with status 133. The screen only loads this
+  Pi's own dashboard from 127.0.0.1.
+- An invisible cursor theme (`scripts/blank_cursor.py`, written to
+  `~/.local/share/openseedling-cursor` and named by `XCURSOR_PATH`), plus
+  `cursor: none` on pages served to the screen, because the touch panel also
+  reports itself as a mouse.
+- The browser's output goes to the journal: `journalctl -u growlight-kiosk`. The screen counts as signed in
 (`GROWLIGHT_TRUST_LOCALHOST=1` in `.env`, set by the script): only a process
 on the Pi itself connects from 127.0.0.1; the public site still needs the
 password. On a Zero the touch panel's USB needs a hub on the single port the

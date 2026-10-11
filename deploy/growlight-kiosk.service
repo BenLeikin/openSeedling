@@ -29,9 +29,25 @@ UtmpMode=user
 Environment=XDG_SESSION_TYPE=wayland
 Environment=KIOSK_ROTATE=@ROTATE@
 Environment=KIOSK_URL=http://127.0.0.1:5000/screen
+# An invisible cursor theme (scripts/blank_cursor.py, written by kiosk.sh): the
+# touchscreen also reports itself as a mouse, which parks an arrow on screen.
+Environment=XCURSOR_PATH=@CURSOR_DIR@
+# WebKit's own sandbox (bubblewrap) refuses to start in this session ("Unexpected
+# capabilities but not setuid") and the browser aborts. The screen only ever
+# loads this Pi's own dashboard from 127.0.0.1.
+Environment=WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1
+# Draw pages on the CPU. GPU rendering fills the graphics driver's contiguous
+# memory (CMA) on the Zero's VideoCore IV and the page crashes; the GPU is left
+# only the screen buffers.
+Environment=WEBKIT_SKIA_ENABLE_CPU_RENDERING=1
+# StandardInput=tty would send the browser's errors to the screen itself
+StandardOutput=journal
+StandardError=journal
 ExecStart=/usr/bin/cage -s -- @APP_DIR@/scripts/kiosk-session.sh
 Restart=always
 RestartSec=5
+# The PAM login session moves cage into a logind session scope, so these limits
+# do not reach the browser at present; OOMScoreAdjust is inherited and does.
 MemoryHigh=170M
 MemoryMax=210M
 OOMScoreAdjust=1000

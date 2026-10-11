@@ -264,7 +264,6 @@ export const BUDDY_FLIES = { bee: true, ladybug: true };
 // headroom a loop needs above the flyer: two radii plus its own height
 export const LOOP_HEADROOM = 76;
 
-
 export function walkerSvg(model) {
   const draw = BUDDY_SPRITES[model] || buddySprout;
   const name = model in BUDDY_SPRITES ? model : 'sprout';
