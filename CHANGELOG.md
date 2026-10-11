@@ -4,6 +4,11 @@ One entry per update zip, newest first. Install any update with
 `bash scripts/update.sh openSeedling-update-N.zip`; each is cumulative from
 the 4-17 baseline. The installer commits each one with the heading below.
 
+## 49 (2026-10-11): Touchscreen charts rotate
+- The chart slot turns every 15 s through soil temperature with the heat mat, soil moisture per tray (with the dry line), light (PPFD when the light is calibrated, otherwise thousand lux) and air temperature with humidity. A tap turns it and holds that chart for a minute; dots beside the title show which one is up.
+- Charts with no data in the last day are skipped.
+- `/api/series_all` takes `only=` (key prefixes), so the touchscreen fetches just what it charts.
+
 ## 48 (2026-10-11): Touchscreen soil chart labelled
 - The soil chart has degree labels on the left, clock times along the bottom, the heat mat target labelled on its line, and a dot at the latest reading.
 - The heat mat's power moves out from under the temperature line into its own strip below it (full strip = 100%).

@@ -202,11 +202,15 @@ def series_all():
         pcal = dict(config.settings.get("probe_cal") or {})
     snap = db.latest()
     stf = water.latest_soil_temp_f(snap)
+    # ?only=temp:,heat:,lux limits it to keys starting with those (the touchscreen)
+    only = tuple(p for p in request.args.get("only", "").split(",") if p)
     out = {}
     with config.settings_lock:
         camera_on = bool(config.settings.get("camera_enabled"))
         _cam_t = set(setups_mod.camera_trays(dict(config.settings)))
     for k in snap.keys():
+        if only and not k.startswith(only):
+            continue
         if k.startswith("canopy:") and k[7:] not in _cam_t:
             continue  # a tray the camera no longer watches
         if k.startswith("float:") or k.startswith("reservoir:"):

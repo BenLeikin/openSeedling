@@ -328,14 +328,10 @@ footer {
   margin-top: 0.25rem;
   display: block;
 }
-#trend .soil {
+#trend .ln {
   fill: none;
-  stroke: #8fc196;
   stroke-width: 2.5;
   stroke-linejoin: round;
-}
-#trend .dot {
-  fill: #8fc196;
 }
 #trend .grid {
   stroke: #2a3528;
@@ -349,6 +345,9 @@ footer {
 #trend .duty {
   fill: rgba(232, 176, 75, 0.55);
   stroke: none;
+}
+#trend .duty.hum {
+  fill: rgba(127, 179, 213, 0.5);
 }
 #trend .tgt {
   stroke: #e8b04b;
@@ -375,12 +374,32 @@ footer {
 .key .k-line {
   border-top: 0.16em solid #8fc196;
 }
-.key .k-tgt {
+.key .k-dash {
   border-top: 0.12em dashed #e8b04b;
 }
-.key .k-bar {
+.key .k-bar,
+.key .k-hbar {
   height: 0.7em;
   background: rgba(232, 176, 75, 0.55);
+}
+.key .k-hbar {
+  background: rgba(127, 179, 213, 0.5);
+}
+/* which of the rotating charts is showing; a tap on the chart turns it */
+#dots {
+  margin-left: 0.6em;
+}
+#dots i {
+  display: inline-block;
+  width: 0.45em;
+  height: 0.45em;
+  border-radius: 50%;
+  background: var(--line);
+  margin-right: 0.3em;
+  vertical-align: middle;
+}
+#dots i.on {
+  background: var(--leaf);
 }
 .tray .tnp {
   font-size: 0.9375rem;

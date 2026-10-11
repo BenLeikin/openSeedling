@@ -3096,7 +3096,7 @@ def _kiosk():
         and "post('/api/settings', {light2_override: v})" in sjs
         and "post('/api/fan', {mode: v})" in sjs
         and "setInterval(refresh, 10000)" in sjs
-        and "/api/series?sensor=" in sjs
+        and "/api/series_all?hours=24&only=" in sjs
         and "location.href='/screen'" in ajs
         and "kioskback" in ajs,
         "the touchscreen opens a one-page summary (/screen) with the light, heat mat and fan "
@@ -3229,6 +3229,14 @@ def _kiosk_bringup():
         and "wlr-randr 2>&1 | sed 's/^/display: /'" in sess,
         "the summary is sized in rem and its text grows into spare height on a bigger "
         f"screen (never wider than the width allows); the display mode is logged (px {px})",
+    )
+    with routes.app.test_client() as c3:
+        some = c3.get("/api/series_all?hours=24&only=temp:,heat:duty").get_json()["series"]
+        every = c3.get("/api/series_all?hours=24").get_json()["series"]
+    check(
+        set(some) == {k for k in every if k.startswith(("temp:", "heat:duty"))}
+        and len(every) > len(some),
+        f"series_all?only= returns just those keys, for the touchscreen's charts ({sorted(some)})",
     )
 
 

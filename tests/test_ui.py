@@ -630,30 +630,55 @@ def screen(pw, base, app):
             )
         )
     page.evaluate(
-        """()=>{ const now=Date.now()/1000, soil=[], duty=[];
+        """()=>{ const now=Date.now()/1000, ser={'temp:soil':[], 'heat:duty':[], ppfd:[],
+             'temp:air':[], humidity:[]};
+           const cal=S.probe_default_cal, trays=trayList(), chs=trays.map(trayProbe).filter(c=>c!=null);
+           chs.forEach(c=>ser['probe:'+c]=[]);
            for(let i=0;i<288;i++){ const t=now-86400+i*300;
-             soil.push([t, 25+1.5*Math.sin(i/30)]); duty.push([t, i<100?100:40]); }
-           trend={soil,duty,at:Date.now()}; S.heat=Object.assign({},S.heat,{use:true,target_f:85});
-           draw(); }"""
+             ser['temp:soil'].push([t, 25+1.5*Math.sin(i/30)]); ser['heat:duty'].push([t, i<100?100:40]);
+             ser.ppfd.push([t, Math.max(0, 600*Math.sin((i-60)/170*Math.PI))]);
+             ser['temp:air'].push([t, 24+2*Math.sin(i/40)]); ser.humidity.push([t, 50+10*Math.sin(i/50)]);
+             chs.forEach((c,j)=>ser['probe:'+c].push([t, cal.wet+(cal.dry-cal.wet)*(0.2+0.1*j+0.3*i/288)])); }
+           trend={series:ser,at:Date.now()}; S.heat=Object.assign({},S.heat,{use:true,target_f:85});
+           chartIdx=0; chartHeldUntil=Date.now()+600000; draw(); }"""
     )
     page.wait_for_timeout(200)
-    ax = page.evaluate(
-        """()=>{const q=s=>[...document.querySelectorAll('#trend '+s)];
-           return {deg: q('text.tick').filter(t=>/\\d\\u00b0$/.test(t.textContent)).length,
+    read = """()=>{const q=s=>[...document.querySelectorAll('#trend '+s)];
+           return {title: document.getElementById('trendtitle').textContent,
+             vals: q('text.tick').filter(t=>/\\d[\u00b0%]?$/.test(t.textContent)).length,
              times: q('text.tick').filter(t=>/AM|PM|now/.test(t.textContent)).length,
              target: q('text.tgtl').map(t=>t.textContent).join(),
-             strip: q('rect.strip').length, duty: q('path.duty').length,
+             strip: q('rect.strip').length, lines: q('polyline.ln').length,
+             dots: document.querySelectorAll('#dots i').length,
              key: document.getElementById('trendsub').textContent}}"""
+    seen = [page.evaluate(read)]
+    for _ in range(4):
+        page.click("#trend")
+        page.wait_for_timeout(150)
+        seen.append(page.evaluate(read))
+    soil, wet, light, air, back = seen
+    check(
+        soil["title"] == "Soil temperature, 24 h"
+        and soil["vals"] >= 2
+        and soil["times"] >= 3
+        and soil["target"] == "target 85\u00b0"
+        and soil["strip"] == 1
+        and soil["dots"] == 4
+        and "heat mat power" in soil["key"],
+        f"the soil chart has value and time labels, a labelled target, the heat mat's power "
+        f"in its own strip and a key ({soil})",
     )
     check(
-        ax["deg"] >= 2
-        and ax["times"] >= 3
-        and ax["target"] == "target 85\u00b0"
-        and ax["strip"] == 1
-        and ax["duty"] == 1
-        and "heat mat power" in ax["key"],
-        f"the soil chart has degree and time labels, a labelled target, the heat mat's power "
-        f"in its own strip and a key ({ax})",
+        wet["title"] == "Soil moisture, 24 h"
+        and wet["lines"] >= 1
+        and wet["target"].startswith("dry below")
+        and light["title"] == "Light (PPFD), 24 h"
+        and air["title"] == "Air, 24 h"
+        and air["strip"] == 1
+        and "humidity" in air["key"]
+        and back["title"] == soil["title"],
+        "a tap turns the chart: soil moisture per tray, light, air with humidity, then back "
+        f"({[x['title'] for x in seen]}, moisture lines {wet['lines']})",
     )
     check(
         all(f["size"] > 16 and 20 <= f["share"] <= 40 and not f["over"] for f in big),

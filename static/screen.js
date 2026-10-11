@@ -296,23 +296,108 @@ addEventListener('resize', () => {
   drawTrend();
 });
 
-// Soil temperature (line) over the heat mat's power (shaded), last 24 hours,
-// drawn at the box's real pixel size.
-let trend = { soil: [], duty: [], at: 0 };
+// The chart slot shows one chart at a time and turns to the next every
+// CHART_TURN_MS, or at a tap: soil temperature with the heat mat, soil
+// moisture per tray, light, air. A chart with no data in the last day is
+// skipped. Every chart covers the last 24 hours, drawn at the box's real size.
+const CHART_TURN_MS = 15000;
+const CHART_HOLD_MS = 60000; // a tap holds the chosen chart this long
+const TRAY_COLORS = ['#8fc196', '#7fb3d5', '#c9a0dc', '#e0a96d', '#f08a86'];
+let trend = { series: {}, at: 0 };
+let chartIdx = 0,
+  chartHeldUntil = 0;
 async function loadTrend() {
   try {
-    const [a, b] = await Promise.all(
-      ['temp:soil', 'heat:duty'].map(k =>
-        fetch(`/api/series?sensor=${encodeURIComponent(k)}&hours=24`, { cache: 'no-store' }).then(
-          r => r.json()
-        )
-      )
-    );
-    trend = { soil: a.points || [], duty: b.points || [], at: Date.now() };
+    const r = await fetch('/api/series_all?hours=24&only=temp:,heat:duty,probe:,lux,humidity', {
+      cache: 'no-store'
+    });
+    if (r.ok) trend = { series: (await r.json()).series || {}, at: Date.now() };
   } catch (e) {
     /* keep the last one */
   }
   drawTrend();
+}
+const recent = pts => (pts || []).filter(p => p[0] >= Date.now() / 1000 - 86400);
+function trayList() {
+  const ts = new Set(Object.keys((S.settings || {}).trays || {}));
+  Object.keys(S.tray_map || {}).forEach(t => ts.add(t));
+  return [...ts].sort();
+}
+function chartSpecs() {
+  const ser = trend.series || {},
+    h = S.heat || {},
+    out = [];
+  const soil = recent(ser['temp:soil']).map(p => [p[0], tDisp(p[1])]);
+  if (soil.length > 1)
+    out.push({
+      title: 'Soil temperature',
+      key: [['line', '#8fc196', 'soil']]
+        .concat(h.use ? [['dash', '#e8b04b', 'heat mat target']] : [])
+        .concat(ser['heat:duty'] ? [['bar', '', 'heat mat power']] : []),
+      lines: [{ pts: soil, color: '#8fc196' }],
+      unit: '°',
+      target: h.use ? { v: fToDisp(h.target_f), label: 'target' } : null,
+      strip: ser['heat:duty'] ? { pts: recent(ser['heat:duty']), label: ['heat', 'mat'] } : null
+    });
+  const thr = (S.water || {}).moisture_threshold_pct || 30;
+  const cals = (S.settings || {}).probe_cal || {};
+  const wet = [];
+  trayList().forEach(t => {
+    const ch = trayProbe(t);
+    if (ch == null) return;
+    // the tray's own calibration, else the default one (as the tray tiles do)
+    const cal = probePct(cals[ch], 0) != null ? cals[ch] : S.probe_default_cal;
+    const pts = recent(ser['probe:' + ch])
+      .map(p => [p[0], probePct(cal, p[1])])
+      .filter(p => p[1] != null);
+    if (pts.length > 1)
+      wet.push({ pts, color: TRAY_COLORS[wet.length % TRAY_COLORS.length], name: trayLabel(t) });
+  });
+  if (wet.length)
+    out.push({
+      title: 'Soil moisture',
+      key: wet.map(l => ['line', l.color, l.name]).concat([['dash', '#e0bb6a', 'dry']]),
+      lines: wet,
+      unit: '%',
+      fixed: [0, 100],
+      target: { v: thr, label: 'dry below', color: '#e0bb6a' }
+    });
+  const ppfd = recent(ser.ppfd),
+    lux = recent(ser.lux);
+  if (ppfd.length > 1 || lux.length > 1)
+    out.push({
+      title: ppfd.length > 1 ? 'Light (PPFD)' : 'Light',
+      key: [['line', '#e8b04b', ppfd.length > 1 ? 'µmol/m²/s' : 'thousand lux']],
+      lines: [
+        {
+          pts: ppfd.length > 1 ? ppfd : lux.map(p => [p[0], p[1] / 1000]),
+          color: '#e8b04b'
+        }
+      ],
+      unit: '',
+      zero: true
+    });
+  const air = recent(ser['temp:air']).map(p => [p[0], tDisp(p[1])]),
+    hum = recent(ser.humidity);
+  if (air.length > 1)
+    out.push({
+      title: 'Air',
+      key: [['line', '#7fb3d5', 'temperature']].concat(
+        hum.length > 1 ? [['hbar', '', 'humidity']] : []
+      ),
+      lines: [{ pts: air, color: '#7fb3d5' }],
+      unit: '°',
+      strip: hum.length > 1 ? { pts: hum, label: ['RH'], cls: 'hum' } : null
+    });
+  return out;
+}
+function keyHtml(key) {
+  return key
+    .map(
+      ([kind, color, label]) =>
+        `<i class="k-${kind}"${color ? ` style="border-color:${color}"` : ''}></i>${esc(label)}`
+    )
+    .join(' ');
 }
 function niceStep(span, n) {
   const raw = span / n,
@@ -322,9 +407,6 @@ function niceStep(span, n) {
 function hourLabel(t) {
   return new Date(t * 1000).toLocaleTimeString([], { hour: 'numeric' }).replace(':00', '');
 }
-// Soil temperature with the heat mat's target, and below it the heat mat's
-// power, over the last 24 hours, drawn at the box's real pixel size: degree
-// labels on the left, clock times along the bottom, the target line labelled.
 function drawTrend() {
   const svg = $('trend'),
     box = svg.getBoundingClientRect();
@@ -332,34 +414,50 @@ function drawTrend() {
     H = Math.round(box.height);
   if (W < 10 || H < 10 || !S) return;
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
-  const pts = trend.soil.map(p => [p[0], tDisp(p[1])]);
-  if (pts.length < 2) {
+  const specs = chartSpecs();
+  if (!specs.length) {
+    $('trendtitle').textContent = 'Last 24 h';
+    $('trendsub').innerHTML = '';
+    $('dots').innerHTML = '';
     svg.innerHTML = `<text x="${W / 2}" y="${H / 2}" text-anchor="middle">not enough data yet</text>`;
     return;
   }
-  const fs = parseFloat(getComputedStyle(svg).fontSize) || 12;
+  chartIdx %= specs.length;
+  const c = specs[chartIdx];
+  $('trendtitle').textContent = c.title + ', 24 h';
+  $('trendsub').innerHTML = keyHtml(c.key);
+  $('dots').innerHTML =
+    specs.length > 1
+      ? specs.map((_, i) => `<i${i === chartIdx ? ' class="on"' : ''}></i>`).join('')
+      : '';
+  svg.setAttribute('aria-label', c.title + ', last 24 hours');
+  svg.innerHTML = chartSvg(c, W, H);
+}
+function chartSvg(c, W, H) {
+  const fs = parseFloat(getComputedStyle($('trend')).fontSize) || 12;
   const now = Date.now() / 1000,
     x0 = now - 86400;
-  const h = S.heat || {};
-  const tgt = h.use ? fToDisp(h.target_f) : null;
-  const shown = pts.filter(p => p[0] >= x0);
-  const vals = (shown.length ? shown : pts).map(p => p[1]);
-  let lo = Math.min(...vals),
+  const vals = c.lines.flatMap(l => l.pts.map(p => p[1]));
+  let lo, hi;
+  if (c.fixed) [lo, hi] = c.fixed;
+  else {
+    lo = Math.min(...vals);
     hi = Math.max(...vals);
-  if (tgt != null) {
-    lo = Math.min(lo, tgt);
-    hi = Math.max(hi, tgt);
+    if (c.target) {
+      lo = Math.min(lo, c.target.v);
+      hi = Math.max(hi, c.target.v);
+    }
+    const pad = Math.max(c.zero ? 0 : 0.5, (hi - lo) * 0.1);
+    lo = c.zero ? 0 : lo - pad;
+    hi = Math.max(hi + pad, lo + 1);
   }
-  const pad = Math.max(0.5, (hi - lo) * 0.1);
-  lo -= pad;
-  hi += pad;
-  // layout: degree labels in a left gutter; the plot; the heat mat strip; times
+  // layout: value labels in a left gutter; the plot; the optional strip; times
+  const small = H < fs * 11;
   const L = Math.round(fs * 2.9),
     R = W - Math.round(fs * 0.4),
     top = Math.round(fs * 0.7),
     timeH = Math.round(fs * 1.5),
-    small = H < fs * 11,
-    stripH = !trend.duty.length
+    stripH = !c.strip
       ? 0
       : small
         ? Math.round(fs * 0.9)
@@ -371,14 +469,12 @@ function drawTrend() {
   const sx = t => L + ((t - x0) / 86400) * (R - L),
     sy = v => plotB - ((v - lo) / (hi - lo)) * (plotB - top);
   let s = '';
-  // degree gridlines and labels
   const st = niceStep(hi - lo, Math.max(2, Math.min(6, Math.floor((plotB - top) / (fs * 2.5)))));
-  for (let v = Math.ceil(lo / st) * st; v <= hi; v += st) {
+  for (let v = Math.ceil(lo / st) * st; v <= hi + 1e-9; v += st) {
     const y = sy(v).toFixed(1);
     s += `<line class="grid" x1="${L}" x2="${R}" y1="${y}" y2="${y}"/>`;
-    s += `<text class="tick" x="${L - fs * 0.4}" y="${y}" dy="0.35em" text-anchor="end">${+v.toFixed(1)}\u00b0</text>`;
+    s += `<text class="tick" x="${L - fs * 0.4}" y="${y}" dy="0.35em" text-anchor="end">${+v.toFixed(1)}${c.unit}</text>`;
   }
-  // clock times every 6 hours, with "now" at the right edge
   const first = Math.ceil(x0 / 3600) * 3600;
   for (let t = first; t < now; t += 3600) {
     if (new Date(t * 1000).getHours() % 6) continue;
@@ -388,10 +484,10 @@ function drawTrend() {
     s += `<text class="tick" x="${x.toFixed(1)}" y="${H - fs * 0.35}" text-anchor="middle">${hourLabel(t)}</text>`;
   }
   s += `<text class="tick" x="${R}" y="${H - fs * 0.35}" text-anchor="end">now</text>`;
-  // heat mat power: its own strip, full height = 100%
+  // a percentage strip under the plot (heat mat power, humidity): full = 100%
   if (stripH) {
     s += `<rect class="strip" x="${L}" y="${stripT}" width="${R - L}" height="${stripH}"/>`;
-    const d = trend.duty.filter(p => p[0] >= x0);
+    const d = c.strip.pts;
     let path = '';
     d.forEach((p, i) => {
       const x = Math.max(L, sx(p[0])),
@@ -400,29 +496,44 @@ function drawTrend() {
       if (p[1] > 0)
         path += `M${x.toFixed(1)},${stripB} V${y.toFixed(1)} H${nx.toFixed(1)} V${stripB} Z`;
     });
-    if (path) s += `<path class="duty" d="${path}"/>`;
+    if (path) s += `<path class="duty${c.strip.cls ? ' ' + c.strip.cls : ''}" d="${path}"/>`;
     const mid = stripT + stripH / 2,
-      gx = L - fs * 0.4;
-    s += small
-      ? `<text class="tick" x="${gx}" y="${mid}" dy="0.35em" text-anchor="end">mat</text>`
-      : `<text class="tick" x="${gx}" y="${mid}" dy="-0.15em" text-anchor="end">heat</text>` +
-        `<text class="tick" x="${gx}" y="${mid}" dy="0.85em" text-anchor="end">mat</text>`;
+      gx = L - fs * 0.4,
+      [l1, l2] = c.strip.label;
+    s +=
+      small || !l2
+        ? `<text class="tick" x="${gx}" y="${mid}" dy="0.35em" text-anchor="end">${small && l2 ? l2 : l1}</text>`
+        : `<text class="tick" x="${gx}" y="${mid}" dy="-0.15em" text-anchor="end">${l1}</text>` +
+          `<text class="tick" x="${gx}" y="${mid}" dy="0.85em" text-anchor="end">${l2}</text>`;
   }
-  if (tgt != null) {
-    const y = sy(tgt).toFixed(1);
-    s += `<line class="tgt" x1="${L}" x2="${R}" y1="${y}" y2="${y}"/>`;
-    const above = sy(tgt) - fs * 1.1 >= 0;
+  if (c.target) {
+    const ty = sy(c.target.v),
+      y = ty.toFixed(1),
+      col = c.target.color ? ` style="stroke:${c.target.color}"` : '';
+    s += `<line class="tgt" x1="${L}" x2="${R}" y1="${y}" y2="${y}"${col}/>`;
     if (plotB - top >= fs * 4)
-      s += `<text class="tgtl" x="${L + fs * 0.4}" y="${y}" dy="${above ? '-0.4em' : '1.1em'}">target ${tgt.toFixed(0)}\u00b0</text>`;
+      s += `<text class="tgtl" x="${L + fs * 0.4}" y="${y}" dy="${ty - fs * 1.1 >= 0 ? '-0.4em' : '1.1em'}"${c.target.color ? ` style="fill:${c.target.color}"` : ''}>${c.target.label} ${+c.target.v.toFixed(0)}${c.unit}</text>`;
   }
-  s += `<polyline class="soil" points="${shown
-    .map(p => `${sx(p[0]).toFixed(1)},${sy(p[1]).toFixed(1)}`)
-    .join(' ')}"/>`;
-  const last = shown[shown.length - 1];
-  if (last)
-    s += `<circle class="dot" cx="${sx(last[0]).toFixed(1)}" cy="${sy(last[1]).toFixed(1)}" r="${(fs * 0.3).toFixed(1)}"/>`;
-  svg.innerHTML = s;
+  c.lines.forEach(l => {
+    s += `<polyline class="ln" style="stroke:${l.color}" points="${l.pts
+      .map(p => `${sx(p[0]).toFixed(1)},${sy(p[1]).toFixed(1)}`)
+      .join(' ')}"/>`;
+    const last = l.pts[l.pts.length - 1];
+    s += `<circle cx="${sx(last[0]).toFixed(1)}" cy="${sy(last[1]).toFixed(1)}" r="${(fs * 0.3).toFixed(1)}" style="fill:${l.color}"/>`;
+  });
+  return s;
 }
+function turnChart(by) {
+  chartIdx += by;
+  drawTrend();
+}
+$('t-trend').addEventListener('click', () => {
+  chartHeldUntil = Date.now() + CHART_HOLD_MS;
+  turnChart(1);
+});
+setInterval(() => {
+  if (Date.now() >= chartHeldUntil) turnChart(1);
+}, CHART_TURN_MS);
 addEventListener('resize', drawTrend);
 
 // ---- data ------------------------------------------------------------------
