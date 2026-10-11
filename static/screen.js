@@ -248,19 +248,44 @@ function draw() {
 }
 
 // Everything must fit the screen with nothing cut off, whatever the fonts,
-// the number of setups and trays, or the length of the attention line. The
-// chart takes the space left over; when that is too little to read, the page
-// tightens step by step, and as a last resort the chart is dropped.
+// the screen's resolution, the number of setups and trays, or the length of
+// the attention line. The page is laid out for 600 px wide and sized in rem:
+// on a bigger screen the text grows (no more than the width allows) until the
+// chart is down to about a quarter of the height, so spare room goes to the
+// numbers rather than to an empty chart. When even the base size is too much,
+// the page tightens step by step, and as a last resort the chart is dropped.
 const FIT_STEPS = ['tight', 'tighter', 'notrend'];
-function overflowing() {
+const BASE_PX = 16;
+const DESIGN_W = 600;
+function overflowing(chartMin = 110) {
   const b = document.body,
     t = $('t-trend');
-  if (b.scrollHeight > b.clientHeight + 1) return true;
-  return t.offsetParent !== null && t.getBoundingClientRect().height < 110;
+  if (b.scrollHeight > b.clientHeight + 1 || b.scrollWidth > b.clientWidth + 1) return true;
+  return t.offsetParent !== null && t.getBoundingClientRect().height < chartMin;
+}
+function setSize(px) {
+  document.documentElement.style.fontSize = px + 'px';
 }
 function fit() {
   const b = document.body;
   FIT_STEPS.forEach(c => b.classList.remove(c));
+  setSize(BASE_PX);
+  const want = Math.max(150, 0.28 * b.clientHeight);
+  const most = BASE_PX * Math.max(1, b.clientWidth / DESIGN_W);
+  if (!overflowing(want) && most > BASE_PX) {
+    let lo = BASE_PX,
+      hi = most;
+    setSize(hi);
+    if (!overflowing(want)) lo = hi;
+    while (hi - lo > 0.25) {
+      const m = (lo + hi) / 2;
+      setSize(m);
+      if (overflowing(want)) hi = m;
+      else lo = m;
+    }
+    setSize(lo);
+    return;
+  }
   for (const c of FIT_STEPS) {
     if (!overflowing()) break;
     b.classList.add(c);

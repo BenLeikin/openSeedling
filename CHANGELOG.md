@@ -4,6 +4,10 @@ One entry per update zip, newest first. Install any update with
 `bash scripts/update.sh openSeedling-update-N.zip`; each is cumulative from
 the 4-17 baseline. The installer commits each one with the heading below.
 
+## 47 (2026-10-11): Touchscreen summary fills the screen
+- The summary is sized in rem; on a screen bigger than its 600 px layout, the text grows until the soil chart is down to about a quarter of the height, instead of the chart taking all the spare room.
+- The kiosk session logs the display's modes, with the one in use marked, to the journal.
+
 ## 46 (2026-10-11): Touchscreen summary always fits
 - The soil chart takes the height left over instead of a fixed minimum that pushed it off the bottom.
 - When that is too little to read, the page tightens in steps (smaller spacing and numbers, then fewer detail lines and a two-line attention line), and only as a last resort drops the chart.

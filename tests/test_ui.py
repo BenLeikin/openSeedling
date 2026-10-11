@@ -613,6 +613,26 @@ def screen(pw, base, app):
         f"the summary fits 600x1024 and a shorter screen, chart readable or dropped, never "
         f"cut off ({fits})",
     )
+    # on a bigger screen (an HDMI mode above the panel's 1024x600) the spare
+    # height goes to larger text, not to an empty chart
+    big = []
+    for w, hgt in ((720, 1280), (1080, 1920)):
+        page.set_viewport_size({"width": w, "height": hgt})
+        page.evaluate("()=>{ S.camera=Object.assign({},S.camera,{fails:0}); draw(); }")
+        page.wait_for_timeout(300)
+        big.append(
+            page.evaluate(
+                """()=>{const t=document.getElementById('t-trend').getBoundingClientRect().height;
+                return {size: parseFloat(getComputedStyle(document.documentElement).fontSize),
+                  share: Math.round(100 * t / innerHeight),
+                  over: document.body.scrollHeight > document.body.clientHeight + 1 ||
+                        document.body.scrollWidth > document.body.clientWidth + 1}}"""
+            )
+        )
+    check(
+        all(f["size"] > 16 and 20 <= f["share"] <= 40 and not f["over"] for f in big),
+        f"on a bigger screen the text grows and the chart keeps about a quarter ({big})",
+    )
     page.set_viewport_size({"width": 600, "height": 1024})
     page.evaluate("()=>refresh()")
     page.wait_for_timeout(800)

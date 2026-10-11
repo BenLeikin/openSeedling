@@ -3217,6 +3217,19 @@ def _kiosk_bringup():
         "pages for the Pi's own screen hide the pointer; through the proxy, or without the "
         "kiosk, the pointer stays",
     )
+    raw_css = (APP / "static" / "screen.css").read_text()
+    px = sorted(set(re.findall(r"(?<![\w.])(\d+(?:\.\d+)?)px", raw_css)))
+    sjs = Code((APP / "static" / "screen.js").read_text())
+    sess = (APP / "scripts" / "kiosk-session.sh").read_text()
+    check(
+        px == ["1"]
+        and "document.documentElement.style.fontSize" in sjs
+        and "clientWidth / DESIGN_W" in sjs
+        and "0.28 * b.clientHeight" in sjs
+        and "wlr-randr 2>&1 | sed 's/^/display: /'" in sess,
+        "the summary is sized in rem and its text grows into spare height on a bigger "
+        f"screen (never wider than the width allows); the display mode is logged (px {px})",
+    )
 
 
 def _usb_link():
