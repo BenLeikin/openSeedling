@@ -233,6 +233,8 @@ def _tray_lines(t):
         )
     if t.get("float"):
         bits.append(f"float {t['float']}")
+    for k, v in (t.get("sensors") or {}).items():
+        bits.append(f"{k} {v} (sensor in this tray)")
     L = [f'  Tray "{t["label"]}"' + (": " + "; ".join(bits) if bits else "")]
     if t.get("planting"):
         L.append("    Planting: " + "; ".join(t["planting"]))

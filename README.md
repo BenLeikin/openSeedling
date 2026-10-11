@@ -300,6 +300,25 @@ app captures at, a touchscreen is seen, and there was no undervoltage. A
 camera on a slower link also raises the "Camera on a slow USB link" alert and
 shows on the touchscreen's attention line.
 
+### Sensors per tray
+
+Settings, Setups lists each tray under its setup with a **Moisture** probe, a
+**Float**, and checkboxes for any other sensor placed there (a soil
+temperature probe, the air sensor). Stored as `tray_sensors` in
+`config.json`: `{tray id: [sensor keys]}`.
+
+- Watering for a tray reads the moisture probe placed in it and stops a fill
+  on its float; the pump stays the tray's own (pump 1 fills tray 1). A tray
+  takes one probe and one float, and no probe or float can be in two trays:
+  picking one for a tray takes it from the tray that had it.
+- A tray never given a list keeps the probe and float of its own number when
+  that hardware is wired, so an existing install works unchanged.
+- Readings follow their tray: the tray's setup tab shows them, probes are
+  named with their tray ("Soil moisture 1 · Seedling 1"), dry alerts say which
+  tray, and the AI report lists each tray's sensors with the tray.
+- Probe calibration stays with the probe, so moving a probe to another tray
+  keeps its wet and dry anchors.
+
 ### Settings layout
 
 Eight collapsible sections: **Light** (fixture, schedule, second light, light

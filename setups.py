@@ -10,6 +10,7 @@ import db
 
 import config
 import hardware
+import sensors
 import light as light_mod
 
 
@@ -324,6 +325,72 @@ def camera_trays(cfg):
     return got or sorted(str(t) for t in (cfg.get("trays") or {}))
 
 
+# Which sensors sit in which tray (Settings, Setups; config tray_sensors). A
+# tray that has not been given a list keeps the probe and float of its own
+# number, which is how the hardware is labeled, unless another tray has
+# claimed them. Watering reads the tray's probe and stops on its float; the
+# pump stays the tray's own.
+def tray_sensors(cfg, tid):
+    tid = str(tid)
+    got = cfg.get("tray_sensors") or {}
+    if tid in got:
+        return [str(k) for k in got[tid]]
+    claimed = {k for ks in got.values() for k in ks}
+    wired = {f"probe:{c}" for c in sensors.PROBE_CHANNELS} | {
+        f"float:{c}" for c in sensors.FLOAT_PINS
+    }
+    return [k for k in (f"probe:{tid}", f"float:{tid}") if k not in claimed and k in wired]
+
+
+def _first(cfg, tid, kind):
+    return next((k.split(":", 1)[1] for k in tray_sensors(cfg, tid) if k.startswith(kind)), None)
+
+
+def tray_probe(cfg, tid):
+    """The probe channel ("1", "2", ...) a tray's watering reads, or None."""
+    return _first(cfg, tid, "probe:")
+
+
+def tray_float(cfg, tid):
+    """The float channel a tray's fill stops on, or None."""
+    return _first(cfg, tid, "float:")
+
+
+def known_trays(cfg):
+    """Every tray id that can hold sensors: the planting map's trays, the
+    pumps' trays, and any tray named in the sensor map."""
+    ids = {str(t) for t in (cfg.get("trays") or {})}
+    ids |= {str(t) for t in hardware.PUMP_PINS}
+    ids |= {str(t) for t in (cfg.get("tray_sensors") or {})}
+    return sorted(ids)
+
+
+def key_trays(cfg, key):
+    """The trays a reading belongs to (a probe or float: at most one)."""
+    ids = set(known_trays(cfg))
+    m = re.match(r"(probe|float):(.+)$", key)
+    if m:
+        ids.add(m.group(2))  # its own number, until another tray claims it
+    return sorted(t for t in ids if key in tray_sensors(cfg, t))
+
+
+def tray_map(cfg):
+    """For the page: each tray's sensors, probe and float, and the reverse."""
+    out = {
+        t: {
+            "sensors": tray_sensors(cfg, t),
+            "probe": tray_probe(cfg, t),
+            "float": tray_float(cfg, t),
+        }
+        for t in known_trays(cfg)
+    }
+    rev = {}
+    for t, v in out.items():
+        for k in v["sensors"]:
+            rev.setdefault(k, []).append(t)
+    return out, rev
+
+
 # Which setup a tray or a reading belongs to, for anything that has to say so
 # (the AI report). The same rule the dashboard tabs use: listed wins; a tray's
 # own probe, canopy and float readings go with the tray; otherwise the one
@@ -355,10 +422,18 @@ def sensor_setups(cfg, key):
     if len(sts) == 1:
         return [sts[0]]
     m = _TRAY_KEY.match(key)
-    if m:
+    if m and m.group(1) == "canopy":
         st = tray_setup(cfg, m.group(2))
         return [st] if st else []
+    if m:  # a probe or float goes with the tray it sits in
+        owners = [tray_setup(cfg, t) for t in key_trays(cfg, key)]
+        return [st for st in owners if st]
     mine = [st for st in sts if key == st.get("lux") or key in (st.get("sensors") or [])]
+    # a soil temperature probe or air sensor placed in a tray counts there too
+    for t in key_trays(cfg, key):
+        st = tray_setup(cfg, t)
+        if st and st not in mine:
+            mine.append(st)
     if mine:
         return mine
     open_ = [st for st in sts if not st.get("sensors")]

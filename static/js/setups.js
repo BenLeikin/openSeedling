@@ -9,12 +9,16 @@
 // the chips and charts include. A setup with no sensors ticked shows them all.
 import { S } from './light.js';
 import { formDirty } from './photos.js';
-import { renderChartGrid, sensorData, sensorMeta, set_lightBackend } from './charts.js';
+import { probeNames, renderChartGrid, sensorData, sensorMeta, set_lightBackend } from './charts.js';
 import { esc } from './trays.js';
 import { refresh, setDliBand } from './grid.js';
 
 export var setupsList = [],
   selSetup = null;
+// which trays each sensor sits in (status sensor_trays), and each tray's
+// sensors, probe and float (status tray_map); set in Settings, Setups
+export var sensorTrays = {},
+  trayMap = {};
 
 export function curSetup() {
   return setupsList.find(s => s.id === selSetup) || setupsList[0] || null;
@@ -33,15 +37,19 @@ export function inSetup(k) {
     return !hs || hs.id === cs.id;
   }
   if (k.startsWith('sys:')) return true; // the Pi's own memory, every tab
-  // a tray's own sensors (probe, canopy, float) come with the tray
+  // a tray's sensors come with the tray: canopy by its number, everything
+  // else by the tray it was placed in
   const m = /^(probe|canopy|float):(.+)$/.exec(k);
-  if (m && cs.trays && cs.trays.length && cs.trays.includes(m[2])) return true;
+  const owners = m && m[1] === 'canopy' ? [m[2]] : sensorTrays[k] || [];
+  if (cs.trays && cs.trays.length && owners.some(t => cs.trays.includes(t))) return true;
   if (!cs.sensors || !cs.sensors.length) return !(m && cs.trays && cs.trays.length);
   if (k === cs.lux || (k === 'ppfd' && cs.lux === 'lux')) return true;
   return cs.sensors.includes(k);
 }
 export function applySetup(j) {
   setupsList = j.setups || [];
+  sensorTrays = j.sensor_trays || {};
+  trayMap = j.tray_map || {};
   const cs = curSetup();
   if (cs) {
     // the light views read these; point them at the chosen setup
@@ -137,6 +145,8 @@ export function applyLightView(j, cs) {
 export var setupDraft = null,
   setupDirty = false,
   lightOpts = [];
+// and the sensors in each tray: {tray id: [sensor keys]}, saved with it
+export var trayDraft = null;
 // the lights as physical fixtures ("AC fixture (dim line)", "5V LED panel"),
 // from the server, which knows the wiring; a stored choice the hardware no
 // longer offers stays listed so saving does not silently drop it
@@ -166,6 +176,9 @@ export function renderSetupConfig(j) {
     return;
   }
   if (!box) return;
+  trayDraft = Object.fromEntries(
+    Object.entries(j.tray_map || {}).map(([t, v]) => [t, [...((v && v.sensors) || [])]])
+  );
   setupDraft = JSON.parse(
     JSON.stringify(
       j.settings && j.settings.setups && j.settings.setups.length
@@ -188,6 +201,68 @@ export function renderSetupConfig(j) {
     )
   );
   drawSetupConfig();
+}
+// The trays a setup's editor lists sensors for: its ticked trays, or with none
+// ticked, every tray no other setup has ticked
+export function editorTrays(s) {
+  const mine = s.trays || [];
+  if (mine.length) return trayOpts.filter(([id]) => mine.includes(id));
+  const taken = new Set(setupDraft.flatMap(o => o.trays || []));
+  return trayOpts.filter(([id]) => !taken.has(id));
+}
+// Per tray: the moisture probe watering reads, the float a fill stops on (one
+// each, and no probe or float in two trays), and any other sensors placed there
+export function traySensorRows(s, i, all) {
+  const rows = editorTrays(s);
+  if (!rows.length || !trayDraft) return '';
+  const names = probeNames || {};
+  const used = Object.values(trayDraft).flat();
+  const chs = kind =>
+    [
+      ...new Set([
+        ...all.filter(k => k.startsWith(kind + ':')),
+        ...used.filter(k => k.startsWith(kind + ':'))
+      ])
+    ].sort();
+  const label = k =>
+    k.startsWith('probe:')
+      ? names[k.slice(6)] || 'Soil moisture ' + k.slice(6)
+      : k.startsWith('float:')
+        ? 'Float ' + k.slice(6)
+        : sensorMeta(k, 0).label;
+  const others = all.filter(k => !/^(probe|canopy|float|reservoir|heat|sys):|^lux(:|$)/.test(k));
+  const sel = (tid, kind) => {
+    const cur = (trayDraft[tid] || []).find(k => k.startsWith(kind + ':')) || '';
+    return (
+      `<select data-ts="${kind}" data-tray="${esc(tid)}">` +
+      [['', 'None'], ...chs(kind).map(k => [k, label(k)])]
+        .map(
+          ([v, t]) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(t)}</option>`
+        )
+        .join('') +
+      '</select>'
+    );
+  };
+  return (
+    `<div class="traysens"><b>In each tray</b>` +
+    rows
+      .map(
+        ([tid, lbl]) =>
+          `<div class="traysrow" data-tray="${esc(tid)}"><span class="tname">${esc(lbl)}</span>` +
+          `<label>Moisture ${sel(tid, 'probe')}</label><label>Float ${sel(tid, 'float')}</label>` +
+          others
+            .map(
+              k =>
+                `<label><input type="checkbox" data-tk="${esc(k)}" data-tray="${esc(tid)}"` +
+                `${(trayDraft[tid] || []).includes(k) ? ' checked' : ''}> ${esc(label(k))}</label>`
+            )
+            .join('') +
+          '</div>'
+      )
+      .join('') +
+    `<span class="fhint">watering reads the tray's moisture probe and stops on its float; ` +
+    `the pump stays the tray's own</span></div>`
+  );
 }
 export function drawSetupConfig() {
   const box = document.getElementById('setupcfg');
@@ -248,6 +323,7 @@ export function drawSetupConfig() {
         )
         .join('')}
         <span class="fhint">none ticked = all trays</span></div>
+      ${traySensorRows(s, i, all)}
       <div class="setupsens"><b>Sensors</b>${keys
         .map(
           k =>
@@ -256,8 +332,8 @@ export function drawSetupConfig() {
         )
         .join('')}
         <span class="fhint">tick a sensor in each setup it serves (one air sensor
-          between two close areas can count for both); a tray's probe, float and
-          canopy come with the tray</span></div>
+          between two close areas can count for both); sensors placed in a
+          tray above come with that tray</span></div>
       ${setupDraft.length > 1 ? '<button type="button" class="setuprm">Remove</button>' : ''}
     </fieldset>`
     )
@@ -332,6 +408,25 @@ export function start() {
             m.className = '';
           }
         }
+        const ts = ev.target.dataset.ts,
+          tk = ev.target.dataset.tk,
+          tt = ev.target.dataset.tray;
+        if (tt && (ts || tk) && trayDraft) {
+          const list = new Set(trayDraft[tt] || []);
+          if (ts) {
+            // one probe and one float per tray, and each in one tray only
+            [...list].filter(k => k.startsWith(ts + ':')).forEach(k => list.delete(k));
+            if (ev.target.value) {
+              Object.keys(trayDraft).forEach(o => {
+                trayDraft[o] = (trayDraft[o] || []).filter(k => k !== ev.target.value);
+              });
+              list.add(ev.target.value);
+            }
+          } else ev.target.checked ? list.add(tk) : list.delete(tk);
+          trayDraft[tt] = [...list].sort();
+          if (ts) drawSetupConfig(); // another tray may have given that one up
+          return;
+        }
         const f = ev.target.dataset.f,
           k = ev.target.dataset.k;
         if (f)
@@ -364,6 +459,7 @@ export function start() {
           const set = new Set(s.trays || []);
           ev.target.checked ? set.add(tr) : set.delete(tr);
           s.trays = [...set];
+          drawSetupConfig(); // the per-tray sensor rows follow the trays
         }
       });
       box.addEventListener('click', ev => {
@@ -407,7 +503,7 @@ export function start() {
           const r = await fetch('/api/settings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ setups: setupDraft || [] })
+            body: JSON.stringify({ setups: setupDraft || [], tray_sensors: trayDraft || {} })
           });
           const j = await r.json().catch(() => ({}));
           if (!r.ok || j.ok === false) {

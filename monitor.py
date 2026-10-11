@@ -124,7 +124,7 @@ def gather_report_data():
             if fv is None:
                 fv = v
             pm, approx = water.probe_moisture_any(fv, tcal, stf)
-            base = pnames.get(t) or f"Soil moisture {t}"
+            base = probe_name(cfg, t, pnames)
             flag = water.probe_cal_flag(fv, tcal)
             note = ""
             if flag:
@@ -156,7 +156,12 @@ def gather_report_data():
     for _t in sensors.FLOAT_PINS:
         _fv = sensors.read_float(_t)
         fstates[_t] = "no sensor" if _fv is None else ("not full" if _fv >= 1 else "full")
-    flabel = ", ".join(f"tray {t}: {v}" for t, v in sorted(fstates.items()))
+
+    def _float_where(ch):  # the tray a float sits in, by name
+        ts = setups_mod.key_trays(cfg, f"float:{ch}")
+        return (trays_cfg.get(ts[0]) or {}).get("label") or f"tray {ts[0]}" if ts else f"float {ch}"
+
+    flabel = ", ".join(f"{_float_where(t)}: {v}" for t, v in sorted(fstates.items()))
     grid = cfg.get("grid") or {}
     planting, planting_by_tray = {}, {}
     for tid, t in sorted((cfg.get("trays") or {}).items()):
@@ -387,6 +392,17 @@ def _setup_light(cfg, stp, state, now):
     return out
 
 
+def probe_name(cfg, ch, names=None):
+    """A probe's name with the tray it sits in, e.g. "Soil moisture 1 (Seedling 1)"."""
+    names = names if names is not None else (cfg.get("probe_names") or {})
+    base = names.get(ch) or f"Soil moisture {ch}"
+    trays = setups_mod.key_trays(cfg, f"probe:{ch}")
+    if not trays:
+        return base
+    lbl = ((cfg.get("trays") or {}).get(trays[0]) or {}).get("label") or f"Tray {trays[0]}"
+    return base if lbl == base else f"{base} ({lbl})"
+
+
 def report_by_setup(cfg, state, snap, now, probe_txt, floats, planting_by_tray):
     """The report's data grouped by grow setup, from the setups as saved now.
 
@@ -450,16 +466,26 @@ def report_by_setup(cfg, state, snap, now, probe_txt, floats, planting_by_tray):
             g["dli"] = setups_mod.dli_today(key, setups_mod.setup_k(stp))
     for tid in sorted(str(t) for t in trays_cfg):
         t = trays_cfg.get(tid) or {}
+        pr, fl = setups_mod.tray_probe(cfg, tid), setups_mod.tray_float(cfg, tid)
+        # the tray's other sensors (a soil temperature probe placed in it)
+        here = {}
+        for key in setups_mod.tray_sensors(cfg, tid):
+            if key.startswith(("probe:", "float:")) or key not in snap:
+                continue
+            r = reading(key, snap[key][1])
+            if r:
+                here[r[0]] = r[1]
         entry = {
             "label": t.get("label") or f"Tray {tid}",
             "id": tid,
-            "moisture": probe_txt.get(tid),
+            "moisture": probe_txt.get(pr) if pr is not None else None,
+            "sensors": here,
             "canopy": (
                 round(snap[f"canopy:{tid}"][1], 1)
                 if f"canopy:{tid}" in snap and tid in cam_trays
                 else None
             ),
-            "float": floats.get(tid),
+            "float": floats.get(fl) if fl is not None else None,
             "planting": planting_by_tray.get(tid) or [],
         }
         group_of(setups_mod.tray_setup(cfg, tid))["trays"].append(entry)
@@ -924,7 +950,7 @@ def run_alerts(readings):
                 fv if fv is not None else v, pcal.get(t) or {}, stf
             )
             if pct is not None and not approx:  # only alert on real calibration
-                moist[names.get(t) or f"Soil moisture {t}"] = pct
+                moist[probe_name(cfg, t, names)] = pct
         snap["_moisture"] = moist
 
         with config.state_lock:

@@ -4106,3 +4106,27 @@ body.onscreen,
 body.onscreen * {
   cursor: none !important;
 }
+
+/* Settings, Setups: the sensors in each tray */
+.traysens {
+  margin: 8px 0;
+}
+.traysrow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  padding: 6px 0;
+  border-top: 1px solid var(--line);
+}
+.traysrow .tname {
+  font-weight: 600;
+  min-width: 7em;
+}
+.traysrow label {
+  white-space: nowrap;
+}
+.traysrow select {
+  width: auto;
+  margin-left: 4px;
+}

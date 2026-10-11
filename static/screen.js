@@ -24,9 +24,22 @@ function probePct(cal, v) {
     return null;
   return Math.max(0, Math.min(100, (100 * (cal.dry - v)) / (cal.dry - cal.wet)));
 }
+// the probe and float that sit in a tray (Settings, Setups); by number on an
+// older controller that does not send the map
+function trayProbe(t) {
+  return S.tray_map ? (S.tray_map[t] || {}).probe : t;
+}
+function trayFloat(t) {
+  const wt = ((S.water || {}).trays || {})[t];
+  if (wt) return wt.float;
+  const ch = S.tray_map ? (S.tray_map[t] || {}).float : t;
+  return ch == null ? null : ((S.sensors || {})['float:' + ch] || {}).value;
+}
 function trayMoisture(t) {
-  const v = (S.probe_filtered || {})[t];
-  const own = probePct(((S.settings || {}).probe_cal || {})[t], v);
+  const ch = trayProbe(t);
+  if (ch == null) return null;
+  const v = (S.probe_filtered || {})[ch];
+  const own = probePct(((S.settings || {}).probe_cal || {})[ch], v);
   if (own != null) return { pct: own, approx: false };
   const d = probePct(S.probe_default_cal, v);
   return d == null ? null : { pct: d, approx: true };
@@ -133,8 +146,8 @@ function drawSetups() {
     const th = trays
       .map(t => {
         const m = trayMoisture(t),
-          wt = ((S.water || {}).trays || {})[t] || {};
-        const fl = wt.float == null ? '' : wt.float >= 1 ? 'float low' : 'float full';
+          fv = trayFloat(t);
+        const fl = fv == null ? '' : fv >= 1 ? 'float low' : 'float full';
         const dry = m && m.pct < thr;
         return (
           `<div class="tray${dry ? ' dry' : ''}"><div class="tn">${esc(trayLabel(t))}</div>` +

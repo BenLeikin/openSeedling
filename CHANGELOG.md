@@ -4,6 +4,11 @@ One entry per update zip, newest first. Install any update with
 `bash scripts/update.sh openSeedling-update-N.zip`; each is cumulative from
 the 4-17 baseline. The installer commits each one with the heading below.
 
+## 45 (2026-10-11): Sensors per tray
+- Settings, Setups: each tray picks its moisture probe and float, and any other sensor placed in it (`tray_sensors`).
+- Auto-watering, fills, post-fill checks and wet recalibration read the tray's assigned probe and float; the pump stays the tray's own.
+- Readings, probe names, dry alerts and the AI report follow the tray a sensor sits in. Unassigned trays keep their number's probe and float.
+
 ## 44 (2026-10-11): Touchscreen working, no cursor
 - The kiosk unit carries what bring-up on the real screen needed: browser output to the journal, WebKit's sandbox off, CPU rendering; `kiosk.sh install` removes the hand-made drop-ins.
 - CMA raised to 128 MB in `deploy/boot-config.txt` (the GPU ran out at 64 MB).

@@ -410,6 +410,40 @@ def setups_by_main_save(page, base, app):
     )
 
 
+def tray_sensors(page, base, app):
+    """Settings, Setups: each tray lists a moisture probe and a float (one each,
+    taken from any other tray that had it) and checkboxes for other sensors;
+    saving stores the map and the page reads it back."""
+    page.goto(base + "/")
+    page.wait_for_timeout(2500)
+    open_all(page)
+    probe3 = page.locator('.traysrow[data-tray="3"] select[data-ts="probe"]')
+    opts = probe3.evaluate("e=>[...e.options].map(o=>o.value)")
+    probe3.select_option("probe:1")
+    page.wait_for_timeout(300)
+    # probe 1 moved from tray 1 (its number) to tray 3
+    t1 = page.locator('.traysrow[data-tray="1"] select[data-ts="probe"]').evaluate("e=>e.value")
+    page.locator('.traysrow[data-tray="3"] input[data-tk="temp:soil"]').check()
+    page.locator("#setupsave").click()
+    page.wait_for_timeout(2000)
+    ts = saved(app).get("tray_sensors") or {}
+    page.goto(base + "/")
+    page.wait_for_timeout(2500)
+    open_all(page)
+    back = page.locator('.traysrow[data-tray="3"] select[data-ts="probe"]').evaluate("e=>e.value")
+    soil = page.locator('.traysrow[data-tray="3"] input[data-tk="temp:soil"]').is_checked()
+    check(
+        "probe:1" in opts
+        and t1 == ""
+        and "probe:1" in ts.get("3", [])
+        and "temp:soil" in ts.get("3", [])
+        and "probe:1" not in ts.get("1", [])
+        and back == "probe:1"
+        and soil,
+        f"a probe picked for a tray leaves the tray it was in; the map saves and reloads ({ts})",
+    )
+
+
 def remove_asks(page, base, app):
     """Removing a setup or a tray asks first; cancelling changes nothing, and
     a tray with plants says how many it would discard, in one question."""
@@ -599,6 +633,7 @@ def main():
                 ("Units", lambda: metric_temperature(page, base, app)),
                 ("Setups", lambda: setups_by_main_save(page, base, app)),
                 ("Charts", lambda: charts(page, base)),
+                ("Sensors per tray", lambda: tray_sensors(page, base, app)),
                 ("Removing", lambda: remove_asks(page, base, app)),
             ):
                 print(name)

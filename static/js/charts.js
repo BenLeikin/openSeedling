@@ -5,7 +5,7 @@
 // at page load is in start(), which main.js calls in a fixed order.
 // ---------------- sensors: readout, chart, overlay ----------------
 import { S, agoStr } from './light.js';
-import { inSetup, trayInSetup } from './setups.js';
+import { inSetup, sensorTrays, trayInSetup } from './setups.js';
 import { set_playerFps } from './photos.js';
 import { esc } from './trays.js';
 import { dliBand, drawGrid, grid, refresh } from './grid.js';
@@ -143,7 +143,11 @@ export function sensorMeta(key, val) {
   }
   if (key.startsWith('probe:')) {
     const t = key.slice(6);
-    const nm = probeNames[t] || 'Soil moisture ' + t;
+    // named with the tray it sits in (Settings, Setups)
+    const inTray = (sensorTrays[key] || [])[0];
+    const tl = inTray != null ? trayLabels[inTray] || 'Tray ' + inTray : '';
+    const base = probeNames[t] || 'Soil moisture ' + t;
+    const nm = tl && tl !== base ? base + ' \u00b7 ' + tl : base;
     const m = probeMoisture(t, val);
     // server-side flag: the live reading sits outside this tray's anchors, so
     // the percentage is pegged and the dry alert is blind until recalibration

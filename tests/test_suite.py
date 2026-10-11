@@ -2034,7 +2034,8 @@ def _unsaved_settings():
     sub2 = js_after(js, "getElementById('cfgform').addEventListener('submit'")
     check(
         sub2
-        and "if(setupDirty&&setupDraft)body.setups=setupDraft;" in sub2.group(0)
+        and "if(setupDirty&&setupDraft){body.setups=setupDraft" in sub2.group(0)
+        and "body.tray_sensors=trayDraft" in sub2.group(0)
         and ("setupDirty=false;" in sub2.group(0) or "set_setupDirty(false);" in sub2.group(0))
         and "if(k==='setups')return 'Setups:';" in js,
         "the main Save also saves pending Setups edits (a daily light target changed there was "
@@ -3640,6 +3641,177 @@ def _comments():
     )
 
 
+def _tray_sensor_map():
+    """11 Oct: any sensor can be placed in any tray (Settings, Setups), and a
+    tray's watering reads the probe and float placed in it."""
+    v = config.SETTINGS_VALIDATORS["tray_sensors"]
+    good = v({"1": ["probe:2", "float:2", "canopy:1", "lux"], "3": ["probe:1", "temp:soil"]})
+    errs = []
+    for bad in (
+        {"1": ["probe:1"], "2": ["probe:1"]},
+        {"1": ["float:1", "float:2"]},
+        {"1": "probe:1"},
+    ):
+        try:
+            v(bad)
+            errs.append(None)
+        except ValueError as e:
+            errs.append(str(e))
+    check(
+        good == {"1": ["float:2", "probe:2"], "3": ["probe:1", "temp:soil"]}
+        and all(errs)
+        and "pick one" in errs[0]
+        and "one float per tray" in errs[1],
+        f"a tray takes one probe and one float, none in two trays; canopy and the light "
+        f"sensor are not a tray's to claim ({errs})",
+    )
+    with config.settings_lock:
+        saved = {
+            k: config.settings.get(k)
+            for k in (
+                "tray_sensors",
+                "trays",
+                "setups",
+                "probe_cal",
+                "auto_water_trays",
+                "auto_water",
+            )
+        }
+        trays = dict(config.settings.get("trays") or {})
+        for t in ("1", "2", "3"):
+            trays.setdefault(t, {"label": f"Bed {t}", "rows": 2, "cols": 2, "cells": {}})
+        config.settings.update(
+            tray_sensors=good,
+            trays=trays,
+            setups=[
+                {
+                    "id": "a",
+                    "name": "A",
+                    "light": "main",
+                    "lux": "lux",
+                    "trays": ["1"],
+                    "sensors": [],
+                    "dli_low": 8,
+                    "dli_high": 10,
+                },
+                {
+                    "id": "b",
+                    "name": "B",
+                    "light": "",
+                    "lux": "",
+                    "trays": ["2", "3"],
+                    "sensors": ["humidity"],
+                    "dli_low": 8,
+                    "dli_high": 10,
+                },
+            ],
+        )
+        cfg = dict(config.settings)
+    try:
+        legacy = setups_mod.tray_sensors({"trays": {"2": {}}}, "2")
+        owner = [st["id"] for st in setups_mod.sensor_setups(cfg, "probe:2")]
+        soil = [st["id"] for st in setups_mod.sensor_setups(cfg, "temp:soil")]
+        check(
+            legacy == ["probe:2", "float:2"]
+            and setups_mod.tray_probe(cfg, "1") == "2"
+            and setups_mod.tray_float(cfg, "1") == "2"
+            and setups_mod.tray_probe(cfg, "2") is None
+            and setups_mod.tray_probe(cfg, "3") == "1"
+            and setups_mod.key_trays(cfg, "probe:1") == ["3"]
+            and setups_mod.key_trays(cfg, "temp:soil") == ["3"]
+            and owner == ["a"]
+            and "b" in soil,
+            f"a tray without a list keeps the probe and float of its number; a placed sensor "
+            f"belongs to its tray and the tray's setup (probe 2 -> {owner}, soil temp -> {soil})",
+        )
+        r = c.get("/api/status").get_json()
+        check(
+            r["tray_map"]["1"]["probe"] == "2"
+            and r["tray_map"]["2"]["probe"] is None
+            and r["sensor_trays"].get("temp:soil") == ["3"]
+            and r["water"]["trays"]["1"]["probe_ch"] == "2"
+            and r["water"]["trays"]["1"]["float_ch"] == "2",
+            "the status sends each tray's sensors, probe and float, and the reverse",
+        )
+        # watering: tray 1 decides from probe 2 and float 2, never its own number
+        seen = []
+        real = (
+            water.probe_volts_filtered,
+            sensors.read_float,
+            sensors.probe_spread,
+            water.run_pump_until_full,
+            water.auto_water_blockers,
+        )
+        water.probe_volts_filtered = lambda ch, snap=None: (
+            seen.append(("probe", ch)),
+            (2.5, time.time()),
+        )[1]
+        sensors.read_float = lambda ch="1": (seen.append(("float", ch)), 1.0)[1]
+        sensors.probe_spread = lambda ch, samples=10, delay=0.2: (
+            seen.append(("spread", ch)),
+            (2.5, 0.001),
+        )[1]
+        water.run_pump_until_full = lambda tray, reason="fill", force=False: (
+            seen.append(("pump", tray)),
+            (True, "ok"),
+        )[1]
+        water.auto_water_blockers = lambda cfg=None: {}
+        try:
+            with config.settings_lock:
+                config.settings.update(
+                    probe_cal={"2": {"wet": 1.0, "dry": 2.6}, "1": {"wet": 1.0, "dry": 2.6}},
+                    auto_water_trays=["1"],
+                    auto_water=True,
+                    moisture_threshold_pct=30,
+                )
+            hardware.pump_state["1"]["last_run"] = 0.0
+            water.auto_water_pass()
+        finally:
+            (
+                water.probe_volts_filtered,
+                sensors.read_float,
+                sensors.probe_spread,
+                water.run_pump_until_full,
+                water.auto_water_blockers,
+            ) = real
+        check(
+            ("pump", "1") in seen
+            and ("probe", "2") in seen
+            and ("float", "2") in seen
+            and ("spread", "2") in seen
+            and ("probe", "1") not in seen
+            and ("float", "1") not in seen,
+            f"auto-watering tray 1 reads the probe and float placed in it ({seen})",
+        )
+        blk = water.auto_water_blockers()
+        check(
+            "no moisture probe in this tray" in " ".join(blk.get("2", [])),
+            f"a pump tray with no probe placed in it cannot be armed ({blk.get('2')})",
+        )
+        # the fill stops on the tray's own float: float 2 reads full, float 1 not
+        fl = sensors._floats()
+        had = {k: getattr(fl.get(k), "is_pressed", None) for k in ("1", "2")}
+        if "2" in fl:
+            fl["2"].is_pressed = False
+            if "1" in fl:
+                fl["1"].is_pressed = True
+            for st in hardware.pump_state.values():
+                st.update(running=False, today_seconds=0, day=config._today_str())
+            ok, why = water.run_pump_until_full("1", "fill")
+            for k, val in had.items():
+                if k in fl and val is not None:
+                    fl[k].is_pressed = val
+            check(
+                not ok and "already full" in why,
+                f"a fill reads the float placed in the tray ({why})",
+            )
+        else:
+            skip("fill on a remapped float (no fake float 2)")
+    finally:
+        with config.settings_lock:
+            config.settings.update(saved)
+
+
 def run(name, fn):
     """A section that crashes counts as one failure; the rest still run."""
     section(name)
@@ -3682,6 +3854,7 @@ run("Settings form validity", _form_validity)
 run("Phone layout", _phone_layout)
 run("Touchscreen kiosk", _kiosk)
 run("Kiosk bring-up", _kiosk_bringup)
+run("Sensors per tray", _tray_sensor_map)
 run("USB link", _usb_link)
 run("Settings layout", _settings_layout)
 run("Settings field definitions", _form_definitions)

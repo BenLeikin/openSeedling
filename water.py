@@ -10,6 +10,7 @@ import quality
 
 import config
 import hardware
+import setups as setups_mod
 
 # a fill that ran to its cap without the float tripping: the message feeds the
 # alert state machine (fires on the next sample tick, reminds while unresolved)
@@ -161,6 +162,11 @@ def run_pump_until_full(tray, reason="fill", force=False):
     with config.settings_lock:
         cap = float(config.settings.get("fill_max_seconds", 60))
         daily_cap = float(config.settings.get("pump_daily_max_seconds", 180))
+        fl = setups_mod.tray_float(config.settings, tray)  # the float in this tray
+
+    def read_fl():
+        return sensors.read_float(fl) if fl is not None else None
+
     with hardware.pump_lock:
         if tray not in hardware._pumps:
             return False, f"pump {tray} hardware not available"
@@ -174,9 +180,9 @@ def run_pump_until_full(tray, reason="fill", force=False):
             st["today_seconds"] = 0.0
         if hardware.SHUTTING_DOWN.is_set():
             return False, "shutting down"
-        f0 = sensors.read_float(tray)
+        f0 = read_fl()
         if f0 is None and not force:
-            return False, f"no float sensor on tray {tray}; refusing to fill blind"
+            return False, f"no float sensor in tray {tray}; refusing to fill blind"
         if f0 is not None and f0 < 1:
             return False, f"tray {tray} already full"
         remaining = daily_cap - st["today_seconds"]
@@ -202,7 +208,7 @@ def run_pump_until_full(tray, reason="fill", force=False):
             if not force and reservoir_state() == "empty":
                 stop_why = "reservoir"  # ran the source dry mid-fill
                 break
-            fv = sensors.read_float(tray)
+            fv = read_fl()
             if fv is None or fv < 1:  # full (open) or sensor lost
                 confirm += 1
                 if confirm >= CONFIRM_NEEDED:
@@ -453,17 +459,26 @@ def auto_water_blockers(cfg=None):
     cal = cfg.get("probe_cal") or {}
     snap = db.latest()
     out = {}
-    for tray in sorted(set(hardware.PUMP_PINS) | set(sensors.FLOAT_PINS)):
+    # every pump's tray, and any other tray holding a float
+    trays = set(hardware.PUMP_PINS) | {
+        t
+        for t in setups_mod.known_trays(cfg)
+        if setups_mod.tray_float(cfg, t) in sensors.FLOAT_PINS
+    }
+    for tray in sorted(trays):
         why = []
         if tray not in hardware._pumps:
             why.append("no pump hardware")
-        if tray not in sensors.FLOAT_PINS:
-            why.append("no float switch (fill would run blind)")
-        tcal = cal.get(tray) or {}
-        if not tcal or tcal.get("wet") is None or tcal.get("dry") is None:
+        if setups_mod.tray_float(cfg, tray) not in sensors.FLOAT_PINS:
+            why.append("no float switch in this tray (fill would run blind)")
+        pr = setups_mod.tray_probe(cfg, tray)
+        tcal = cal.get(pr) or {} if pr is not None else {}
+        if pr is None:
+            why.append("no moisture probe in this tray")
+        elif not tcal or tcal.get("wet") is None or tcal.get("dry") is None:
             why.append("probe not calibrated")
         else:
-            fv, _ = probe_volts_filtered(tray, snap)
+            fv, _ = probe_volts_filtered(pr, snap)
             if fv is None:
                 why.append("no probe reading yet")
             elif probe_cal_flag(fv, tcal):
@@ -484,7 +499,10 @@ def schedule_postfill(tray, tripped=True):
     for a degrading probe or a stale calibration.
     """
     with config.settings_lock:
-        cal = ((config.settings.get("probe_cal") or {}).get(str(tray)) or {}).copy()
+        pr = setups_mod.tray_probe(config.settings, tray)
+        cal = ((config.settings.get("probe_cal") or {}).get(pr) or {}).copy() if pr else {}
+    if pr is None:
+        return  # no probe in this tray: nothing to judge or recalibrate
     # Scheduled even with no wet anchor yet: there is no verdict to give in
     # that case, but it is exactly when an automatic first capture is most
     # useful, and skipping it here would silently rule that out.
@@ -492,6 +510,7 @@ def schedule_postfill(tray, tripped=True):
         "due": time.time() + POSTFILL_DELAY_S,
         "cal": cal,
         "tripped": bool(tripped),
+        "probe": pr,
     }
 
 
@@ -503,7 +522,7 @@ def check_postfill(readings=None):
         if time.time() < pending["due"]:
             continue
         _postfill_due.pop(tray, None)
-        volts, _ = probe_volts_filtered(tray)
+        volts, _ = probe_volts_filtered(pending.get("probe", tray))
         ok, msg = quality.postfill_verdict(volts, pending["cal"])
         # ok is None when there is no anchor to judge against; that is not a
         # reason to skip the recapture below, which is what would create one
@@ -548,14 +567,15 @@ def auto_wet_calibrate(tray, pending):
     if not pending.get("tripped"):
         return "not recalibrated: that fill did not trip the float"
 
-    live, spread, drift = sensors.probe_settle(tray, seconds=PROBE_SETTLE_S)
+    pr = pending.get("probe", tray)  # the probe in that tray
+    live, spread, drift = sensors.probe_settle(pr, seconds=PROBE_SETTLE_S)
     if live is None:
         return None
-    problems, _notes = probe_cal_check(tray, "wet", live, drift, spread)
+    problems, _notes = probe_cal_check(pr, "wet", live, drift, spread)
     if problems:
         return f"not recalibrated: {problems[0]}"
 
-    old = ((cfg.get("probe_cal") or {}).get(tray) or {}).get("wet")
+    old = ((cfg.get("probe_cal") or {}).get(pr) or {}).get("wet")
     limit = float(cfg.get("auto_wet_cal_max_move", 0.10))
     if old is not None and abs(live - old) > limit:
         return (
@@ -565,13 +585,13 @@ def auto_wet_calibrate(tray, pending):
         )
 
     with config.settings_lock:
-        config.settings.setdefault("probe_cal", {}).setdefault(tray, {})["wet"] = live
+        config.settings.setdefault("probe_cal", {}).setdefault(pr, {})["wet"] = live
         config.save_config()
     moved = "" if old is None else f" (was {old:.3f}V)"
     msg = f"wet anchor recalibrated to {live:.3f}V{moved}"
-    log.info(f"tray {tray}: {msg}")
+    log.info(f"tray {tray} (probe {pr}): {msg}")
     try:
-        db.log_event("probe", f"tray {tray} auto {msg}")
+        db.log_event("probe", f"tray {tray} probe {pr} auto {msg}")
     except Exception:
         pass
     return msg
@@ -603,18 +623,22 @@ def auto_water_pass():
     for tray in sorted(hardware.PUMP_PINS):
         if tray in blockers or tray not in armed:
             continue
-        volts, ts = probe_volts_filtered(tray, snap)
+        pr = setups_mod.tray_probe(cfg, tray)  # the probe in this tray
+        fl = setups_mod.tray_float(cfg, tray)  # and its float
+        if pr is None or fl is None:
+            continue  # a blocker already says so
+        volts, ts = probe_volts_filtered(pr, snap)
         if volts is None:
             continue
         if time.time() - ts > 3600:
             continue  # stale reading: do not water on old data
-        pct = probe_moisture(volts, cal.get(tray) or {}, stf)
+        pct = probe_moisture(volts, cal.get(pr) or {}, stf)
         if pct is None or pct > threshold:
             continue
         st = hardware.pump_state.get(tray) or {}
         if time.time() - st.get("last_run", 0.0) < cooldown:
             continue
-        f = sensors.read_float(tray)
+        f = sensors.read_float(fl)
         if f is None or f < 1:
             continue  # no float, or already full
 
@@ -624,11 +648,11 @@ def auto_water_pass():
         # the history got there. This exists because tray 2 was once
         # filled at "0%" while every logged input said 97%, and nothing
         # recorded what the loop had actually seen.
-        cal_t = cal.get(tray) or {}
-        fresh_v, spread = sensors.probe_spread(tray)
+        cal_t = cal.get(pr) or {}
+        fresh_v, spread = sensors.probe_spread(pr)
         fresh_pct = probe_moisture(fresh_v, cal_t, stf) if fresh_v is not None else None
         inputs = (
-            f"logged {volts:.4f}V -> {pct:.0f}%, fresh "
+            f"probe {pr}, float {fl}: logged {volts:.4f}V -> {pct:.0f}%, fresh "
             f"{'n/a' if fresh_v is None else f'{fresh_v:.4f}V'}"
             f" -> {'n/a' if fresh_pct is None else f'{fresh_pct:.0f}%'}"
             f" (spread {'n/a' if spread is None else f'{spread:.3f}V'})"

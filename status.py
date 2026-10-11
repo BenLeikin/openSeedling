@@ -423,6 +423,9 @@ def status_payload(authed=None):
         )((snap.get("lux") or (None, None))[1]),
         authed=routes.is_authed() if authed is None else bool(authed),
         auth_enabled=routes.auth_enabled(),
+        # which sensors sit in which tray, and the reverse (Settings, Setups)
+        tray_map=setups_mod.tray_map(cfg)[0],
+        sensor_trays=setups_mod.tray_map(cfg)[1],
         water={
             "pump_hw": hardware.PUMP_HW,
             "auto_water": bool(water.armed_trays(cfg)),
@@ -433,7 +436,14 @@ def status_payload(authed=None):
             "pump_cooldown_min": cfg.get("pump_cooldown_min", 30),
             "trays": {
                 t: {
-                    "float": sensors.read_float(t),
+                    # the float and probe that sit in this tray (Settings, Setups)
+                    "float": (
+                        sensors.read_float(setups_mod.tray_float(cfg, t))
+                        if setups_mod.tray_float(cfg, t) is not None
+                        else None
+                    ),
+                    "float_ch": setups_mod.tray_float(cfg, t),
+                    "probe_ch": setups_mod.tray_probe(cfg, t),
                     "pump_hw": t in hardware._pumps,
                     "running": hardware.pump_state[t]["running"],
                     "last": hardware.pump_state[t]["last_detail"],

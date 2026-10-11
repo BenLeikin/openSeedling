@@ -5,7 +5,7 @@
 // at page load is in start(), which main.js calls in a fixed order.
 // ---------------- cell grid overlay ----------------
 import { S, capturePhoto, render, renderPhoto, set_S } from './light.js';
-import { applySetup, set_setupDirty, setupDirty, setupDraft } from './setups.js';
+import { applySetup, set_setupDirty, setupDirty, setupDraft, trayDraft } from './setups.js';
 import {
   FORM,
   aligning,
@@ -617,7 +617,10 @@ export function start() {
     const body = {};
     // Setups have their own Save button, but a change there must not be lost
     // when the main Save is the one pressed
-    if (setupDirty && setupDraft) body.setups = setupDraft;
+    if (setupDirty && setupDraft) {
+      body.setups = setupDraft;
+      if (trayDraft) body.tray_sensors = trayDraft;
+    }
     // every Settings field, read the way config.FORM says it is stored
     for (const k of Object.keys(FORM)) {
       const v = readField(f, k, FORM[k]);

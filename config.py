@@ -46,6 +46,9 @@ DEFAULTS = {
     # band and a chosen subset of the sensors. Empty = one setup, "Main", with
     # everything. See setups().
     "setups": [],
+    # sensors per tray, set in Settings, Setups: {tray id: [sensor keys]}. A
+    # tray not listed has the probe and float of its own number (setups.tray_sensors)
+    "tray_sensors": {},
     "alert_dli_low": 4,  # checked once daily just after lights-off:
     #   a day that finishes under this many mol/m2
     #   means the light was off, dimmed or blocked.
@@ -591,6 +594,41 @@ def _v_setups(v):
     return out
 
 
+def _v_tray_sensors(v):
+    """{tray id: [sensor keys]}: which sensors sit in which tray. Watering reads
+    a tray's one moisture probe and stops on its one float, so each tray has at
+    most one of each and no probe or float is in two trays. Anything else (a
+    soil temperature probe, the air sensor) may be shared."""
+    if not isinstance(v, dict) or len(v) > 32:
+        raise ValueError("must map tray ids to lists of sensors")
+    out, owner = {}, {}
+    for tid, keys in v.items():
+        tid = str(tid)
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,24}", tid):
+            raise ValueError(f"{tid!r} is not a tray id")
+        if not isinstance(keys, list) or len(keys) > 32:
+            raise ValueError(f"tray {tid}: sensors must be a list")
+        clean = []
+        for k in keys:
+            if not (isinstance(k, str) and re.fullmatch(r"[a-z_]+(:[A-Za-z0-9_]+)?", k)):
+                raise ValueError(f"tray {tid}: {k!r} is not a sensor")
+            # canopy follows the camera's grid, the reservoir and light sensor
+            # their setup: not a tray's to claim
+            if re.match(r"(canopy|reservoir):|lux(:|$)|sys:|heat:", k) or k in clean:
+                continue
+            clean.append(k)
+        for kind, word in (("probe:", "moisture probe"), ("float:", "float")):
+            mine = [k for k in clean if k.startswith(kind)]
+            if len(mine) > 1:
+                raise ValueError(f"tray {tid}: one {word} per tray (watering reads one)")
+            for k in mine:
+                if k in owner:
+                    raise ValueError(f"{k} is in tray {owner[k]} and tray {tid}; pick one")
+                owner[k] = tid
+        out[tid] = sorted(clean)
+    return out
+
+
 def _v_trimmed(v):
     return str(v or "").strip()[:200]
 
@@ -740,6 +778,7 @@ SETTINGS_VALIDATORS = {
     "live_interval_s": _v_int(0, 120),
     "heat_mode": _v_choice("off", "auto", "on"),
     "setups": _v_setups,
+    "tray_sensors": _v_tray_sensors,
     "dli_target_low": _v_float(0.5, 60, clamp=False),
     "dli_target_high": _v_float(1, 65, clamp=False),
     "fan_mode": _v_choice("auto", "on", "off"),
