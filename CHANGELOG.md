@@ -4,6 +4,11 @@ One entry per update zip, newest first. Install any update with
 `bash scripts/update.sh openSeedling-update-N.zip`; each is cumulative from
 the 4-17 baseline. The installer commits each one with the heading below.
 
+## 57 (2026-10-12): Light sensor reads past 27,000 lx
+- The BH1750 is set to its widest range (1 lx mode, shortest measurement time): up to 121,557 lx, from 27,306. The fixture passed the old maximum at a fifth of its power, so the light response sweep took that for full output and the calibration drove the fixture at 19% when the dashboard said 100%.
+- A sweep whose readings stop at the sensor's maximum is refused instead of saved.
+- A calibration on file that the sensor capped is flagged in Settings with what to do; it stays in use until rebuilt, since dropping it would take the light straight to full power.
+
 ## 56 (2026-10-12): Camera stitching: cleaner seam, much less memory
 - The seam between the cameras follows the path of least difference through the overlap (around leaves rather than through them), so a leaf standing at a different place in each view is not shown twice; it is softened over about 20 px.
 - Stitching scales each frame as it is decoded (decoding at half size when the output is half size or less), places camera 1 before reading camera 2, and blends a few rows at a time: about 108 MB at 3264x2448 per camera, from 168 (Python and OpenCV alone are about 50).

@@ -401,6 +401,7 @@ def status_payload(authed=None):
         light_linear={k: v for k, v in (cfg.get("light_linear") or {}).items() if k != "table"}
         or None,
         light_linear_on=bool(cfg.get("light_linear_on")),
+        light_linear_clipped=light_mod.calibration_clipped(cfg),
         light_linear_stale=bool(
             cfg.get("light_linear_on")
             and (cfg.get("light_linear") or {}).get("table")

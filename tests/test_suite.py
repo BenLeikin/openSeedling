@@ -3240,6 +3240,88 @@ def _kiosk_bringup():
     )
 
 
+def _lux_range():
+    """The BH1750 read at most 27,306 lx (11 Oct): a 250 W fixture passed that
+    at 19% of its power, the sweep took that for full output, and the
+    dashboard's 100% drove the fixture at 19%."""
+    import types as _types
+
+    writes = []
+
+    class Bus:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def write(self, b):
+            writes.append(bytes(b)[0])
+
+    class FakeBH:
+        def __init__(self, i2c, address):
+            self.i2c_device = Bus()
+            self.resolution = 1
+
+        @property
+        def lux(self):
+            return 1000.0  # what the library reports, before the range factor
+
+    mod = _types.SimpleNamespace(BH1750=FakeBH, Resolution=_types.SimpleNamespace(MID=0, HIGH=1))
+    real_i2c, real_mod = sensors._i2c, sys.modules.get("adafruit_bh1750")
+    sensors._i2c = lambda: None
+    sys.modules["adafruit_bh1750"] = mod
+    for st_ in sensors._lux.values():
+        st_.update(dev=None, init=False, fail=0, scale=1.0)
+    try:
+        got = sensors._read_lux()
+    finally:
+        sensors._i2c = real_i2c
+        sys.modules["adafruit_bh1750"] = real_mod
+        for st_ in sensors._lux.values():
+            st_.update(dev=None, init=False, fail=0, scale=1.0)
+    check(
+        got.get("lux") == round(1000 * 69 / 31, 1) and writes[:2] == [0x40, 0x7F],
+        f"the light sensor is set to its widest range, up to 121,557 lx ({got}, {writes[:2]})",
+    )
+    # a sweep whose readings stop at the sensor's maximum must not calibrate
+    clipped = [[p, min(27306.0, 12.9 + p * 1400)] for p in range(0, 101, 5)]
+    try:
+        light_mod.build_linear_table(clipped)
+        refused = ""
+    except ValueError as e:
+        refused = str(e)
+    real = [[p, 12.9 + (p - 4) * 1100 if p > 4 else 12.9] for p in range(0, 101, 5)]
+    table, _info = light_mod.build_linear_table(real)
+    check(
+        "maximum" in refused and "not saved" in refused and table[100] == 100,
+        f"a sweep that hit the light sensor's maximum is refused, not taken as the fixture's "
+        f"full output; a real one still maps 100% to full ({refused[:70]})",
+    )
+    bad = {
+        "light_linear_on": True,
+        "light_linear": {"peak_lux": 27306.0, "saturation_raw": 19.0},
+    }
+    ok = dict(bad, light_linear={"peak_lux": 88123.0, "saturation_raw": 97.0})
+    with config.settings_lock:
+        was = {k: config.settings.get(k) for k in ("light_linear_on", "light_linear")}
+        config.settings.update(bad)
+    try:
+        flag = c.get("/api/status").get_json().get("light_linear_clipped")
+    finally:
+        with config.settings_lock:
+            config.settings.update(was)
+    js = page_js()
+    check(
+        light_mod.calibration_clipped(bad)
+        and not light_mod.calibration_clipped(ok)
+        and flag is True
+        and "light_linear_clipped" in js,
+        "a calibration the sensor capped is flagged on the dashboard (left in use, since "
+        "dropping it would take the light straight to full power)",
+    )
+
+
 def _two_cameras():
     """Two USB cameras side by side (11 Oct): picked by port, aligned once,
     stitched into one wide photo; the grid follows and the crop resets."""
@@ -4154,6 +4236,7 @@ run("Kiosk bring-up", _kiosk_bringup)
 run("Sensors per tray", _tray_sensor_map)
 run("USB link", _usb_link)
 run("Two cameras", _two_cameras)
+run("Light sensor range", _lux_range)
 run("Settings layout", _settings_layout)
 run("Settings field definitions", _form_definitions)
 run("Dashboard modules", _page_modules)

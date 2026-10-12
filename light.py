@@ -489,6 +489,32 @@ def linear_table(cfg):
     return table
 
 
+# The BH1750's maximum reading in each of its setups (sensors.LUX_CEILINGS).
+SENSOR_CEILINGS_LX = (27306.0, 54612.0, 121557.0)
+
+
+def sensor_clipped(peak_lux):
+    """Whether a peak reading is the light sensor's own maximum."""
+    try:
+        v = float(peak_lux)
+    except (TypeError, ValueError):
+        return False
+    return any(abs(v - c) <= 0.01 * c for c in SENSOR_CEILINGS_LX)
+
+
+def calibration_clipped(cfg):
+    """A calibration on file that a saturated sensor capped: its "full output"
+    is where the sensor ran out, so the dashboard's 100% is only part of the
+    fixture. Flagged rather than switched off, because switching it off would
+    take the light straight to the fixture's real full power."""
+    lin = cfg.get("light_linear") or {}
+    return bool(
+        cfg.get("light_linear_on")
+        and sensor_clipped(lin.get("peak_lux"))
+        and float(lin.get("saturation_raw") or 100) < 95
+    )
+
+
 def build_linear_table(points):
     """From a raw sweep, the raw percent needed for each 0-100% of output.
 
@@ -510,6 +536,16 @@ def build_linear_table(points):
         raise ValueError(
             "the light barely changed across the sweep; is the "
             "sensor under the fixture and the right backend set?"
+        )
+    # A sensor at its maximum reads the same however bright the light gets,
+    # which looks exactly like a fixture at full output: the calibration
+    # would then put the dashboard's 100% wherever the sensor ran out.
+    if sensor_clipped(hi):
+        top = min(p for p, lv in pts if lv >= hi * 0.999)
+        raise ValueError(
+            f"the light sensor reached its maximum ({hi:,.0f} lx) from {top:g}% up, so the "
+            "fixture's full output is beyond what it can read; the calibration was not saved. "
+            "Move the sensor further from the light and sweep again"
         )
     # normalise and force monotonic
     norm, run = [], 0.0

@@ -4140,3 +4140,8 @@ body.onscreen * {
   border: 1px solid var(--line, #33402f);
   margin-bottom: 6px;
 }
+
+/* a calibration note that needs action */
+#lininfo.warnc {
+  color: var(--warn);
+}

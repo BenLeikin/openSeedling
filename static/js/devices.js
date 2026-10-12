@@ -338,6 +338,17 @@ export function renderCalibration(j) {
       'is not being used. Press Calibrate to rebuild it.';
     return;
   }
+  if (j.light_linear_clipped && lin) {
+    info.textContent =
+      `This calibration is capped by the light sensor: it read its maximum ` +
+      `(${Math.round(lin.peak_lux).toLocaleString()} lx) from ${lin.saturation_raw}% raw up, ` +
+      `so the dashboard's 100% is only ${lin.saturation_raw}% of the fixture. ` +
+      `The sensor now reads further; press Calibrate to rebuild it. Lower Max brightness ` +
+      `first: after it, 100% means the fixture's real full output.`;
+    info.classList.add('warnc');
+    return;
+  }
+  info.classList.remove('warnc');
   if (lin && lin.table === undefined && lin.cutoff_raw !== undefined) {
     const when = lin.ts ? new Date(lin.ts * 1000).toLocaleDateString() : '';
     const floorNote =

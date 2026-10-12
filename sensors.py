@@ -447,11 +447,34 @@ LUX_ADDRS = {0x23: "lux", 0x5C: "lux:2"}
 # reseated sensor comes back on its own. Errors are logged on the first
 # failure and then sparingly, not once per read.
 LUX_REINIT_AFTER = 3
-_lux = {a: {"dev": None, "init": False, "fail": 0, "seen": False} for a in LUX_ADDRS}
+# The driver's default (0.5 lx steps at the chip's default measurement time)
+# tops out at 27,306 lx, which a 250 W fixture passes at a fifth of its power:
+# the light response sweep then saw "full output" at 19% and the calibration
+# capped the dashboard's 100% there. The 1 lx mode with the shortest
+# measurement time reads up to 121,557 lx, in 1.9 lx steps.
+LUX_MTREG = 31  # measurement time register: 31..254, the chip's default is 69
+LUX_SCALE = 69.0 / LUX_MTREG
+# the reading at which the chip is at its maximum, in each of those setups
+LUX_CEILINGS = (27306.0, 54612.0, 121557.0)
+_lux = {a: {"dev": None, "init": False, "fail": 0, "seen": False, "scale": 1.0} for a in LUX_ADDRS}
 # The sample and live loops both read the lux sensors. Without this, one could
 # find a sensor still being opened by the other, count none found and log
 # "not found; disabled" moments before the other logged it found.
 _lux_lock = threading.Lock()
+
+
+def _lux_widen(dev):
+    """Put a BH1750 in its widest range (see LUX_MTREG); returns the factor
+    its library's reading must be multiplied by."""
+    import adafruit_bh1750
+
+    dev.resolution = adafruit_bh1750.Resolution.MID  # 1 lx mode: twice the 0.5 lx mode's range
+    with dev.i2c_device as i2c:
+        i2c.write(bytes([0x40 | (LUX_MTREG >> 5)]))  # measurement time, high bits
+        i2c.write(bytes([0x60 | (LUX_MTREG & 0x1F)]))  # and low bits
+    dev.resolution = adafruit_bh1750.Resolution.MID  # start measuring with it
+    time.sleep(0.12)
+    return LUX_SCALE
 
 
 def _lux_open(addr, st):
@@ -462,8 +485,16 @@ def _lux_open(addr, st):
         dev = adafruit_bh1750.BH1750(_i2c(), address=addr)
         with _io_lock:
             _ = dev.lux  # probe read
+            try:
+                st["scale"] = _lux_widen(dev)
+            except Exception as e:
+                st["scale"] = 1.0
+                log.warning(f"lux sensor {hex(addr)}: range not widened ({e}); reads to 27,306 lx")
         st["dev"], st["seen"] = dev, True
-        log.info(f"lux sensor: BH1750 at {hex(addr)} ({LUX_ADDRS[addr]})")
+        log.info(
+            f"lux sensor: BH1750 at {hex(addr)} ({LUX_ADDRS[addr]}), "
+            f"up to {65535 / 1.2 * (st['scale'] if st['scale'] != 1.0 else 0.5):,.0f} lx"
+        )
     except Exception:
         st["dev"] = None
         if st["fail"]:
@@ -493,7 +524,7 @@ def _read_lux_locked():
             continue
         try:
             with _io_lock:
-                v = round(st["dev"].lux, 1)
+                v = round(st["dev"].lux * st.get("scale", 1.0), 1)
         except Exception as e:
             _lux_failed(addr, e)
             continue
