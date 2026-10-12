@@ -3495,6 +3495,15 @@ def _two_cameras():
         camera_mod.PREVIEW_PATH.unlink(missing_ok=True)
         for f in camera_mod.ALIGN_FRAMES + [camera_mod.ALIGN_MATCHES]:
             f.unlink(missing_ok=True)
+    it = (APP / "imgtool.py").read_text()
+    check(
+        "detail_DpSeamFinder" in it
+        and "IMREAD_REDUCED_COLOR_2" in it
+        and "ALIGN_WORK_PX = 640" in it
+        and camera_mod.STITCH_MAX_W <= 3072,
+        "stitching joins along a routed seam and keeps memory down (frames decoded at the "
+        "size they are used, matching at 640 px, output at most 3072 px wide)",
+    )
     sh = (APP / "scripts" / "usbcheck.sh").read_text()
     cam = (APP / "camera.py").read_text()
     check(

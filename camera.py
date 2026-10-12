@@ -477,7 +477,7 @@ def cam_turns(cfg):
     return [int(cfg.get("cam_rotate", 0) or 0), int(cfg.get("cam2_rotate", 0) or 0)]
 
 
-STITCH_MAX_W = 3840  # the stitched frame's widest; bounds memory on the Zero
+STITCH_MAX_W = 3072  # the stitched frame's widest; bounds memory on the Zero
 # each camera's frame from the last Align cameras, shown in Settings
 ALIGN_FRAMES = [PREVIEW_PATH.with_name(f"align_cam{i}.jpg") for i in (1, 2)]
 # ...and what matched between them (green: agrees with the fit, red: rejected)

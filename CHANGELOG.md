@@ -4,6 +4,12 @@ One entry per update zip, newest first. Install any update with
 `bash scripts/update.sh openSeedling-update-N.zip`; each is cumulative from
 the 4-17 baseline. The installer commits each one with the heading below.
 
+## 56 (2026-10-12): Camera stitching: cleaner seam, much less memory
+- The seam between the cameras follows the path of least difference through the overlap (around leaves rather than through them), so a leaf standing at a different place in each view is not shown twice; it is softened over about 20 px.
+- Stitching scales each frame as it is decoded (decoding at half size when the output is half size or less), places camera 1 before reading camera 2, and blends a few rows at a time: about 108 MB at 3264x2448 per camera, from 168 (Python and OpenCV alone are about 50).
+- Align cameras matches on frames decoded straight to 640 px: about 130 MB, from about 340, with as many agreeing points on the test scenes.
+- The stitched photo is at most 3072 px wide.
+
 ## 55 (2026-10-12): Camera alignment tolerates plant height
 - Align cameras fits a shift, turn and scale with a tolerance of 2% of the frame, instead of a tight flat-plane fit that rejected most true matches on leaves standing at different heights (15 of 85 agreed on the rig). With 40 or more in agreement it is refined to a perspective fit.
 - The fit must keep camera 2 within 15 degrees and 0.8 to 1.25x of camera 1 (each is already turned the right way up), which is what lets it accept 12 agreeing points instead of 25.

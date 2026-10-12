@@ -36,7 +36,12 @@ import growth
 # holds for the whole overlap (plants standing up are off that plane and may
 # double slightly in the seam). It is found once by `align` and reused by
 # every `stitch`, which is then only a warp and a blend.
-ALIGN_WORK_PX = 1280  # features are matched on frames scaled to this
+# Features are matched on frames scaled to this. SIFT doubles the frame
+# internally and keeps float pyramids, so at 1280 it peaked near 340 MB: at
+# 640 it is about 130 MB (Python and OpenCV alone are 50) and, on leaves and
+# tray cells, finds as many agreeing points. ORB is far lighter per pixel.
+ALIGN_WORK_PX = 640
+ALIGN_WORK_PX_ORB = 1280
 MIN_INLIERS = 12  # points agreeing on one fit (a 4-parameter fit, so 12 is plenty)
 # Plants stand up off the tray plane and the cameras are close, so the same
 # leaf shifts by different amounts between the two views (parallax). A tight
@@ -134,11 +139,8 @@ def draw_matches(p1, p2, s, k1, k2, good, mask, out, rotate=0):
     """Camera 1 and camera 2 side by side with what matched between them:
     green lines are matches that agree on one fit, red ones were rejected,
     yellow dots are the detail found in each frame. Turned like the photos."""
-    frames = []
-    for p in (p1, p2):
-        img = cv2.imread(str(p))
-        frames.append(cv2.resize(img, None, fx=s, fy=s, interpolation=cv2.INTER_AREA))
-        del img
+    frames = [_load_scaled(p, s) for p in (p1, p2)]
+    frames[1] = cv2.resize(frames[1], (frames[0].shape[1], frames[0].shape[0]))
     fw = frames[0].shape[1]
     comp = np.hstack(frames)
     del frames
@@ -183,22 +185,22 @@ def draw_matches(p1, p2, s, k1, k2, good, mask, out, rotate=0):
 def align(p1, p2, matches_out=None, rotate=0):
     """Match features between the two frames and fit camera 2 -> camera 1.
     With matches_out, also draws what matched (draw_matches), pass or fail."""
-    a = cv2.imread(str(p1), cv2.IMREAD_GRAYSCALE)
-    b = cv2.imread(str(p2), cv2.IMREAD_GRAYSCALE)
-    if a is None or b is None:
+    try:
+        sizes = [_jpeg_wh(p) for p in (p1, p2)]
+    except SystemExit:
         return {"ok": False, "error": "could not read a camera frame"}
-    if a.shape != b.shape:
+    if sizes[0] != sizes[1]:
         return {"ok": False, "error": "the two cameras captured different sizes"}
-    h, w = a.shape
-    s = min(1.0, ALIGN_WORK_PX / float(max(h, w)))
+    w, h = sizes[0]
+    sift = hasattr(cv2, "SIFT_create")
+    s = min(1.0, (ALIGN_WORK_PX if sift else ALIGN_WORK_PX_ORB) / float(max(h, w)))
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    small = [
-        clahe.apply(cv2.resize(x, None, fx=s, fy=s, interpolation=cv2.INTER_AREA)) for x in (a, b)
-    ]
-    del a, b
+    # decoded straight to about the working size (see _load_scaled)
+    small = [clahe.apply(cv2.cvtColor(_load_scaled(p, s), cv2.COLOR_BGR2GRAY)) for p in (p1, p2)]
+    small[1] = cv2.resize(small[1], (small[0].shape[1], small[0].shape[0]))
     # SIFT finds about twice the matches of ORB in a thin overlap of soil and
     # leaves; ORB only where this OpenCV lacks it
-    if hasattr(cv2, "SIFT_create"):
+    if sift:
         det, norm = cv2.SIFT_create(nfeatures=4000), cv2.NORM_L2
     else:
         det, norm = cv2.ORB_create(nfeatures=5000), cv2.NORM_HAMMING
@@ -223,7 +225,7 @@ def align(p1, p2, matches_out=None, rotate=0):
         }
     src = np.float32([k2[m.queryIdx].pt for m in good])
     dst = np.float32([k1[m.trainIdx].pt for m in good])
-    tol = FIT_TOL * ALIGN_WORK_PX
+    tol = FIT_TOL * max(w, h) * s  # 2% of the frame, in working pixels
     A, mask = cv2.estimateAffinePartial2D(
         src, dst, method=cv2.RANSAC, ransacReprojThreshold=tol, maxIters=5000, confidence=0.995
     )
@@ -286,30 +288,117 @@ def align(p1, p2, matches_out=None, rotate=0):
     }
 
 
-def stitch(p1, p2, H, max_w=None):
-    """Camera 1 and camera 2 warped onto one canvas, blended across the overlap."""
-    a = cv2.imread(str(p1))
-    b = cv2.imread(str(p2))
-    if a is None or b is None:
+SEAM_WORK_PX = 800  # the seam is routed on the stitched frame scaled to this width
+SEAM_FEATHER = 0.006  # and softened over this fraction of the width (about 20 px)
+
+
+def _load_scaled(path, sc):
+    """A frame scaled by `sc`. At half size or less the JPEG is decoded at
+    half or quarter size to begin with (libjpeg does that for free), so the
+    full frame (24 MB at 3264x2448, near 50 MB while decoding) is never held."""
+    flag, got = cv2.IMREAD_COLOR, 1.0
+    if sc <= 0.25:
+        flag, got = cv2.IMREAD_REDUCED_COLOR_4, 0.25
+    elif sc <= 0.5:
+        flag, got = cv2.IMREAD_REDUCED_COLOR_2, 0.5
+    img = cv2.imread(str(path), flag)
+    if img is None:
         raise SystemExit("could not read a camera frame")
-    h, w = a.shape[:2]
-    if b.shape[:2] != (h, w):
-        raise SystemExit("the two cameras captured different sizes")
+    if sc < got:
+        img = cv2.resize(img, None, fx=sc / got, fy=sc / got, interpolation=cv2.INTER_AREA)
+    return img
+
+
+def _jpeg_wh(path):
+    """(width, height) from the JPEG header, without decoding the image."""
+    with open(path, "rb") as f:
+        data = f.read(262144)
+    i = 2
+    while i + 9 < len(data):
+        if data[i] != 0xFF:
+            i += 1
+            continue
+        m = data[i + 1]
+        if 0xC0 <= m <= 0xCF and m not in (0xC4, 0xC8, 0xCC):
+            return int.from_bytes(data[i + 7 : i + 9], "big"), int.from_bytes(
+                data[i + 5 : i + 7], "big"
+            )
+        i += 2 + int.from_bytes(data[i + 2 : i + 4], "big")
+    raise SystemExit("could not read a camera frame")
+
+
+def _seam_alpha(out, wb, ma, mb):
+    """How much of camera 2 to show at each pixel (0..255). In the overlap
+    the cut follows the path of least difference between the two views
+    (around leaves rather than through them, so a leaf that stands up and
+    lands in a different place in each view is not shown twice), softened a
+    little; elsewhere it is whichever camera sees that pixel."""
+    W = out.shape[1]
+    f = min(1.0, SEAM_WORK_PX / float(W))
+
+    def small(x, how):
+        return cv2.resize(x, None, fx=f, fy=f, interpolation=how)
+
+    sa, sb = small(out, cv2.INTER_AREA), small(wb, cv2.INTER_AREA)
+    msa, msb = small(ma, cv2.INTER_NEAREST), small(mb, cv2.INTER_NEAREST)
+    try:
+        finder = cv2.detail_DpSeamFinder("COLOR_GRAD")
+        got = finder.find(
+            [sa.astype(np.float32), sb.astype(np.float32)], [(0, 0), (0, 0)], [msa, msb.copy()]
+        )
+        sel = got[1].get() if hasattr(got[1], "get") else np.asarray(got[1])
+    except Exception:
+        # no seam finder in this OpenCV: fade across the overlap instead
+        sel = msb.copy()
+        ov = (msa > 0) & (msb > 0)
+        cols = np.where(ov.any(axis=0))[0]
+        if cols.size:
+            c0, c1 = int(cols[0]), int(cols[-1]) + 1
+            ramp = np.linspace(0, 255, c1 - c0).astype(np.uint8)
+            if msb[:, :c0].sum() > msb[:, c1:].sum():
+                ramp = ramp[::-1]
+            band = sel[:, c0:c1]
+            band[ov[:, c0:c1]] = np.broadcast_to(ramp, band.shape)[ov[:, c0:c1]]
+    alpha = cv2.resize(sel, (W, out.shape[0]), interpolation=cv2.INTER_LINEAR)
+    k = max(3, int(SEAM_FEATHER * W) * 2 + 1)
+    alpha = cv2.GaussianBlur(alpha, (k, k), 0)
+    alpha[mb == 0] = 0
+    alpha[(ma == 0) & (mb > 0)] = 255
+    return alpha
+
+
+def stitch(p1, p2, H, max_w=None):
+    """Camera 1 and camera 2 warped onto one canvas and joined along a seam.
+
+    Memory matters on the Zero with the touchscreen running: each frame is
+    scaled to the output size as soon as it is decoded, camera 1 is placed and
+    freed before camera 2 is read, and the blend runs a few rows at a time."""
+    w, h = _jpeg_wh(p1)
     H = np.float64(H)
-    x0, y0, W, Hh, quad = canvas_box(H, w, h)
+    x0, y0, W, Hh, _quad = canvas_box(H, w, h)
     sc = min(1.0, float(max_w) / W) if max_w else 1.0
+    if 0.5 < sc < 0.6:
+        sc = 0.5  # a little smaller, so the frames can be decoded at half size
+    a = _load_scaled(p1, sc)
+    if abs(a.shape[1] - w * sc) > 2:  # rounding of the reduced decode
+        a = cv2.resize(a, (int(round(w * sc)), int(round(h * sc))), interpolation=cv2.INTER_AREA)
+    # canvas from full-size camera 1 pixels; the frames arrive already scaled
     T = np.array([[sc, 0, -x0 * sc], [0, sc, -y0 * sc], [0, 0, 1.0]])
+    unscale = np.diag([1.0 / sc, 1.0 / sc, 1.0])
     size = (max(1, int(round(W * sc))), max(1, int(round(Hh * sc))))
-    ones = np.full((h, w), 255, np.uint8)
-    out = cv2.warpPerspective(a, T, size, flags=cv2.INTER_LINEAR)
-    ma = cv2.warpPerspective(ones, T, size, flags=cv2.INTER_NEAREST)
+    ones = np.full(a.shape[:2], 255, np.uint8)
+    out = cv2.warpPerspective(a, T @ unscale, size, flags=cv2.INTER_LINEAR)
+    ma = cv2.warpPerspective(ones, T @ unscale, size, flags=cv2.INTER_NEAREST)
     del a
-    wb = cv2.warpPerspective(b, T @ H, size, flags=cv2.INTER_LINEAR)
-    mb = cv2.warpPerspective(ones, T @ H, size, flags=cv2.INTER_NEAREST)
+    if _jpeg_wh(p2) != (w, h):
+        raise SystemExit("the two cameras captured different sizes")
+    b = _load_scaled(p2, sc)
+    if b.shape[:2] != ones.shape:
+        b = cv2.resize(b, (ones.shape[1], ones.shape[0]), interpolation=cv2.INTER_AREA)
+    wb = cv2.warpPerspective(b, T @ H @ unscale, size, flags=cv2.INTER_LINEAR)
+    mb = cv2.warpPerspective(ones, T @ H @ unscale, size, flags=cv2.INTER_NEAREST)
     del b, ones
-    both = (ma > 0) & (mb > 0)
-    only_b = (mb > 0) & (ma == 0)
-    del ma, mb
+    both = cv2.bitwise_and(ma, mb) > 0
     # the same model of camera can still differ a little in brightness and
     # colour: match camera 2 to camera 1 over the shared area
     if both.any():
@@ -320,24 +409,16 @@ def stitch(p1, p2, H, max_w=None):
                 r = min(1.25, max(0.8, m1 / m2))
                 lut = np.clip(np.arange(256) * r, 0, 255).astype(np.uint8)
                 wb[..., c] = cv2.LUT(wb[..., c], lut)
-    out[only_b] = wb[only_b]
-    del only_b
-    cols = np.where(both.any(axis=0))[0]
-    if cols.size:
-        c0, c1 = int(cols[0]), int(cols[-1]) + 1
-        # a feathered seam: camera 1 fades into camera 2 across the overlap,
-        # in whichever direction camera 2 sits
-        t = np.linspace(0.0, 1.0, c1 - c0, dtype=np.float32)
-        if quad[:, 0].mean() < w / 2.0:
-            t = t[::-1]
-        alpha = t[None, :, None]
-        # a few rows at a time: the whole band in float is tens of MB
-        for r0 in range(0, out.shape[0], 64):
-            ra = out[r0 : r0 + 64, c0:c1]
-            rb = wb[r0 : r0 + 64, c0:c1]
-            sel = both[r0 : r0 + 64, c0:c1]
-            mixed = (ra * (1.0 - alpha) + rb * alpha).astype(np.uint8)
-            ra[sel] = mixed[sel]
+    del both
+    alpha = _seam_alpha(out, wb, ma, mb)
+    del ma, mb
+    for r0 in range(0, out.shape[0], 64):
+        al = alpha[r0 : r0 + 64]
+        if not al.any():
+            continue
+        ra, rb = out[r0 : r0 + 64], wb[r0 : r0 + 64]
+        f = al.astype(np.float32)[..., None] / 255.0
+        ra[...] = (ra * (1.0 - f) + rb * f + 0.5).astype(np.uint8)
     return out
 
 

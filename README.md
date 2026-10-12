@@ -765,7 +765,8 @@ matches features in the overlap (ORB, RANSAC homography, `imgtool.py align`)
 and saves the fit as `cam_stitch`. From then on every photo and preview reads
 camera 1, then camera 2 (never both at once, so they do not share the hub's
 bandwidth), and `imgtool.py stitch` warps camera 2 onto camera 1's plane,
-matches its brightness over the overlap and feathers the seam. Everything
+matches its brightness over the overlap and joins them along the seam of least
+difference (OpenCV's seam finder, routed around leaves), softened slightly. Everything
 downstream (grid corners, crop, canopy, timelapse, AI report) uses the stitched
 photo as if it came from one wide camera.
 
