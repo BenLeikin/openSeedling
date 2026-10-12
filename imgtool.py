@@ -37,7 +37,15 @@ import growth
 # double slightly in the seam). It is found once by `align` and reused by
 # every `stitch`, which is then only a warp and a blend.
 ALIGN_WORK_PX = 1280  # features are matched on frames scaled to this
-MIN_INLIERS = 25
+MIN_INLIERS = 12  # points agreeing on one fit (a 4-parameter fit, so 12 is plenty)
+# Plants stand up off the tray plane and the cameras are close, so the same
+# leaf shifts by different amounts between the two views (parallax). A tight
+# planar fit rejected most true matches (15 of 85 on the rig); the fit
+# is now a shift, turn and scale with a tolerance of 2% of the frame, and only
+# refined to a full perspective fit when that keeps nearly all of them.
+FIT_TOL = 0.02
+MAX_TURN_DEG = 15  # each camera is already turned the right way up
+SCALE_RANGE = (0.8, 1.25)
 
 
 def _opts(args):
@@ -215,8 +223,30 @@ def align(p1, p2, matches_out=None, rotate=0):
         }
     src = np.float32([k2[m.queryIdx].pt for m in good])
     dst = np.float32([k1[m.trainIdx].pt for m in good])
-    Hs, mask = cv2.findHomography(src, dst, cv2.RANSAC, 4.0)
+    tol = FIT_TOL * ALIGN_WORK_PX
+    A, mask = cv2.estimateAffinePartial2D(
+        src, dst, method=cv2.RANSAC, ransacReprojThreshold=tol, maxIters=5000, confidence=0.995
+    )
     inliers = int(mask.sum()) if mask is not None else 0
+    Hs = None
+    if A is not None:
+        Hs = np.vstack([A, [0.0, 0.0, 1.0]])
+        scale = float(np.hypot(A[0, 0], A[1, 0]))
+        turn = float(np.degrees(np.arctan2(A[1, 0], A[0, 0])))
+        if not (SCALE_RANGE[0] <= scale <= SCALE_RANGE[1] and abs(turn) <= MAX_TURN_DEG):
+            drawn(good, mask)
+            return {
+                "ok": False,
+                "error": f"the best fit turns camera 2 by {turn:.0f} degrees and scales it "
+                f"{scale:.2f}x; check each camera's rotation and that they share a view",
+            }
+        # with enough agreement, a perspective fit on those points follows a
+        # camera that looks at the trays at a slight slant
+        if inliers >= 40:
+            sel = mask.ravel().astype(bool)
+            Hp, pm = cv2.findHomography(src[sel], dst[sel], cv2.RANSAC, tol / 2)
+            if Hp is not None and pm is not None and pm.sum() >= 0.85 * inliers:
+                Hs = Hp
     drawn(good, mask)
     if Hs is None or inliers < MIN_INLIERS:
         return {

@@ -3394,6 +3394,28 @@ def _two_cameras():
             "the two frames Align cameras used, and a picture of what matched between them, "
             "can be opened from Settings to judge the overlap",
         )
+        import subprocess as sp
+
+        neg = WORK / "mirror.jpg"
+        cv2.imwrite(str(neg), cv2.flip(frames["/dev/cam1"], 1))
+        miss = json.loads(
+            sp.run(
+                [
+                    sys.executable,
+                    str(APP / "imgtool.py"),
+                    "align",
+                    str(WORK / "pair.jpg"),
+                    str(neg),
+                ],
+                capture_output=True,
+            ).stdout
+            or b"{}"
+        )
+        check(
+            miss.get("ok") is False and "check each camera's rotation" in miss.get("error", ""),
+            "a fit that would turn or rescale camera 2 is refused (each camera is already turned "
+            f"the right way up), so a looser fit cannot accept a false match ({miss.get('error')})",
+        )
         # the grid stays over the same part of the trays
         back = camera_mod.regrid_for_stitch(
             {"grid": {"corners": corners}, "cam_rotate": 0, "usb_width": 1200, "usb_height": 900},

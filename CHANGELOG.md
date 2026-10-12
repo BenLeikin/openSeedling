@@ -4,6 +4,10 @@ One entry per update zip, newest first. Install any update with
 `bash scripts/update.sh openSeedling-update-N.zip`; each is cumulative from
 the 4-17 baseline. The installer commits each one with the heading below.
 
+## 55 (2026-10-12): Camera alignment tolerates plant height
+- Align cameras fits a shift, turn and scale with a tolerance of 2% of the frame, instead of a tight flat-plane fit that rejected most true matches on leaves standing at different heights (15 of 85 agreed on the rig). With 40 or more in agreement it is refined to a perspective fit.
+- The fit must keep camera 2 within 15 degrees and 0.8 to 1.25x of camera 1 (each is already turned the right way up), which is what lets it accept 12 agreeing points instead of 25.
+
 ## 54 (2026-10-11): Rotation per camera
 - Settings, Camera: Rotate camera 2, beside Rotate photo (now camera 1's). Each camera's frames are turned the right way up before they are matched and stitched, so the two can be mounted different ways round. Changing either rotation calls for a new alignment.
 
