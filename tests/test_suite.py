@@ -3375,11 +3375,19 @@ def _two_cameras():
         )
         f1 = c.get("/align_frame/1.jpg")
         f2 = c.get("/align_frame/2.jpg")
+        fm = c.get("/align_frame/matches.jpg")
+        mimg = cv2.imdecode(np.frombuffer(fm.data, np.uint8), 1) if fm.status_code == 200 else None
+        view = c.get("/api/status").get_json()["camera"].get("align_view")
         check(
             f1.status_code == 200
             and f2.status_code == 200
-            and c.get("/align_frame/3.jpg").status_code == 404,
-            "the two frames Align cameras used can be opened from Settings, to judge the overlap",
+            and c.get("/align_frame/3.jpg").status_code == 404
+            and mimg is not None
+            and mimg.shape[1] > mimg.shape[0]
+            and view
+            and 'id="pairview"' in html,
+            "the two frames Align cameras used, and a picture of what matched between them, "
+            "can be opened from Settings to judge the overlap",
         )
         # the grid stays over the same part of the trays (rotated 180 here)
         back = camera_mod.regrid_for_stitch(
@@ -3451,7 +3459,7 @@ def _two_cameras():
         with config.settings_lock:
             config.settings.update(saved)
         camera_mod.PREVIEW_PATH.unlink(missing_ok=True)
-        for f in camera_mod.ALIGN_FRAMES:
+        for f in camera_mod.ALIGN_FRAMES + [camera_mod.ALIGN_MATCHES]:
             f.unlink(missing_ok=True)
     sh = (APP / "scripts" / "usbcheck.sh").read_text()
     cam = (APP / "camera.py").read_text()

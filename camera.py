@@ -472,6 +472,8 @@ def stitch_of(cfg):
 STITCH_MAX_W = 3840  # the stitched frame's widest; bounds memory on the Zero
 # each camera's frame from the last Align cameras, shown in Settings
 ALIGN_FRAMES = [PREVIEW_PATH.with_name(f"align_cam{i}.jpg") for i in (1, 2)]
+# ...and what matched between them (green: agrees with the fit, red: rejected)
+ALIGN_MATCHES = PREVIEW_PATH.with_name("align_matches.jpg")
 
 
 def _usb_capture_view(cfg, out_path, width, height, warmup=None):
@@ -582,7 +584,18 @@ def align_cameras():
             ok, err = _usb_capture(cfg, part, w, h, warmup=4, dev=dev)
             if not ok:
                 return {"ok": False, "error": f"camera {i}: {err}"}
-        r = imgtool(["align", parts[0], parts[1]], timeout=180)
+        r = imgtool(
+            [
+                "align",
+                parts[0],
+                parts[1],
+                "--matches",
+                ALIGN_MATCHES,
+                "--rotate",
+                int(cfg.get("cam_rotate", 0) or 0),
+            ],
+            timeout=180,
+        )
         if r.returncode != 0:
             return {"ok": False, "error": killed_msg(r, "aligning") or _imgtool_err(r)}
         res = json.loads(r.stdout.decode(errors="replace") or "{}")

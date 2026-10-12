@@ -4,6 +4,9 @@ One entry per update zip, newest first. Install any update with
 `bash scripts/update.sh openSeedling-update-N.zip`; each is cumulative from
 the 4-17 baseline. The installer commits each one with the heading below.
 
+## 53 (2026-10-11): See what the camera alignment matched
+- Every Align cameras draws the two frames side by side with what matched: green lines agree on one fit, red ones were rejected, yellow dots are the detail found in each frame. It shows in Settings, Camera, under the button, whether the alignment worked or not; tap it for full size.
+
 ## 52 (2026-10-11): Camera alignment finds more matches, shows its frames
 - Align cameras matches with SIFT (ORB only where OpenCV lacks it) and a looser ratio test: about twice the matches in a thin overlap of soil and leaves.
 - The two frames it used stay viewable from links beside the button, so a failed match can be judged by eye.

@@ -4130,3 +4130,13 @@ body.onscreen * {
   width: auto;
   margin-left: 4px;
 }
+
+/* Settings, Camera: what the last Align cameras matched between the two views */
+#pairview {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 8px;
+  border: 1px solid var(--line, #33402f);
+  margin-bottom: 6px;
+}

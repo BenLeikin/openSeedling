@@ -287,6 +287,12 @@ def status_payload(authed=None):
                 else None
             ),
             "second": bool(cfg.get("usb_device2")),
+            # when the last Align cameras drew its matches (Settings shows them)
+            "align_view": (
+                int(camera_mod.ALIGN_MATCHES.stat().st_mtime)
+                if cfg.get("usb_device2") and camera_mod.ALIGN_MATCHES.exists()
+                else None
+            ),
             "stitch": (
                 {k: st.get(k) for k in ("inliers", "overlap_pct", "canvas", "at")}
                 if (st := camera_mod.stitch_of(cfg))

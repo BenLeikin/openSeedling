@@ -505,6 +505,12 @@
           <button type="button" id="pairbtn">Align cameras</button>
           <span id="pairinfo" role="status" class="fhint"></span>
         </div>
+        <div class="usbonly tzrow" id="pairviewrow" hidden>
+          <a id="pairviewlink" href="/align_frame/matches.jpg" target="_blank"><img id="pairview" alt="Camera 1 and camera 2 side by side, with the points matched between them"></a>
+          <span class="fhint">What the last Align cameras matched: green lines agree on one fit, red
+            ones were rejected, yellow dots are the detail found. Good alignment is many green lines,
+            all in the strip both cameras see. Tap to open it full size.</span>
+        </div>
         <div class="usbonly tzrow"><span class="fhint">Two cameras side by side make one
           wide photo. Pick them by USB port (the list shows each camera's port): two of
           the same model can swap /dev/video numbers at boot. Save, then Align cameras

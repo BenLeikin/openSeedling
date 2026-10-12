@@ -13,7 +13,7 @@ when the process exits.
     imgtool.py rotate  PATH DEGREES [--q N]                  (in place, atomically)
     imgtool.py flatten DEST_DIR LIST_FILE CORNERS_JSON COLS ROWS [--q N]
     imgtool.py sharpness PATH [PATH ...]                     (one score per line)
-    imgtool.py align   CAM1 CAM2                              (JSON: camera 2 -> camera 1)
+    imgtool.py align   CAM1 CAM2 [--matches OUT] [--rotate D] (JSON: camera 2 -> camera 1)
     imgtool.py stitch  CAM1 CAM2 DST H_JSON [--max-w N] [--q N]
 
 DST may be "-" to write the JPEG to stdout. Exit status 0 on success; errors
@@ -110,8 +110,71 @@ def canvas_box(H, w, h):
     return x0, y0, int(np.ceil(xs.max())) - x0, int(np.ceil(ys.max())) - y0, quad
 
 
-def align(p1, p2):
-    """Match features between the two frames and fit camera 2 -> camera 1."""
+_ROT = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180, 270: cv2.ROTATE_90_COUNTERCLOCKWISE}
+
+
+def _rot_pt(x, y, w, h, degrees):
+    """A pixel of a w x h image, after cv2.rotate by `degrees` clockwise."""
+    return {
+        90: (h - 1 - y, x),
+        180: (w - 1 - x, h - 1 - y),
+        270: (y, w - 1 - x),
+    }.get(degrees, (x, y))
+
+
+def draw_matches(p1, p2, s, k1, k2, good, mask, out, rotate=0):
+    """Camera 1 and camera 2 side by side with what matched between them:
+    green lines are matches that agree on one fit, red ones were rejected,
+    yellow dots are the detail found in each frame. Turned like the photos."""
+    frames = []
+    for p in (p1, p2):
+        img = cv2.imread(str(p))
+        frames.append(cv2.resize(img, None, fx=s, fy=s, interpolation=cv2.INTER_AREA))
+        del img
+    fw = frames[0].shape[1]
+    comp = np.hstack(frames)
+    del frames
+    for kps, dx in ((k1, 0), (k2, fw)):
+        for kp in kps:
+            cv2.circle(comp, (int(kp.pt[0] + dx), int(kp.pt[1])), 1, (0, 170, 200), -1)
+    agree = [bool(v) for v in (mask.ravel() if mask is not None else [False] * len(good))]
+    for m, ok in sorted(zip(good, agree), key=lambda g: g[1]):  # green drawn on top
+        a = tuple(int(v) for v in k1[m.trainIdx].pt)
+        b = (int(k2[m.queryIdx].pt[0] + fw), int(k2[m.queryIdx].pt[1]))
+        col = (60, 220, 60) if ok else (60, 60, 230)
+        cv2.line(comp, a, b, col, 2 if ok else 1, cv2.LINE_AA)
+        cv2.circle(comp, a, 5, col, 2)
+        cv2.circle(comp, b, 5, col, 2)
+    h, w = comp.shape[:2]
+    if rotate in _ROT:
+        comp = cv2.rotate(comp, _ROT[rotate])
+    fs = max(0.6, comp.shape[1] / 1600.0)
+
+    def label(text, x, y):
+        (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, fs, 2)
+        x, y = int(max(4, min(comp.shape[1] - tw - 4, x - tw / 2))), int(max(th + 6, y))
+        cv2.rectangle(comp, (x - 4, y - th - 6), (x + tw + 4, y + 6), (20, 26, 21), -1)
+        cv2.putText(
+            comp, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, fs, (235, 240, 230), 2, cv2.LINE_AA
+        )
+
+    for i in (0, 1):
+        # each frame's label at the top of where that frame ended up
+        cx, cy = _rot_pt(fw * i + fw / 2, h / 2, w, h, rotate)
+        half_h = h if rotate in (0, 180) else fw
+        label(f"camera {i + 1}", cx, cy - half_h / 2 + 30 * fs)
+    n_ok = sum(agree)
+    label(
+        f"{len(good)} matches, {n_ok} agree" if mask is not None else f"{len(good)} matches",
+        comp.shape[1] / 2,
+        comp.shape[0] - 14 * fs,
+    )
+    _write(comp, out, 80)
+
+
+def align(p1, p2, matches_out=None, rotate=0):
+    """Match features between the two frames and fit camera 2 -> camera 1.
+    With matches_out, also draws what matched (draw_matches), pass or fail."""
     a = cv2.imread(str(p1), cv2.IMREAD_GRAYSCALE)
     b = cv2.imread(str(p2), cv2.IMREAD_GRAYSCALE)
     if a is None or b is None:
@@ -132,11 +195,19 @@ def align(p1, p2):
     else:
         det, norm = cv2.ORB_create(nfeatures=5000), cv2.NORM_HAMMING
     (k1, d1), (k2, d2) = (det.detectAndCompute(x, None) for x in small)
+    del small
+
+    def drawn(good, mask=None):
+        if matches_out:
+            draw_matches(p1, p2, s, k1, k2, good, mask, matches_out, rotate)
+
     if d1 is None or d2 is None or len(k1) < MIN_INLIERS or len(k2) < MIN_INLIERS:
+        drawn([])
         return {"ok": False, "error": "too little detail in the frames to match (is the light on?)"}
     pairs = cv2.BFMatcher(norm).knnMatch(d2, d1, k=2)
     good = [m for m, n in (p for p in pairs if len(p) == 2) if m.distance < 0.8 * n.distance]
     if len(good) < MIN_INLIERS:
+        drawn(good)
         return {
             "ok": False,
             "error": f"only {len(good)} matching points; the views need to overlap more "
@@ -146,6 +217,7 @@ def align(p1, p2):
     dst = np.float32([k1[m.trainIdx].pt for m in good])
     Hs, mask = cv2.findHomography(src, dst, cv2.RANSAC, 4.0)
     inliers = int(mask.sum()) if mask is not None else 0
+    drawn(good, mask)
     if Hs is None or inliers < MIN_INLIERS:
         return {
             "ok": False,
@@ -291,7 +363,7 @@ def main(argv):
             print(float(cv2.Laplacian(img, cv2.CV_64F).var()))
     elif op == "align":
         cam1, cam2 = pos
-        print(json.dumps(align(cam1, cam2)))
+        print(json.dumps(align(cam1, cam2, opt.get("matches"), int(opt.get("rotate", 0)))))
     elif op == "stitch":
         cam1, cam2, dst, H = pos
         _write(stitch(cam1, cam2, json.loads(H), opt.get("max-w")), dst, q)

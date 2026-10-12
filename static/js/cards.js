@@ -606,9 +606,27 @@ export async function alignCameras() {
     say('request failed');
   }
 }
+let pairViewAt = null;
+function showPairView(at) {
+  const row = document.getElementById('pairviewrow'),
+    img = document.getElementById('pairview'),
+    link = document.getElementById('pairviewlink');
+  if (!row || !img) return;
+  if (!at) {
+    row.hidden = true;
+    return;
+  }
+  if (at !== pairViewAt) {
+    pairViewAt = at;
+    img.src = `/align_frame/matches.jpg?t=${at}`;
+    if (link) link.href = img.src;
+  }
+  row.hidden = false;
+}
 export function renderCameraPair(j) {
   const info = document.getElementById('pairinfo');
   const cam = j.camera || {};
+  showPairView(cam.align_view);
   const btn = document.getElementById('pairbtn');
   if (btn) btn.disabled = !cam.second;
   if (!info) return;

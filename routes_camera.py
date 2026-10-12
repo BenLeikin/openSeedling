@@ -429,13 +429,19 @@ def api_align_cameras():
         return jsonify(ok=True, **align_job)
 
 
-@routes.app.route("/align_frame/<int:n>.jpg")
+@routes.app.route("/align_frame/<name>.jpg")
 @routes.require_auth
-def align_frame(n):
-    """Camera 1's or camera 2's frame from the last Align cameras."""
-    if n not in (1, 2) or not camera_mod.ALIGN_FRAMES[n - 1].exists():
+def align_frame(name):
+    """From the last Align cameras: camera 1's or camera 2's frame, or the two
+    side by side with what matched between them ("matches")."""
+    path = {
+        "1": camera_mod.ALIGN_FRAMES[0],
+        "2": camera_mod.ALIGN_FRAMES[1],
+        "matches": camera_mod.ALIGN_MATCHES,
+    }.get(name)
+    if path is None or not path.exists():
         return "no frame yet", 404
-    r = send_file(camera_mod.ALIGN_FRAMES[n - 1], mimetype="image/jpeg")
+    r = send_file(path, mimetype="image/jpeg")
     r.headers["Cache-Control"] = "no-store"
     return r
 
