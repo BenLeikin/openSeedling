@@ -3286,6 +3286,7 @@ def _two_cameras():
                 "grid",
                 "roi",
                 "cam_rotate",
+                "cam2_rotate",
                 "camera_enabled",
             )
         }
@@ -3316,7 +3317,10 @@ def _two_cameras():
         np.float32([[600, 0], [1800, 0], [1800, 900], [600, 900]]),
         np.float32([[8, 12], [1195, 0], [1200, 900], [0, 885]]),
     )
-    frames["/dev/cam2"] = (cv2.warpPerspective(scene, M, (1200, 900)) * 0.9).astype(np.uint8)
+    # camera 2 is mounted upside down: its own rotation (cam2_rotate) turns it back
+    frames["/dev/cam2"] = cv2.rotate(
+        (cv2.warpPerspective(scene, M, (1200, 900)) * 0.9).astype(np.uint8), cv2.ROTATE_180
+    )
     shots = []
 
     def fake_capture(cfg, out, w, h, warmup=None, dev=None):
@@ -3337,7 +3341,8 @@ def _two_cameras():
                 usb_width=1200,
                 usb_height=900,
                 cam_stitch={},
-                cam_rotate=180,
+                cam_rotate=0,
+                cam2_rotate=180,
                 roi="0.1,0.1,0.5,0.5",
                 grid=dict(
                     config.settings.get("grid") or {},
@@ -3389,9 +3394,9 @@ def _two_cameras():
             "the two frames Align cameras used, and a picture of what matched between them, "
             "can be opened from Settings to judge the overlap",
         )
-        # the grid stays over the same part of the trays (rotated 180 here)
+        # the grid stays over the same part of the trays
         back = camera_mod.regrid_for_stitch(
-            {"grid": {"corners": corners}, "cam_rotate": 180, "usb_width": 1200, "usb_height": 900},
+            {"grid": {"corners": corners}, "cam_rotate": 0, "usb_width": 1200, "usb_height": 900},
             st,
             None,
         )
@@ -3433,6 +3438,13 @@ def _two_cameras():
             started.get("started") and job.get("running") is False and job["result"]["ok"],
             "Align cameras from the page runs in the background (a proxy would cut off a "
             f"minute-long request) and the page polls for the outcome ({job.get('result', {}).get('inliers')} points)",
+        )
+        check(
+            'name="cam2_rotate"' in html
+            and st.get("rotations") == [0, 180]
+            and not camera_mod.stitch_of(dict(cfg, cam2_rotate=0)),
+            "camera 2 has its own rotation, applied before matching and stitching (a camera "
+            "mounted the other way round); changing it calls for a new alignment",
         )
         # a different second camera: the alignment no longer applies
         r = c.post("/api/settings", json={"usb_device2": "/dev/video4"}).get_json()

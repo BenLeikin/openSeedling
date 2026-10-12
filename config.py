@@ -95,6 +95,7 @@ DEFAULTS = {
     "usb_auto_white_balance": False,
     "usb_white_balance_temperature": 4600,
     "cam_rotate": 0,  # 0/90/180/270, applied to captures and analysis
+    "cam2_rotate": 0,  # the same for camera 2, which may be mounted differently
     "timelapse_flatten": True,  # show the snapshot, thumbnails and video flattened
     "cam_rectify": True,  # flatten the tray plane before canopy analysis
     "camera_enabled": False,  # master switch for all camera features (photos,
@@ -735,6 +736,7 @@ FORM = {
     "capture_brightness": {"kind": "int", "min": 1, "max": 100, "clamp": False},
     "roi": {"kind": "text", "check": "_v_roi"},
     "cam_rotate": {"kind": "choice", "choices": [0, 90, 180, 270], "ints": True},
+    "cam2_rotate": {"kind": "choice", "choices": [0, 90, 180, 270], "ints": True},
     "timelapse_flatten": {"kind": "bool"},
     "cam_rectify": {"kind": "bool"},
     "alerts_enabled": {"kind": "bool"},

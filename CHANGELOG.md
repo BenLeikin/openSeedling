@@ -4,6 +4,9 @@ One entry per update zip, newest first. Install any update with
 `bash scripts/update.sh openSeedling-update-N.zip`; each is cumulative from
 the 4-17 baseline. The installer commits each one with the heading below.
 
+## 54 (2026-10-11): Rotation per camera
+- Settings, Camera: Rotate camera 2, beside Rotate photo (now camera 1's). Each camera's frames are turned the right way up before they are matched and stitched, so the two can be mounted different ways round. Changing either rotation calls for a new alignment.
+
 ## 53 (2026-10-11): See what the camera alignment matched
 - Every Align cameras draws the two frames side by side with what matched: green lines agree on one fit, red ones were rejected, yellow dots are the detail found in each frame. It shows in Settings, Camera, under the button, whether the alignment worked or not; tap it for full size.
 

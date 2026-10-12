@@ -304,8 +304,8 @@ def api_preview():
             if not ok:
                 camera_mod._camera_fail(err)
                 return jsonify(ok=False, error=err), 200
-            # rotation only: the corners are dragged on the unflattened scene
-            camera_mod._rotate_file(tmp, int(cfg_snapshot.get("cam_rotate", 0)))
+            # already turned the right way up; the corners are dragged on the
+            # unflattened scene
         else:
             cmd = [
                 "rpicam-still",

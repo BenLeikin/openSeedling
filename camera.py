@@ -464,9 +464,17 @@ def stitch_of(cfg):
         return None
     if not st.get("h") or st.get("devices") != [cfg.get("usb_device"), cfg.get("usb_device2")]:
         return None
-    if st.get("size") != [int(cfg.get("usb_width", 2048)), int(cfg.get("usb_height", 1536))]:
+    if st.get("capture") != [int(cfg.get("usb_width", 2048)), int(cfg.get("usb_height", 1536))]:
+        return None
+    if st.get("rotations") != cam_turns(cfg):
         return None
     return st
+
+
+def cam_turns(cfg):
+    """How far each camera's frames are turned, clockwise: camera 1 by Rotate
+    photo, camera 2 by its own setting (the two can be mounted differently)."""
+    return [int(cfg.get("cam_rotate", 0) or 0), int(cfg.get("cam2_rotate", 0) or 0)]
 
 
 STITCH_MAX_W = 3840  # the stitched frame's widest; bounds memory on the Zero
@@ -477,18 +485,24 @@ ALIGN_MATCHES = PREVIEW_PATH.with_name("align_matches.jpg")
 
 
 def _usb_capture_view(cfg, out_path, width, height, warmup=None):
-    """One frame of the whole view: camera 1 alone, or both cameras stitched
-    when a second camera is set and aligned. Until the pair is aligned the
-    photos stay camera 1's, so the timelapse never mixes the two kinds."""
+    """One frame of the whole view, the right way up: camera 1 alone, or both
+    cameras, each turned by its own rotation, stitched when a second camera is
+    set and aligned. Until the pair is aligned the photos stay camera 1's, so
+    the timelapse never mixes the two kinds."""
     st = stitch_of(cfg)
+    turns = cam_turns(cfg)
     if not st:
-        return _usb_capture(cfg, out_path, width, height, warmup=warmup)
+        ok, err = _usb_capture(cfg, out_path, width, height, warmup=warmup)
+        if ok:
+            _rotate_file(out_path, turns[0])
+        return ok, err
     parts = [Path(f"{out_path}.cam{i}.jpg") for i in (1, 2)]
     try:
         for i, (dev, part) in enumerate(zip(st["devices"], parts), 1):
             ok, err = _usb_capture(cfg, part, width, height, warmup=warmup, dev=dev)
             if not ok:
                 return False, f"camera {i}: {err}"
+            _rotate_file(part, turns[i - 1])
         r = imgtool(
             [
                 "stitch",
@@ -510,19 +524,6 @@ def _usb_capture_view(cfg, out_path, width, height, warmup=None):
             part.unlink(missing_ok=True)
 
 
-def _rot_frac(pt, degrees, inverse=False):
-    """A point as fractions of a frame, through the capture rotation (or back)."""
-    x, y = pt
-    d = (-int(degrees or 0)) % 360 if inverse else int(degrees or 0) % 360
-    if d == 90:
-        return [1 - y, x]
-    if d == 180:
-        return [1 - x, 1 - y]
-    if d == 270:
-        return [y, 1 - x]
-    return [x, y]
-
-
 def _frame_to_cam1(pt, st, size):
     """A point as fractions of a raw (unrotated) photo, in camera 1's pixels."""
     if not st:
@@ -541,21 +542,21 @@ def _cam1_to_frame(px, st, size):
 def regrid_for_stitch(cfg, old_st, new_st):
     """Move the grid corners from the old photo geometry to the new one, so
     the grid stays over the same part of the trays when the photos switch
-    between one camera and the stitched pair. Returns the new corners, or
-    None when there are none. (The view crop is not moved: it is reset.)"""
+    between one camera and the stitched pair. Both are laid out in camera 1's
+    frame turned the right way up. Returns the new corners, or None when
+    there are none. (The view crop is not moved: it is reset.)"""
     corners = (cfg.get("grid") or {}).get("corners")
     if not corners or len(corners) != 4:
         return None
-    rot = int(cfg.get("cam_rotate", 0) or 0)
-    here = [int(cfg.get("usb_width", 2048)), int(cfg.get("usb_height", 1536))]
+    w, h = int(cfg.get("usb_width", 2048)), int(cfg.get("usb_height", 1536))
+    here = [h, w] if int(cfg.get("cam_rotate", 0) or 0) in (90, 270) else [w, h]
     old_size = (old_st or {}).get("size") or here
     # camera 1's pixels are at the size they were captured at
     new_size = (new_st or {}).get("size") or old_size
     out = []
     for c in corners:
-        px = _frame_to_cam1(_rot_frac(c, rot, inverse=True), old_st, old_size)
-        nf = _cam1_to_frame(px, new_st, new_size)
-        out.append([round(min(1.0, max(0.0, v)), 4) for v in _rot_frac(nf, rot)])
+        nf = _cam1_to_frame(_frame_to_cam1(c, old_st, old_size), new_st, new_size)
+        out.append([round(min(1.0, max(0.0, v)), 4) for v in nf])
     return out
 
 
@@ -580,22 +581,15 @@ def align_cameras():
         return {"ok": False, "error": "the camera is busy; try again in a minute"}
     try:
         capturing = True
+        turns = cam_turns(cfg)
         for i, (dev, part) in enumerate(zip(devs, parts), 1):
             ok, err = _usb_capture(cfg, part, w, h, warmup=4, dev=dev)
             if not ok:
                 return {"ok": False, "error": f"camera {i}: {err}"}
-        r = imgtool(
-            [
-                "align",
-                parts[0],
-                parts[1],
-                "--matches",
-                ALIGN_MATCHES,
-                "--rotate",
-                int(cfg.get("cam_rotate", 0) or 0),
-            ],
-            timeout=180,
-        )
+            # each the right way up first, so the two are matched as they
+            # will be shown (and a camera mounted upside down is no obstacle)
+            _rotate_file(part, turns[i - 1])
+        r = imgtool(["align", parts[0], parts[1], "--matches", ALIGN_MATCHES], timeout=180)
         if r.returncode != 0:
             return {"ok": False, "error": killed_msg(r, "aligning") or _imgtool_err(r)}
         res = json.loads(r.stdout.decode(errors="replace") or "{}")
@@ -604,6 +598,8 @@ def align_cameras():
         st = {
             "h": res["h"],
             "size": res["size"],
+            "capture": [w, h],
+            "rotations": turns,
             "canvas": res["canvas"],
             "offset": res["offset"],
             "devices": devs,
@@ -616,7 +612,6 @@ def align_cameras():
             ["stitch", parts[0], parts[1], tmp, json.dumps(st["h"]), "--max-w", STITCH_MAX_W]
         )
         if r.returncode == 0:
-            _rotate_file(tmp, int(cfg.get("cam_rotate", 0)))
             tmp.replace(PREVIEW_PATH)
         with config.settings_lock:
             old = stitch_of(config.settings)
@@ -635,11 +630,7 @@ def align_cameras():
         return res
     finally:
         # the two frames stay for Settings to show, so a failed match can be
-        # judged by eye; turned the right way up for viewing (aligning and
-        # stitching used them as captured)
-        for part in parts:
-            if part.exists():
-                _rotate_file(part, int(cfg.get("cam_rotate", 0)))
+        # judged by eye
         capturing = False
         capture_lock.release()
         config.wake.set()
@@ -717,8 +708,7 @@ def take_photo(cfg, now, manual=False):
             ok, err = _usb_capture_view(
                 cfg, fname, int(cfg.get("usb_width", 2048)), int(cfg.get("usb_height", 1536))
             )
-            if ok:
-                _postprocess_file(fname, cfg)
+            if ok:  # already the right way up
                 make_thumb(fname, cfg)
                 saved = fname
                 _camera_ok()

@@ -776,6 +776,9 @@ photo as if it came from one wide camera.
   camera or the capture size drops the alignment and moves the grid back.
 * Redo Align cameras whenever a camera moves. The fit assumes the trays are
   roughly flat; tall plants in the overlap can show a slight double edge.
+* Each camera has its own rotation (Rotate photo for camera 1, Rotate camera
+  2), applied to its frames before matching and stitching, so the two can be
+  mounted different ways round. Changing either calls for a new alignment.
 * The settings (exposure, focus, white balance) apply to both cameras; the
   focus sweep scores camera 1.
 * `bash scripts/usbcheck.sh` checks the link speed and capture size of both.
