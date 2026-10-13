@@ -3240,6 +3240,105 @@ def _kiosk_bringup():
     )
 
 
+def _external_display():
+    """Settings, External display: rotation and mode follow the settings while
+    the kiosk runs, and the summary's charts and night screen are set there."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "display_watch", APP / "scripts" / "display_watch.py"
+    )
+    dw = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(dw)
+    sample = """HDMI-A-1 "Unknown (HDMI-A-1)"
+  Enabled: yes
+  Modes:
+    1024x600 px, 60.000000 Hz (preferred)
+    1920x1080 px, 60.000000 Hz (current)
+  Position: 0,0
+  Transform: 90
+  Scale: 1.000000
+"""
+    st = dw.parse(sample)
+    check(
+        st["output"] == "HDMI-A-1"
+        and st["modes"] == ["1024x600@60", "1920x1080@60"]
+        and st["current"] == "1920x1080@60"
+        and st["preferred"] == "1024x600@60"
+        and st["transform"] == 90,
+        f"the display watcher reads wlr-randr: output, modes, the one in use, rotation ({st})",
+    )
+    # a fake wlr-randr that reports the sample and records what it is told
+    d = WORK / "fakerandr"
+    d.mkdir(exist_ok=True)
+    calls = d / "calls"
+    (d / "wlr-randr").write_text(
+        f"#!/bin/sh\n[ $# -gt 0 ] && echo \"$@\" >> {calls}\ncat <<'EOF'\n{sample}EOF\n"
+    )
+    (d / "wlr-randr").chmod(0o755)
+    real_cfg, real_state = dw.CONFIG, dw.STATE
+    dw.CONFIG, dw.STATE = d / "config.json", d / "display_state.json"
+    path = os.environ["PATH"]
+    os.environ["PATH"] = f"{d}:{path}"
+    try:
+        dw.CONFIG.write_text(json.dumps({"screen_rotate": "", "screen_mode": ""}))
+        dw.step(90, log=lambda m: None)
+        quiet = calls.read_text() if calls.exists() else ""
+        dw.CONFIG.write_text(json.dumps({"screen_rotate": "180", "screen_mode": "1024x600"}))
+        dw.step(90, log=lambda m: None)
+        told = calls.read_text().strip()
+        dw.CONFIG.write_text(json.dumps({"screen_mode": "800x480"}))
+        bad = dw.step(90, log=lambda m: None)
+        saved = json.loads(dw.STATE.read_text())
+    finally:
+        os.environ["PATH"] = path
+        dw.CONFIG, dw.STATE = real_cfg, real_state
+    check(
+        quiet == ""
+        and told == "--output HDMI-A-1 --mode 1024x600@60Hz --transform 180"
+        and "not one of this display's modes" in (bad or {}).get("error", "")
+        and saved.get("modes"),
+        f"it changes only what differs from Settings ({told!r}), refuses a mode the display "
+        "lacks, and writes what it sees for Settings to show",
+    )
+    sess = (APP / "scripts" / "kiosk-session.sh").read_text()
+    html = c.get("/").get_data(as_text=True)
+    js = page_js()
+    sjs = Code((APP / "static" / "screen.js").read_text())
+    r = c.get("/api/display").get_json()
+    lite = c.get("/api/status?lite=1").get_json()["settings"]
+    check(
+        'display_watch.py" &' in sess
+        and all(
+            f'name="{k}"' in html
+            for k in (
+                "screen_rotate",
+                "screen_mode",
+                "screen_chart_s",
+                "screen_night",
+                "screen_back_min",
+            )
+        )
+        and "/api/display" in js
+        and "screen_back_min" in js
+        and "screen_chart_" in sjs
+        and "screen_night" in sjs
+        and "kiosk" in r
+        and lite.get("screen_chart_s") == 15
+        and lite.get("screen_night") == "off",
+        "Settings has an External display section (rotation, mode, chart timing and choice, "
+        "the dashboard's return time, a night screen), and the summary gets those settings",
+    )
+    try:
+        config._v_screen_mode("1024x600@60")
+        config._v_screen_mode("")
+        config._v_screen_mode("big")
+        ok = False
+    except ValueError:
+        ok = True
+    check(ok, "a display mode must look like 1024x600 or 1024x600@60, or be blank")
+
+
 def _lux_range():
     """The BH1750 read at most 27,306 lx (11 Oct): a 250 W fixture passed that
     at 19% of its power, the sweep took that for full output, and the
@@ -3677,7 +3776,18 @@ def _settings_layout():
     }
     sec = lambda t: form[form.index(f"<summary><h3>{t}</h3>") :]
     check(
-        titles == ["Light", "Climate", "Watering", "Camera", "Setups", "Trays", "Alerts", "System"]
+        titles
+        == [
+            "Light",
+            "Climate",
+            "Watering",
+            "Camera",
+            "External display",
+            "Setups",
+            "Trays",
+            "Alerts",
+            "System",
+        ]
         and {
             "Fixture",
             "Schedule",
@@ -3696,7 +3806,7 @@ def _settings_layout():
         and len(re.findall(r'name="(\w+)"', form)) >= 78
         and 'name="probe_median_depth"' in sec("Watering").split("</details>")[0]
         and 'name="probe_median_depth"' not in sec("Alerts").split("</details>")[0],
-        f"settings are in eight sections with subheadings, every field still present "
+        f"settings are in nine sections with subheadings, every field still present "
         f"({len(names)} fields), sensor smoothing now under Watering",
     )
 
@@ -3863,7 +3973,8 @@ def _optimizations():
         len(lit) < len(full)
         and "quality" not in litej
         and "curve" not in (litej.get("day_light") or {})
-        and set(litej["settings"]) == {"units", "probe_cal", "trays"}
+        and set(litej["settings"]) - {k for k in litej["settings"] if k.startswith("screen_")}
+        == {"units", "probe_cal", "trays"}
         and "fetch('/api/status?lite=1'" in sjs,
         f"the touchscreen fetches a lite status ({len(lit)} bytes against {len(full)})",
     )
@@ -4237,6 +4348,7 @@ run("Sensors per tray", _tray_sensor_map)
 run("USB link", _usb_link)
 run("Two cameras", _two_cameras)
 run("Light sensor range", _lux_range)
+run("External display", _external_display)
 run("Settings layout", _settings_layout)
 run("Settings field definitions", _form_definitions)
 run("Dashboard modules", _page_modules)

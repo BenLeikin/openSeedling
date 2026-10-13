@@ -303,6 +303,22 @@ app captures at, a touchscreen is seen, and there was no undervoltage. A
 camera on a slower link also raises the "Camera on a slow USB link" alert and
 shows on the touchscreen's attention line.
 
+### External display settings
+
+Settings, External display sets up the touchscreen from the dashboard:
+
+* **Rotation** and **Display mode**: `scripts/display_watch.py` runs inside the
+  kiosk session (started by `kiosk-session.sh`, it ends with the browser) and
+  applies them with `wlr-randr` within a few seconds. It also writes what the
+  display reports (its modes, the one in use, the rotation) to
+  `display_state.json`, which the section shows. "As installed" keeps the
+  `kiosk.sh install --rotate` angle; a blank mode leaves the display's own
+  choice. A panel that is fed a larger mode than its own scales it down, which
+  costs the Pi memory and drawing time for nothing.
+* **Summary screen**: how often the charts turn, which charts are shown, how
+  long the full dashboard stays up untouched before returning to the summary,
+  and a dark screen while every light is off (tap to wake for a minute).
+
 ### Sensors per tray
 
 Settings, Setups lists each tray under its setup with a **Moisture** probe, a

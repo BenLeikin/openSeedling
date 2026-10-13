@@ -76,6 +76,17 @@ DEFAULTS = {
     "sunrise_offset_min": 0,  # negative starts before sunrise
     "sunset_offset_min": 0,  # positive runs past sunset
     "camera_backend": "rpicam",  # rpicam (CSI ribbon) or usb (UVC webcam)
+    # the touchscreen kiosk (Settings, External display; scripts/display_watch.py
+    # applies rotation and mode while the kiosk runs)
+    "screen_rotate": "",  # "" = as kiosk.sh was installed, else 0/90/180/270
+    "screen_mode": "",  # "" = the display's own choice, else WxH or WxH@Hz
+    "screen_chart_s": 15,  # summary charts turn this often
+    "screen_chart_soil": True,
+    "screen_chart_moisture": True,
+    "screen_chart_light": True,
+    "screen_chart_air": True,
+    "screen_back_min": 3,  # the full dashboard returns to the summary after this
+    "screen_night": "off",  # "dim": a dark screen while every light is off
     "usb_device": "/dev/video0",
     # a second camera beside the first ("" for none); photos are the two
     # stitched once aligned (Settings, Camera, Align cameras -> cam_stitch)
@@ -495,6 +506,13 @@ def _v_usb_device(v):
     return v
 
 
+def _v_screen_mode(v):
+    v = str(v or "").strip()
+    if v and not re.fullmatch(r"\d{3,5}x\d{3,5}(@\d{2,3}(\.\d+)?)?", v):
+        raise ValueError("must look like 1024x600 or 1024x600@60, or blank")
+    return v
+
+
 def _v_usb_device2(v):
     v = str(v or "").strip()
     return _v_usb_device(v) if v else ""
@@ -716,6 +734,15 @@ FORM = {
     "auto_wet_cal": {"kind": "bool"},
     "auto_wet_cal_max_move": {"kind": "float", "min": 0.01, "max": 1.0, "step": "0.01"},
     "camera_backend": {"kind": "choice", "choices": ["rpicam", "usb"]},
+    "screen_rotate": {"kind": "choice", "choices": ["", "0", "90", "180", "270"]},
+    "screen_mode": {"kind": "text", "check": "_v_screen_mode"},
+    "screen_chart_s": {"kind": "int", "min": 5, "max": 600},
+    "screen_chart_soil": {"kind": "bool"},
+    "screen_chart_moisture": {"kind": "bool"},
+    "screen_chart_light": {"kind": "bool"},
+    "screen_chart_air": {"kind": "bool"},
+    "screen_back_min": {"kind": "int", "min": 1, "max": 60},
+    "screen_night": {"kind": "choice", "choices": ["off", "dim"]},
     "usb_device": {"kind": "text", "check": "_v_usb_device"},
     "usb_device2": {"kind": "text", "check": "_v_usb_device2"},
     "usb_width": {"kind": "int", "min": 160, "max": 4096},

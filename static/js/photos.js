@@ -9,6 +9,7 @@
 // not flattened (a flattened photo is already just the tray).
 import { sensorData, sensorMeta, set_units, tDisp, tFromF, tToF, tUnit } from './charts.js';
 import { esc } from './trays.js';
+import { S } from './light.js';
 import { applyTheme } from './devices.js';
 import { gridEditable, refresh, resetTimelapse } from './grid.js';
 import { restartStream } from './live.js';
@@ -722,13 +723,18 @@ export function start() {
     b.className = 'kioskback';
     b.textContent = '\u2190 Summary';
     document.addEventListener('DOMContentLoaded', () => document.body.appendChild(b));
-    let t = setTimeout(go, 180000);
+    // Settings, External display: how long untouched before going back
+    const wait = () => {
+      const m = Number(((S && S.settings) || {}).screen_back_min);
+      return (m >= 1 ? m : 3) * 60000;
+    };
+    let t = setTimeout(go, wait());
     ['pointerdown', 'touchstart', 'keydown', 'scroll'].forEach(ev =>
       addEventListener(
         ev,
         () => {
           clearTimeout(t);
-          t = setTimeout(go, 180000);
+          t = setTimeout(go, wait());
         },
         { passive: true }
       )

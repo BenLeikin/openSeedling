@@ -531,6 +531,45 @@ export function renderFocus(j) {
   }
 }
 // ---- two cameras: pick by USB port, align, show whether photos are stitched ----
+// ---- the touchscreen: what the kiosk reports, and its modes to pick from ----
+export async function loadDisplay() {
+  const info = document.getElementById('dispinfo');
+  const sel = document.querySelector('.modepick');
+  try {
+    const j = await (await fetch('/api/display', { cache: 'no-store' })).json();
+    const d = j.display;
+    const rot = d ? (d.transform ? `turned ${d.transform}\u00b0` : 'not turned') : '';
+    if (info) {
+      if (j.kiosk !== 'active')
+        info.textContent =
+          j.kiosk === 'unknown'
+            ? 'Could not check the touchscreen kiosk.'
+            : j.kiosk === 'inactive'
+              ? 'The touchscreen kiosk is not running (install it with scripts/kiosk.sh install).'
+              : `The touchscreen kiosk is ${j.kiosk}.`;
+      else if (!d || !d.fresh)
+        info.textContent =
+          'The kiosk is running but has not reported the display yet (it does within a few seconds of starting).';
+      else
+        info.textContent =
+          `${d.output}: ${d.current || 'unknown mode'}, ${rot}` +
+          (d.preferred && d.preferred !== d.current ? `; the display prefers ${d.preferred}` : '') +
+          (d.error ? `. ${d.error}` : '.');
+    }
+    if (sel && d && d.modes) {
+      sel.innerHTML =
+        '<option value="">pick a mode\u2026</option><option value="-">the display\u2019s choice</option>' +
+        d.modes
+          .map(
+            m =>
+              `<option value="${esc(m)}">${esc(m.replace('@', ' at ') + ' Hz')}${m === d.preferred ? ' (preferred)' : ''}${m === d.current ? ' (in use)' : ''}</option>`
+          )
+          .join('');
+    }
+  } catch (e) {
+    if (info) info.textContent = 'could not ask the controller about the display';
+  }
+}
 export async function loadCameraList(ev) {
   const sel = ev && ev.currentTarget;
   if (!sel || sel.dataset.loaded) return;
@@ -764,6 +803,28 @@ export function initLight() {
   {
     const pb = document.getElementById('pairbtn');
     if (pb) pb.addEventListener('click', alignCameras);
+    const ms = document.querySelector('.modepick');
+    if (ms) {
+      ms.addEventListener('focus', loadDisplay);
+      ms.addEventListener('change', () => {
+        if (!ms.value) return;
+        const f = document.getElementById('cfgform');
+        f.elements['screen_mode'].value = ms.value === '-' ? '' : ms.value;
+        formDirty.add('screen_mode'); // set by code: no input event
+        ms.value = '';
+      });
+      // the section shows what the kiosk reports, kept current while it is open
+      const sec = ms.closest('details');
+      let tick = null;
+      if (sec)
+        sec.addEventListener('toggle', () => {
+          clearInterval(tick);
+          if (sec.open) {
+            loadDisplay();
+            tick = setInterval(loadDisplay, 10000);
+          }
+        });
+    }
     document.querySelectorAll('.campick').forEach(sel => {
       sel.addEventListener('focus', loadCameraList);
       sel.addEventListener('pointerdown', loadCameraList);

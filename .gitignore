@@ -15,6 +15,7 @@ preview.tmp.jpg
 align_cam1.jpg
 align_cam2.jpg
 align_matches.jpg
+display_state.json
 
 # setup.sh writes pins and secrets here
 .env

@@ -597,6 +597,49 @@
     </details>
 
     <details class="fgroup">
+      <summary><h3>External display</h3></summary>
+      <h4 class="fsub">Screen</h4>
+      <div class="frow">
+        <div class="tzrow"><span id="dispinfo" role="status" class="fhint">The touchscreen on the
+          Pi's HDMI port (scripts/kiosk.sh install).</span></div>
+        <div><label>Rotation
+          <select name="screen_rotate">
+            <option value="">As installed</option>
+            <option value="0">None</option>
+            <option value="90">90&deg;</option>
+            <option value="180">180&deg;</option>
+            <option value="270">270&deg;</option>
+          </select></label></div>
+        <div><label>Display mode (blank = the display's choice)
+          <input name="screen_mode" type="text" placeholder="1024x600">
+          <select class="modepick"><option value="">pick a mode&hellip;</option></select></label></div>
+        <div class="tzrow"><span class="fhint">Rotation and mode change on the screen within a few
+          seconds. The panel's own size (often listed as preferred) is the sharpest and the
+          lightest for the Pi; a larger mode is scaled down by the panel. If taps land in the
+          wrong place after turning it, run <code>bash scripts/kiosk.sh touch-rotate</code> with
+          the new angle.</span></div>
+      </div>
+      <h4 class="fsub">Summary screen</h4>
+      <div class="frow">
+        <div><label>Charts turn every (s) <input {{ fa('screen_chart_s') }}></label></div>
+        <div><label>Back to the summary after (min) <input {{ fa('screen_back_min') }}></label></div>
+        <div class="checkrow"><input type="checkbox" name="screen_chart_soil" id="scsoil">
+          <label for="scsoil">Soil temperature chart</label></div>
+        <div class="checkrow"><input type="checkbox" name="screen_chart_moisture" id="scmoist">
+          <label for="scmoist">Soil moisture chart</label></div>
+        <div class="checkrow"><input type="checkbox" name="screen_chart_light" id="sclight">
+          <label for="sclight">Light chart</label></div>
+        <div class="checkrow"><input type="checkbox" name="screen_chart_air" id="scair">
+          <label for="scair">Air chart</label></div>
+        <div><label>When the lights are off
+          <select name="screen_night">
+            <option value="off">Show the summary</option>
+            <option value="dim">Dark screen (tap to wake)</option>
+          </select></label></div>
+      </div>
+    </details>
+
+    <details class="fgroup">
       <summary><h3>Setups</h3></summary>
       <p class="fhint">Separate grow areas, each under its own light. Give each a light
         fixture, the light sensor under it, a daily light target, and the sensors

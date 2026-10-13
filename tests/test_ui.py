@@ -629,7 +629,15 @@ def screen(pw, base, app):
     errs = []
     page.on("pageerror", lambda e: errs.append(str(e)))
     page.goto(base + "/screen")
-    page.wait_for_timeout(2500)
+    page.wait_for_timeout(1500)
+    # the Settings round trip earlier flipped every field, the night screen
+    # and chart choices among them: start the summary from the defaults
+    page.evaluate(
+        """async()=>{ await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
+           body: JSON.stringify({screen_night:'off', screen_chart_soil:true, screen_chart_moisture:true,
+             screen_chart_light:true, screen_chart_air:true, screen_chart_s:15})}); await refresh(); }"""
+    )
+    page.wait_for_timeout(1000)
     # it must fit with nothing cut off on a shorter screen or with a long
     # attention line too: the chart shrinks, the page tightens, the chart goes last
     fits = []
@@ -723,6 +731,25 @@ def screen(pw, base, app):
         and back["title"] == soil["title"],
         "a tap turns the chart: soil moisture per tray, light, air with humidity, then back "
         f"({[x['title'] for x in seen]}, moisture lines {wet['lines']})",
+    )
+    got = page.evaluate(
+        """()=>{ S.settings=Object.assign({},S.settings,{screen_chart_light:false}); chartIdx=0; draw();
+           const dots=document.querySelectorAll('#dots i').length;
+           S.settings.screen_chart_light=true;
+           S.settings.screen_night='dim'; S.brightness=0; S.light2=Object.assign({},S.light2,{level:0});
+           draw(); const dark=!document.getElementById('night').hidden;
+           S.settings.screen_night='off'; draw(); const off=document.getElementById('night').hidden;
+           S.settings.screen_night='dim'; draw();
+           return {dots, dark, off}; }"""
+    )
+    page.click("#night")
+    page.wait_for_timeout(200)
+    woke = page.evaluate("()=>document.getElementById('night').hidden")
+    page.evaluate("()=>{ S.settings.screen_night='off'; S.brightness=80; draw(); }")
+    check(
+        got["dots"] == 3 and got["dark"] and got["off"] and woke,
+        f"External display settings reach the summary: a chart left out is skipped, the dark "
+        f"screen shows while the lights are off and a tap wakes it ({got}, woke {woke})",
     )
     check(
         all(f["size"] > 16 and 20 <= f["share"] <= 40 and not f["over"] for f in big),

@@ -446,6 +446,28 @@ def align_frame(name):
     return r
 
 
+@routes.app.route("/api/display")
+@routes.require_auth
+def api_display():
+    """The touchscreen as the kiosk last reported it (display_watch.py writes
+    it every few seconds while the kiosk runs), and whether the kiosk runs."""
+    path = Path(__file__).with_name("display_state.json")
+    state = None
+    try:
+        state = json.loads(path.read_text())
+        state["fresh"] = time.time() - float(state.get("at") or 0) < 60
+    except Exception:
+        pass
+    try:
+        r = subprocess.run(
+            ["systemctl", "is-active", "growlight-kiosk"], capture_output=True, text=True, timeout=5
+        )
+        active = r.stdout.strip() or "unknown"
+    except Exception:
+        active = "unknown"
+    return jsonify(kiosk=active, display=state)
+
+
 @routes.app.route("/preview.jpg")
 def preview_img():
     if not camera_mod.PREVIEW_PATH.exists():

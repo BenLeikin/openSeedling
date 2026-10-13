@@ -4,6 +4,10 @@ One entry per update zip, newest first. Install any update with
 `bash scripts/update.sh openSeedling-update-N.zip`; each is cumulative from
 the 4-17 baseline. The installer commits each one with the heading below.
 
+## 58 (2026-10-13): External display settings
+- Settings, External display: the touchscreen's rotation and display mode, applied on the screen within a few seconds (scripts/display_watch.py, started with the kiosk); what the display reports, its modes included, is shown there.
+- Also there: how often the summary's charts turn and which are shown, how long the full dashboard stays up before returning to the summary, and a dark screen while the lights are off (tap to wake).
+
 ## 57 (2026-10-12): Light sensor reads past 27,000 lx
 - The BH1750 is set to its widest range (1 lx mode, shortest measurement time): up to 121,557 lx, from 27,306. The fixture passed the old maximum at a fifth of its power, so the light response sweep took that for full output and the calibration drove the fixture at 19% when the dashboard said 100%.
 - A sweep whose readings stop at the sensor's maximum is refused instead of saved.

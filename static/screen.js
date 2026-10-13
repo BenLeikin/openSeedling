@@ -238,8 +238,28 @@ function drawAttention() {
   el.textContent = out.length ? out.join(' \u00b7 ') : 'Everything normal';
 }
 
+// Settings, External display: a dark screen while every light is off (no glow
+// in the grow space at night). A tap shows the summary for NIGHT_WAKE_MS.
+const NIGHT_WAKE_MS = 60000;
+let wokenUntil = 0;
+function drawNight() {
+  const el = $('night');
+  const dark =
+    ((S.settings || {}).screen_night || 'off') === 'dim' &&
+    (S.setups || []).length > 0 &&
+    (S.setups || []).every(su => !(lightOf(su).level > 0)) &&
+    Date.now() >= wokenUntil;
+  el.hidden = !dark;
+  if (dark) $('nightclock').textContent = $('clock').textContent;
+}
+$('night').addEventListener('click', () => {
+  wokenUntil = Date.now() + NIGHT_WAKE_MS;
+  drawNight();
+  setTimeout(() => S && drawNight(), NIGHT_WAKE_MS + 100);
+});
 function draw() {
   if (!S) return;
+  drawNight();
   drawEnv();
   drawHeat();
   drawSetups();
@@ -299,10 +319,14 @@ addEventListener('resize', () => {
 });
 
 // The chart slot shows one chart at a time and turns to the next every
-// CHART_TURN_MS, or at a tap: soil temperature with the heat mat, soil
-// moisture per tray, light, air. A chart with no data in the last day is
+// few seconds (Settings, External display: screen_chart_s), or at a tap: soil
+// temperature with the heat mat, soil moisture per tray, light, air, each of
+// which can be left out there. A chart with no data in the last day is
 // skipped. Every chart covers the last 24 hours, drawn at the box's real size.
-const CHART_TURN_MS = 15000;
+const chartTurnMs = () => {
+  const s = Number(((S && S.settings) || {}).screen_chart_s);
+  return (s >= 5 ? s : 15) * 1000;
+};
 const CHART_HOLD_MS = 60000; // a tap holds the chosen chart this long
 const TRAY_COLORS = ['#8fc196', '#7fb3d5', '#c9a0dc', '#e0a96d', '#f08a86'];
 let trend = { series: {}, at: 0 };
@@ -332,6 +356,7 @@ function chartSpecs() {
   const soil = recent(ser['temp:soil']).map(p => [p[0], tDisp(p[1])]);
   if (soil.length > 1)
     out.push({
+      id: 'soil',
       title: 'Soil temperature',
       key: [['line', '#8fc196', 'soil']]
         .concat(h.use ? [['dash', '#e8b04b', 'heat mat target']] : [])
@@ -357,6 +382,7 @@ function chartSpecs() {
   });
   if (wet.length)
     out.push({
+      id: 'moisture',
       title: 'Soil moisture',
       key: wet.map(l => ['line', l.color, l.name]).concat([['dash', '#e0bb6a', 'dry']]),
       lines: wet,
@@ -368,6 +394,7 @@ function chartSpecs() {
     lux = recent(ser.lux);
   if (ppfd.length > 1 || lux.length > 1)
     out.push({
+      id: 'light',
       title: ppfd.length > 1 ? 'Light (PPFD)' : 'Light',
       key: [['line', '#e8b04b', ppfd.length > 1 ? 'µmol/m²/s' : 'thousand lux']],
       lines: [
@@ -383,6 +410,7 @@ function chartSpecs() {
     hum = recent(ser.humidity);
   if (air.length > 1)
     out.push({
+      id: 'air',
       title: 'Air',
       key: [['line', '#7fb3d5', 'temperature']].concat(
         hum.length > 1 ? [['hbar', '', 'humidity']] : []
@@ -391,7 +419,9 @@ function chartSpecs() {
       unit: '°',
       strip: hum.length > 1 ? { pts: hum, label: ['RH'], cls: 'hum' } : null
     });
-  return out;
+  // the ones left out in Settings, External display
+  const cfg = S.settings || {};
+  return out.filter(c => cfg['screen_chart_' + c.id] !== false);
 }
 function keyHtml(key) {
   return key
@@ -533,9 +563,13 @@ $('t-trend').addEventListener('click', () => {
   chartHeldUntil = Date.now() + CHART_HOLD_MS;
   turnChart(1);
 });
+let lastTurn = Date.now();
 setInterval(() => {
-  if (Date.now() >= chartHeldUntil) turnChart(1);
-}, CHART_TURN_MS);
+  if (Date.now() >= chartHeldUntil && Date.now() - lastTurn >= chartTurnMs()) {
+    lastTurn = Date.now();
+    turnChart(1);
+  }
+}, 1000);
 addEventListener('resize', drawTrend);
 
 // ---- data ------------------------------------------------------------------
@@ -602,6 +636,7 @@ function tick() {
     hour: 'numeric',
     minute: '2-digit'
   });
+  if (!$('night').hidden) $('nightclock').textContent = $('clock').textContent;
 }
 tick();
 setInterval(tick, 1000);

@@ -9,6 +9,10 @@ fi
 # the display's modes, with the one in use marked "current", for the journal
 wlr-randr 2>&1 | sed 's/^/display: /' || true
 
+# Settings, External display: rotation and display mode follow the settings
+# while the kiosk runs (it ends with the browser below)
+python3 "$(dirname "$0")/display_watch.py" &
+
 # After a boot or a controller restart the app takes a few seconds to come up;
 # loading the page before it answers would leave an error page on screen.
 i=0
