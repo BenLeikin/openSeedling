@@ -7,7 +7,7 @@ import globals from "globals";
 export default [
   js.configs.recommended,
   {
-    files: ["static/js/**/*.js"],
+    files: ["static/js/**/*.js", "static/screen_buddy.js"],
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: "module",

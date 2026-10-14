@@ -5,6 +5,7 @@
   --line: #33402f;
   --fir: #dfe9d8;
   --leaf: #8fc196;
+  --sprout: #7fb069; /* Little Buddy (buddy.css) */
   --muted: #94a48d;
   --sun: #e8b04b;
   --good: #8fd49a;
@@ -99,6 +100,7 @@ header {
   min-width: 0;
 }
 .tile {
+  position: relative; /* Little Buddy walks inside it (buddy.css) */
   background: var(--tile);
   border: 1px solid var(--line);
   border-radius: 0.75rem;
@@ -490,4 +492,13 @@ body.notrend #t-trend {
 #night .nsub {
   font-size: 1rem;
   margin-top: 0.5rem;
+}
+
+/* Little Buddy (buddy.css) is drawn in px for the dashboard; here it scales
+   with the summary's text, so it is the same size next to the numbers on any
+   screen */
+.tile .walker {
+  width: 2.2rem;
+  height: 2.65rem;
+  bottom: 0.5rem;
 }

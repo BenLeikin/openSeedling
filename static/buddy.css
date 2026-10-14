@@ -1,0 +1,574 @@
+/* Little Buddy, shared by the dashboard (style.css) and the touchscreen summary
+   (screen.css). The colors come from the page's palette: --leaf and --sprout. */
+
+/* ---- the wandering seedling ----------------------------------------------
+   A small character that crosses one card every half minute, entering and
+   leaving behind the card's edge. It lives at z-index:-1 inside the card's
+   stacking context, so it passes behind chips, text and buttons rather than
+   over them: the occlusion is the whole point, and it is what makes it read
+   as a thing in the room rather than an overlay.
+   Drawn in the existing palette so it belongs to the same world as the sun
+   and moon in the header. */
+/* In front of the card's content now, so it is never hidden behind a chart.
+   Still clipped by the card's edges, which is what sells the entrance and the
+   exit: it comes out from behind the edge and disappears behind the far one. */
+.walkwrap {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 3;
+  border-radius: inherit;
+}
+.walker {
+  position: absolute;
+  bottom: 10px;
+  left: 0;
+  width: 30px;
+  height: 34px;
+  will-change: transform;
+}
+.walker .legs line {
+  stroke: var(--leaf);
+  stroke-width: 2.6;
+  stroke-linecap: round;
+}
+.walker .stem {
+  stroke: var(--leaf);
+  stroke-width: 2.6;
+  stroke-linecap: round;
+}
+.walker .leaf-l {
+  fill: var(--sprout);
+}
+.walker .leaf-r {
+  fill: #a8d08a;
+}
+/* Faces keep one dark ink in both themes: the bodies are mid-tones either
+   way, and the theme's text colour turned eyes and mouths pale in dark mode. */
+.walker .eye {
+  fill: #26301f;
+}
+.walker .eye-shine {
+  fill: #fff;
+}
+.walker .mouth {
+  stroke: #26301f;
+  stroke-width: 1.2;
+  stroke-linecap: round;
+  fill: none;
+}
+.walker .cheek {
+  fill: #e9a17c;
+  opacity: 0.5;
+}
+/* .arm marks whatever waves during the pause; it must not also decide the
+   colour, or it repaints a bee's wing green and overrides a ladybug's antenna.
+   Each sprite names its own arm colour below. */
+.walker .arm {
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+.walker .sarm {
+  stroke: var(--leaf);
+}
+.walker .pot {
+  fill: #cb8f6a;
+}
+.walker .pot-rim {
+  fill: #b87a56;
+}
+/* chile pepper: a ripe superhot red with a soft highlight */
+.walker .pod {
+  fill: #c9301f;
+}
+.walker .pglint {
+  stroke: #fff;
+  stroke-opacity: 0.45;
+  stroke-width: 1.1;
+  stroke-linecap: round;
+  fill: none;
+}
+.walker .calyx {
+  fill: var(--leaf);
+}
+.walker .pstem {
+  stroke: var(--leaf);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  fill: none;
+}
+.walker .peye {
+  fill: #4a1b0c;
+}
+.walker .pcheek {
+  fill: #8a1c12;
+  opacity: 0.45;
+}
+.walker .pmouth {
+  stroke: #4a1b0c;
+  stroke-width: 0.85;
+  stroke-linecap: round;
+  fill: none;
+}
+.walker .parm {
+  stroke: var(--leaf);
+}
+/* grey cat, drawn in profile */
+.walker .fur {
+  fill: #9aa8a2;
+}
+.walker .inner-ear {
+  fill: #e9a17c;
+}
+.walker .whisker {
+  stroke: #7c8a85;
+  stroke-width: 0.6;
+  stroke-linecap: round;
+  fill: none;
+}
+/* the leg classes need .legs in the selector to beat .walker .legs line,
+   which would otherwise paint every sprite's legs leaf green */
+.walker .legs .cleg {
+  stroke: #9aa8a2;
+  stroke-width: 2.4;
+}
+.walker .legs .cleg-far {
+  stroke: #7f8c87;
+}
+.walker .nose {
+  fill: #e48f8f;
+}
+.walker .cat-cheek {
+  fill: #e9a17c;
+  opacity: 0.45;
+}
+.walker .cat-mouth {
+  stroke-width: 0.6;
+}
+.walker .tail {
+  stroke: #7c8a85;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  fill: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  /* Walk in, stop, wave, walk out. One timeline with holds in the middle
+     rather than chained animations, so the three phases cannot drift apart. */
+  .walker {
+    animation: walk-across var(--walk-dur, 11s) linear forwards;
+  }
+  .walker .body {
+    animation: walk-bob 0.5s ease-in-out infinite;
+  }
+  .walker .leg-a {
+    animation: step-a 0.5s ease-in-out infinite;
+  }
+  .walker .leg-b {
+    animation: step-b 0.5s ease-in-out infinite;
+  }
+  /* legs still and arm waving only during the pause */
+  .walker.pausing .leg-a,
+  .walker.pausing .leg-b,
+  .walker.pausing .body {
+    animation: none;
+  }
+  .walker .arm {
+    transform-origin: 15px 21px;
+    opacity: 0;
+  }
+  .walker.pausing .arm {
+    opacity: 1;
+    animation: wave 0.42s ease-in-out 6;
+  }
+  /* the cat's tail is always visible and flicks rather than waves */
+  .walker .tail {
+    opacity: 1;
+  }
+  .walker.pausing .tail {
+    animation: flick 0.6s ease-in-out 4;
+  }
+  /* the bee's wings blur rather than wave, and are always visible */
+  .walker .wing {
+    opacity: 0.85;
+  }
+  .walker.pausing .wing.arm {
+    animation: buzz 0.12s linear 20;
+  }
+  @keyframes buzz {
+    0%,
+    100% {
+      transform: rotate(0deg);
+    }
+    50% {
+      transform: rotate(-14deg);
+    }
+  }
+  @keyframes flick {
+    0%,
+    100% {
+      transform: rotate(0deg);
+    }
+    50% {
+      transform: rotate(-22deg);
+    }
+  }
+  @keyframes walk-across {
+    0% {
+      transform: translateX(var(--walk-from)) scaleX(var(--walk-dir, 1));
+    }
+    36% {
+      transform: translateX(var(--walk-mid)) scaleX(var(--walk-dir, 1));
+    }
+    64% {
+      transform: translateX(var(--walk-mid)) scaleX(var(--walk-dir, 1));
+    }
+    100% {
+      transform: translateX(var(--walk-to)) scaleX(var(--walk-dir, 1));
+    }
+  }
+  /* the bob is tiny on purpose: at 30px tall, more reads as a bounce */
+  @keyframes walk-bob {
+    50% {
+      transform: translateY(-1.5px);
+    }
+  }
+  @keyframes step-a {
+    50% {
+      transform: rotate(24deg);
+    }
+  }
+  @keyframes step-b {
+    0%,
+    100% {
+      transform: rotate(24deg);
+    }
+    50% {
+      transform: rotate(0deg);
+    }
+  }
+  @keyframes wave {
+    0%,
+    100% {
+      transform: rotate(-8deg);
+    }
+    50% {
+      transform: rotate(-46deg);
+    }
+  }
+
+  /* ---- flyers (bee, ladybug) ----
+     Three layers, so no two motions share one transform and nothing snaps:
+       svg     the flight across, easing into the hover spot and out of it
+       .bob    a steady bob up and down, running the whole time
+       .flyer  the loop-the-loop, only during the pause
+     The loop rotates about a point one radius ABOVE the sprite, carrying it up,
+     over the top upside down and back down with the body following the curve.
+     Negative rotation loops forward; flipped to fly left, it mirrors. */
+  .walker.flying {
+    overflow: visible;
+    animation: fly-across var(--walk-dur, 11s) linear forwards;
+  }
+  @keyframes fly-across {
+    0% {
+      transform: translateX(var(--walk-from)) scaleX(var(--walk-dir, 1));
+      animation-timing-function: cubic-bezier(0.25, 0.6, 0.35, 1);
+    }
+    36% {
+      transform: translateX(var(--walk-mid)) scaleX(var(--walk-dir, 1));
+      animation-timing-function: linear;
+    }
+    64% {
+      transform: translateX(var(--walk-mid)) scaleX(var(--walk-dir, 1));
+      animation-timing-function: cubic-bezier(0.65, 0, 0.75, 0.4);
+    }
+    100% {
+      transform: translateX(var(--walk-to)) scaleX(var(--walk-dir, 1));
+    }
+  }
+  .walker.flying .bob {
+    animation: bob 0.8s ease-in-out infinite alternate;
+  }
+  @keyframes bob {
+    from {
+      transform: translateY(3.5px);
+    }
+    to {
+      transform: translateY(-3.5px);
+    }
+  }
+  .walker.flying .body {
+    animation: none;
+  }
+  .walker.flying .arm {
+    opacity: 1;
+    animation: none;
+  }
+  .walker.flying.pausing .arm {
+    animation: none;
+  }
+  /* each wing flaps about its own root, mirrored */
+  .walker.flying .wing-l {
+    animation: flap-l 0.09s ease-in-out infinite alternate;
+  }
+  .walker.flying .wing-r {
+    animation: flap-r 0.09s ease-in-out infinite alternate;
+  }
+  @keyframes flap-l {
+    from {
+      transform: rotate(12deg);
+    }
+    to {
+      transform: rotate(-26deg);
+    }
+  }
+  @keyframes flap-r {
+    from {
+      transform: rotate(-12deg);
+    }
+    to {
+      transform: rotate(26deg);
+    }
+  }
+  /* ladybug: the shell halves swing open about their hinge behind the head
+     and stay there, and the wings that were folded under them flap */
+  .walker.flying .elytron-l {
+    transform: rotate(50deg);
+  }
+  .walker.flying .elytron-r {
+    transform: rotate(-50deg);
+  }
+  .walker.flying .lwing-l {
+    animation: lflap-l 0.1s ease-in-out infinite alternate;
+  }
+  .walker.flying .lwing-r {
+    animation: lflap-r 0.1s ease-in-out infinite alternate;
+  }
+  @keyframes lflap-l {
+    from {
+      transform: rotate(-16deg);
+    }
+    to {
+      transform: rotate(18deg);
+    }
+  }
+  @keyframes lflap-r {
+    from {
+      transform: rotate(16deg);
+    }
+    to {
+      transform: rotate(-18deg);
+    }
+  }
+  /* the loop starts from rest and ends at rest (-360 is the same pose as 0),
+     so going into and out of it is seamless; the delay lets the flyer settle
+     from its deceleration first */
+  .walker.flying.pausing .flyer {
+    transform-origin: 15px 1px;
+    animation: loop 1.9s cubic-bezier(0.45, 0, 0.55, 1) 0.3s 1 both;
+  }
+  @keyframes loop {
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(-360deg);
+    }
+  }
+}
+#lbuddymodel {
+  width: auto;
+  margin: 0;
+  padding: 4px 8px;
+  font-size: 13px;
+}
+
+/* snail: slow walk, eyestalks instead of arms */
+.walker .foot {
+  stroke: #c9b79a;
+  stroke-width: 2.6;
+  stroke-linecap: round;
+}
+.walker .foot-pad {
+  fill: #c9b79a;
+}
+.walker .shell {
+  fill: #c58a5c;
+}
+.walker .snail-body {
+  fill: #d8c49c;
+}
+.walker .feeler {
+  stroke: #d8c49c;
+  stroke-width: 0.9;
+  stroke-linecap: round;
+}
+.walker .stalk-eye {
+  fill: #26301f;
+  stroke: #d8c49c; /* a rim of body colour keeps the eyes visible on the dark theme */
+  stroke-width: 0.4;
+}
+.walker .snail-head {
+  fill: #c9b79a;
+}
+.walker .shell-line {
+  stroke: #8a5634;
+  stroke-width: 1.1;
+  stroke-linecap: round;
+}
+.walker .legs .stalk {
+  stroke: #d8c49c;
+  stroke-width: 1.1;
+  stroke-linecap: round;
+}
+.walker .stalk-wave {
+  stroke: #d8c49c;
+  stroke-width: 1.1;
+  stroke-linecap: round;
+}
+/* seven-spot ladybug */
+.walker .shell-red {
+  fill: #d93a2b;
+}
+.walker .pronotum {
+  fill: #1f1d1b;
+}
+.walker .pron-white {
+  fill: #f4f1ea;
+}
+.walker .shell-dark {
+  fill: #c14d27;
+}
+.walker .wing-split {
+  stroke: #4a1b0c;
+  stroke-width: 0.9;
+}
+.walker .shell-edge {
+  stroke: #4a1b0c;
+  stroke-width: 0.8;
+  stroke-linecap: round;
+}
+.walker .bug-belly {
+  fill: #2f2b27;
+}
+.walker .lwing-m {
+  fill: #e6ecef;
+  fill-opacity: 0.82;
+  stroke: #b3c2c9;
+  stroke-width: 0.35;
+}
+.walker .lwing-v {
+  fill: none;
+  stroke: #b3c2c9;
+  stroke-width: 0.3;
+  stroke-linecap: round;
+}
+/* folded away under the closed shell; they only show once it opens */
+.walker .lwing {
+  opacity: 0;
+}
+.walker.flying .lwing {
+  opacity: 1;
+}
+.walker .spot {
+  fill: #1f1d1b;
+}
+/* a faint edge keeps the black head visible on the dark theme */
+.walker .head-dark {
+  fill: #2a2725;
+  stroke: #5c5853;
+  stroke-width: 0.3;
+}
+.walker .eye-white {
+  fill: #fff;
+}
+.walker .antenna {
+  stroke: #3d3a35;
+  stroke-width: 1;
+  stroke-linecap: round;
+  fill: none;
+}
+.walker .bug-leg {
+  stroke: #3d3a35;
+  stroke-width: 1.1;
+  stroke-linecap: round;
+}
+/* raindrop */
+.walker .drop {
+  fill: #8fb8c9;
+}
+.walker .glint {
+  stroke: #b9d6e2;
+  stroke-width: 1.3;
+  stroke-linecap: round;
+}
+.walker .dcheek {
+  fill: #6f9db0;
+  opacity: 0.5;
+}
+.walker .legs .drop-leg {
+  stroke: #6f9db0;
+  stroke-width: 2.2;
+}
+.walker .drop-arm {
+  stroke: #6f9db0;
+}
+/* bee */
+.walker .bee-body {
+  fill: #efb32a;
+}
+.walker .wing {
+  fill: #dfe9ef;
+  opacity: 0.85;
+  stroke: none;
+}
+.walker .band {
+  fill: #412402;
+}
+.walker .stinger {
+  fill: #412402;
+}
+.walker .beye {
+  fill: #412402;
+}
+.walker .bmouth {
+  stroke: #412402;
+  stroke-width: 0.8;
+  stroke-linecap: round;
+  fill: none;
+}
+.walker .antenna.dark {
+  stroke: #412402;
+  stroke-width: 0.9;
+}
+/* garden gnome */
+.walker .coat {
+  fill: #3f7a46;
+}
+.walker .beard {
+  fill: #f0e6d8;
+}
+.walker .face {
+  fill: #f0cdb4;
+}
+.walker .gcheek {
+  fill: #e9a17c;
+  opacity: 0.6;
+}
+.walker .hat {
+  fill: #c8392b;
+}
+.walker .hat-brim {
+  fill: #a52e22;
+}
+.walker .gnose {
+  fill: #e7a08a;
+}
+.walker .legs .boot {
+  stroke: #4a3826;
+  stroke-width: 2.2;
+}
+.walker .coat-arm {
+  stroke: #3f7a46;
+}

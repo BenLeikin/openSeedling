@@ -3,7 +3,7 @@
   "private": true,
   "description": "Development tools only (the Pi needs none of this): lint the dashboard's scripts.",
   "scripts": {
-    "lint": "eslint static/js static/screen.js"
+    "lint": "eslint static/js static/screen.js static/screen_buddy.js"
   },
   "devDependencies": {
     "@eslint/js": "^9",

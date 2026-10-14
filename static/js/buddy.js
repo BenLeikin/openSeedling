@@ -22,6 +22,9 @@ export const WALK_DUR_MS = 11000,
   PAUSE_START = 0.36,
   PAUSE_END = 0.64;
 export let walkTimer = null;
+// the boxes it may cross: the dashboard's cards, or the touchscreen summary's
+// tiles (static/screen_buddy.js sets that)
+export let walkBoxes = '.card';
 
 // Three characters, picked per outing. Each returns the SVG for one walker;
 // they share the walk cycle, so a new one is a sprite function plus a case
@@ -278,7 +281,7 @@ export function walkerSvg(model) {
 export function walkOnce() {
   // never interrupt: one seedling at a time, and none while the tab is hidden
   if (!buddyOn || document.hidden || document.querySelector('.walkwrap')) return;
-  const cards = [...document.querySelectorAll('.card')].filter(c => {
+  const cards = [...document.querySelectorAll(walkBoxes)].filter(c => {
     if (c.offsetParent === null) return false; // hidden card
     const r = c.getBoundingClientRect();
     return r.width > 200 && r.height > 90; // room to walk
@@ -330,6 +333,10 @@ export function startWalker() {
 // setters: other modules cannot assign an imported binding
 export function set_buddyOn(v) {
   buddyOn = v;
+  return v;
+}
+export function set_walkBoxes(v) {
+  walkBoxes = v;
   return v;
 }
 export function set_buddyPick(v) {

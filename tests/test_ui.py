@@ -559,6 +559,44 @@ def buddies(pw, base):
         f"buddies keep their own leg colours, dark faces on the dark theme, and the "
         f"ladybug has seven spots (one split across the halves) ({got})",
     )
+    # the same characters cross the touchscreen summary's tiles, drawn the same
+    sp = ctx.new_page()
+    sp.set_viewport_size({"width": 600, "height": 1024})
+    sp.goto(base + "/screen")
+    sp.wait_for_timeout(1500)
+    # the Settings round trip earlier flipped every switch, these among them
+    sp.evaluate(
+        """async()=>{ await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
+           body: JSON.stringify({little_buddy:true, screen_buddy:true, screen_night:'off'})});
+           await refresh(); }"""
+    )
+    sp.wait_for_timeout(500)
+    scr = sp.evaluate("""async ()=>{
+        const m = await import('/static/js/buddy.js');
+        const on = m.buddyOn, boxes = m.walkBoxes;
+        m.set_buddyPick('cat'); m.walkOnce();
+        const w = document.querySelector('.tile .walkwrap .walker');
+        const r = w && w.closest('.tile').getBoundingClientRect();
+        const out = {on, boxes, walker: !!w,
+          leg: w ? getComputedStyle(w.querySelector('.legs .cleg:not(.cleg-far)')).stroke : '',
+          inTile: !!r && r.width > 200};
+        document.getElementById('night').hidden = false;
+        document.dispatchEvent(new CustomEvent('screenstatus', {detail: S}));
+        out.night = m.buddyOn;
+        document.getElementById('night').hidden = true;
+        document.dispatchEvent(new CustomEvent('screenstatus', {detail: S}));
+        return out;
+    }""")
+    check(
+        scr["on"] is True
+        and scr["boxes"] == ".tile"
+        and scr["walker"]
+        and scr["inTile"]
+        and scr["leg"] == "rgb(154, 168, 162)"
+        and scr["night"] is False,
+        f"Little Buddy walks across the touchscreen summary's tiles, drawn as on the "
+        f"dashboard, and stays away while the night screen is up ({scr})",
+    )
     b.close()
 
 

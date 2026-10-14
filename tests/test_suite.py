@@ -3329,6 +3329,19 @@ def _external_display():
         "Settings has an External display section (rotation, mode, chart timing and choice, "
         "the dashboard's return time, a night screen), and the summary gets those settings",
     )
+    scr = c.get("/screen").get_data(as_text=True)
+    sb = (APP / "static" / "screen_buddy.js").read_text()
+    check(
+        "/static/buddy.css" in scr
+        and 'type="module" src="/static/screen_buddy.js' in scr
+        and "buddy.css" in html
+        and "set_walkBoxes('.tile')" in sb
+        and "screen_buddy" in sb
+        and ".walker {" not in (APP / "static" / "style.css").read_text()
+        and 'name="screen_buddy"' in html,
+        "Little Buddy walks on the touchscreen summary too, from the dashboard's own "
+        "module and one shared stylesheet, and can be kept off the screen",
+    )
     try:
         config._v_screen_mode("1024x600@60")
         config._v_screen_mode("")
@@ -3974,7 +3987,7 @@ def _optimizations():
         and "quality" not in litej
         and "curve" not in (litej.get("day_light") or {})
         and set(litej["settings"]) - {k for k in litej["settings"] if k.startswith("screen_")}
-        == {"units", "probe_cal", "trays"}
+        == {"units", "probe_cal", "trays", "little_buddy", "buddy_model"}
         and "fetch('/api/status?lite=1'" in sjs,
         f"the touchscreen fetches a lite status ({len(lit)} bytes against {len(full)})",
     )

@@ -10,6 +10,7 @@
 <link rel="manifest" href="/site.webmanifest">
 <meta name="theme-color" content="#f0f6ea">
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v=v) }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='buddy.css', v=v) }}">
 </head>
 <body{% if onscreen %} class="onscreen"{% endif %}>
 <header>
@@ -631,6 +632,8 @@
           <label for="sclight">Light chart</label></div>
         <div class="checkrow"><input type="checkbox" name="screen_chart_air" id="scair">
           <label for="scair">Air chart</label></div>
+        <div class="checkrow"><input type="checkbox" name="screen_buddy" id="scbuddy">
+          <label for="scbuddy">Little buddy on the screen (when it is on, under System)</label></div>
         <div><label>When the lights are off
           <select name="screen_night">
             <option value="off">Show the summary</option>

@@ -317,7 +317,10 @@ Settings, External display sets up the touchscreen from the dashboard:
   costs the Pi memory and drawing time for nothing.
 * **Summary screen**: how often the charts turn, which charts are shown, how
   long the full dashboard stays up untouched before returning to the summary,
-  and a dark screen while every light is off (tap to wake for a minute).
+  a dark screen while every light is off (tap to wake for a minute), and
+  whether Little Buddy (on under System) also walks across the summary's tiles
+  (`static/screen_buddy.js` loads the dashboard's `buddy.js`; styles in
+  `buddy.css`).
 
 ### Sensors per tray
 

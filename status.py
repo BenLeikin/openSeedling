@@ -137,6 +137,8 @@ def lite(payload):
         "units": cfg.get("units"),
         "probe_cal": cfg.get("probe_cal"),
         **{k: v for k, v in cfg.items() if k.startswith("screen_")},
+        "little_buddy": cfg.get("little_buddy"),
+        "buddy_model": cfg.get("buddy_model"),
         "trays": {
             t: {"label": (v or {}).get("label")} for t, v in (cfg.get("trays") or {}).items()
         },

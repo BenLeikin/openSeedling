@@ -4,6 +4,10 @@ One entry per update zip, newest first. Install any update with
 `bash scripts/update.sh openSeedling-update-N.zip`; each is cumulative from
 the 4-17 baseline. The installer commits each one with the heading below.
 
+## 59 (2026-10-14): Little Buddy on the touchscreen
+- Little Buddy crosses the touchscreen summary's tiles too, the same characters and walk as the dashboard, sized with the summary's text. It follows the Little Buddy setting under System, can be kept off the screen in Settings, External display, and stays away while the night screen is up.
+- Its styles moved from style.css to buddy.css, shared by both pages.
+
 ## 58 (2026-10-13): External display settings
 - Settings, External display: the touchscreen's rotation and display mode, applied on the screen within a few seconds (scripts/display_watch.py, started with the kiosk); what the display reports, its modes included, is shown there.
 - Also there: how often the summary's charts turn and which are shown, how long the full dashboard stays up before returning to the summary, and a dark screen while the lights are off (tap to wake).

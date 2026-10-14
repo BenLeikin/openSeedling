@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>openSeedling · screen</title>
 <link rel="stylesheet" href="/static/screen.css?v={{ v }}">
+<link rel="stylesheet" href="/static/buddy.css?v={{ v }}">
 </head>
 <body{% if onscreen %} class="onscreen"{% endif %}>
 <!-- The touchscreen's summary: everything at a glance on one 600 x 1024
@@ -42,5 +43,6 @@
   <a class="btn" href="/?kiosk=1">Full dashboard</a>
 </footer>
 <script src="/static/screen.js?v={{ v }}"></script>
+<script type="module" src="/static/screen_buddy.js?v={{ v }}"></script>
 </body>
 </html>

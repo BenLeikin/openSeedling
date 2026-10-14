@@ -87,6 +87,7 @@ DEFAULTS = {
     "screen_chart_air": True,
     "screen_back_min": 3,  # the full dashboard returns to the summary after this
     "screen_night": "off",  # "dim": a dark screen while every light is off
+    "screen_buddy": True,  # Little Buddy on the summary too (when it is on at all)
     "usb_device": "/dev/video0",
     # a second camera beside the first ("" for none); photos are the two
     # stitched once aligned (Settings, Camera, Align cameras -> cam_stitch)
@@ -743,6 +744,7 @@ FORM = {
     "screen_chart_air": {"kind": "bool"},
     "screen_back_min": {"kind": "int", "min": 1, "max": 60},
     "screen_night": {"kind": "choice", "choices": ["off", "dim"]},
+    "screen_buddy": {"kind": "bool"},
     "usb_device": {"kind": "text", "check": "_v_usb_device"},
     "usb_device2": {"kind": "text", "check": "_v_usb_device2"},
     "usb_width": {"kind": "int", "min": 160, "max": 4096},

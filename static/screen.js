@@ -260,6 +260,8 @@ $('night').addEventListener('click', () => {
 function draw() {
   if (!S) return;
   drawNight();
+  window.screenStatus = S; // for scripts that start after the first status
+  document.dispatchEvent(new CustomEvent('screenstatus', { detail: S }));
   drawEnv();
   drawHeat();
   drawSetups();
