@@ -4,6 +4,10 @@ One entry per update zip, newest first. Install any update with
 `bash scripts/update.sh openSeedling-update-N.zip`; each is cumulative from
 the 4-17 baseline. The installer commits each one with the heading below.
 
+## 62 (2026-10-14): Touch calibration on the screen
+- Hold a finger anywhere on the touchscreen for 3 seconds, then tap the four targets: the page works out how taps arrive (turned, mirrored, even squeezed into a corner) and corrects every tap from then on, on the summary and the full dashboard. Settings, External display shows when it was done and can reset it.
+- The status-sharing check in the test suite allows for a background status announcement landing mid-run.
+
 ## 61 (2026-10-14): Mirrored touch
 - `kiosk.sh touch-rotate` also takes 0-flip, 90-flip, 180-flip and 270-flip, for a touch layer that is mirrored relative to its picture (taps on the right landing on the left). It restarts the kiosk without waiting on its slow stop, and prints the calibration libinput now reports.
 

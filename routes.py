@@ -211,6 +211,7 @@ def index():
         fa=form_attrs,
         form_spec=config.form_spec(),
         onscreen=on_screen(),
+        touch_cal=_touch_cal(),
     )
 
 
@@ -245,7 +246,16 @@ def _changed(resp):
 @app.route("/screen")
 def screen():
     """The touchscreen's one-page summary (scripts/kiosk.sh shows it)."""
-    return render_template("screen.html", v=_asset_ver(), onscreen=on_screen())
+    return render_template(
+        "screen.html", v=_asset_ver(), onscreen=on_screen(), touch_cal=_touch_cal()
+    )
+
+
+def _touch_cal():
+    """The touchscreen's tap correction, for screen_touch.js (pages served to
+    the Pi's own screen only)."""
+    with config.settings_lock:
+        return dict(config.settings.get("screen_touch_cal") or {})
 
 
 @app.route("/favicon.ico")

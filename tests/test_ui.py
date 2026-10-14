@@ -817,6 +817,44 @@ def screen(pw, base, app):
         f"a tap with no click from the browser is clicked by screen_touch.js "
         f"({saved(app).get('fan_mode')}, rings {rings})",
     )
+    # calibration: taps that arrive mirrored and squeezed into a corner (as on
+    # the Pi) are corrected after a 3 s hold and four taps on the targets
+    tap = """([x,y,hold])=>new Promise(res=>{ const el=document.elementFromPoint(Math.max(0,x),Math.max(0,y))||document.body;
+        const t=new Touch({identifier:Date.now(), target:el, clientX:x, clientY:y});
+        el.dispatchEvent(new TouchEvent('touchstart',{touches:[t],changedTouches:[t],bubbles:true,cancelable:true}));
+        setTimeout(()=>{ el.dispatchEvent(new TouchEvent('touchend',{touches:[],changedTouches:[t],bubbles:true,cancelable:true})); res(); }, hold); })"""
+    distort = lambda x, y: (150 - 0.15 * x, 30 + 0.05 * y)
+    page.evaluate(tap, [300, 500, 3200])
+    page.wait_for_timeout(300)
+    opened = page.evaluate("()=>!!document.querySelector('.calib .caltarget')")
+    w, h = page.evaluate("()=>[innerWidth, innerHeight]")
+    for fx, fy in ((0.12, 0.12), (0.88, 0.12), (0.88, 0.88), (0.12, 0.88)):
+        page.evaluate(tap, [*distort(fx * w, fy * h), 80])
+        page.wait_for_timeout(250)
+    page.wait_for_timeout(1500)
+    cal = saved(app).get("screen_touch_cal") or {}
+    page.evaluate("cal=>{ window.TOUCH_CAL = cal; }", cal)
+    page.add_script_tag(url="/static/screen_touch.js?again")
+    page.evaluate("()=>refresh()")
+    page.wait_for_timeout(800)
+    bx, by = page.evaluate(
+        """()=>{ const r=document.querySelector('.seg[data-ctl="fan"] button[data-v="auto"]').getBoundingClientRect();
+           return [r.left+r.width/2, r.top+r.height/2]; }"""
+    )
+    page.evaluate(tap, [*distort(bx, by), 80])
+    page.wait_for_timeout(1200)
+    check(
+        opened and cal.get("m") and saved(app).get("fan_mode") == "auto",
+        f"a 3 s hold opens touch calibration; four taps on its targets save a correction that "
+        f"puts later taps where the finger was, even mirrored and squeezed into a corner "
+        f"(opened {opened}, saved {bool(cal.get('m'))}, fan {saved(app).get('fan_mode')})",
+    )
+    page.evaluate(
+        """async()=>{ await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
+           body: JSON.stringify({screen_touch_cal:{}})}); }"""
+    )
+    page.reload()
+    page.wait_for_timeout(2500)
     page.click('.seg[data-ctl="fan"] button[data-v="off"]')
     page.wait_for_timeout(1500)
     check(

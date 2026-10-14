@@ -3368,6 +3368,35 @@ def _external_display():
         "pages for the Pi's own screen click what a tap lands on when the browser does not, "
         "and report the first taps to the journal (only from that screen)",
     )
+    good_cal = config._v_touch_cal({"m": [-6.6, 0, 990, 0, 21.7, -650], "at": 1})
+    refused = []
+    for v in ({"m": [1, 2, 3]}, {"m": [1, 0, 0, 0, 1, "x"]}, {"m": [999, 0, 0, 0, 1, 0]}):
+        try:
+            config._v_touch_cal(v)
+        except ValueError:
+            refused.append(v)
+    with config.settings_lock:
+        config.settings["screen_touch_cal"] = good_cal
+    was = config.TRUST_LOCALHOST
+    try:
+        config.TRUST_LOCALHOST = True
+        page_cal = c.get("/screen").get_data(as_text=True)
+    finally:
+        config.TRUST_LOCALHOST = was
+        with config.settings_lock:
+            config.settings["screen_touch_cal"] = {}
+    tj = (APP / "static" / "screen_touch.js").read_text()
+    check(
+        good_cal["m"][0] == -6.6
+        and config._v_touch_cal({}) == {}
+        and len(refused) == 3
+        and "window.TOUCH_CAL = " in page_cal
+        and '"m": [-6.6' in page_cal.replace("[-6.6,", "[-6.6")
+        and "HOLD_MS = 3000" in tj
+        and 'id="touchcalreset"' in c.get("/").get_data(as_text=True),
+        "touch calibration: a hold on the screen fits a correction, saved as six numbers "
+        "(checked), handed to the screen's pages, and reset from Settings",
+    )
     # touch-rotate: the eight ways a touch layer can sit over its picture
     sh_k = (APP / "scripts" / "kiosk.sh").read_text()
     mats = dict(re.findall(r'\n\s+(\d+(?:-flip)?)\)\s+m="([-\d ]*)"', sh_k))
@@ -3968,13 +3997,19 @@ def _optimizations():
     status_mod.status_payload = lambda authed=None: calls.append(1) or real(authed)
     status_mod.POLL_REUSE_S = 5.0
     try:
-        status_mod._poll_cache.clear()
-        for _ in range(3):
+        # the controller's own loops also announce changes now and then; one
+        # landing mid-run is a real rebuild, so a run gets three tries
+        for _attempt in range(3):
+            calls.clear()
+            status_mod._poll_cache.clear()
+            for _ in range(3):
+                c.get("/api/status")
+            built_before = len(calls)
+            c.post("/api/fan", json={"mode": "auto"})
             c.get("/api/status")
-        built_before = len(calls)
-        c.post("/api/fan", json={"mode": "auto"})
-        c.get("/api/status")
-        built_after = len(calls)
+            built_after = len(calls)
+            if (built_before, built_after) == (1, 2):
+                break
     finally:
         status_mod.status_payload = real
         status_mod.POLL_REUSE_S = 0.0

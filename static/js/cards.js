@@ -556,6 +556,12 @@ export async function loadDisplay() {
           (d.preferred && d.preferred !== d.current ? `; the display prefers ${d.preferred}` : '') +
           (d.error ? `. ${d.error}` : '.');
     }
+    const ti = document.getElementById('touchcalinfo');
+    if (ti)
+      ti.textContent =
+        j.touch_cal && j.touch_cal.m
+          ? `Touch calibrated ${new Date(j.touch_cal.at * 1000).toLocaleString()}. To redo it, hold a finger on the touchscreen for 3 seconds.`
+          : 'Not calibrated. To calibrate touch, hold a finger anywhere on the touchscreen for 3 seconds, then tap the four targets.';
     if (sel && d && d.modes) {
       sel.innerHTML =
         '<option value="">pick a mode\u2026</option><option value="-">the display\u2019s choice</option>' +
@@ -803,6 +809,22 @@ export function initLight() {
   {
     const pb = document.getElementById('pairbtn');
     if (pb) pb.addEventListener('click', alignCameras);
+    const tr = document.getElementById('touchcalreset');
+    if (tr)
+      tr.addEventListener('click', async () => {
+        if (
+          !window.confirm(
+            'Clear the touch calibration? Taps go back to where the browser puts them.'
+          )
+        )
+          return;
+        await fetch('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ screen_touch_cal: {} })
+        });
+        loadDisplay();
+      });
     const ms = document.querySelector('.modepick');
     if (ms) {
       ms.addEventListener('focus', loadDisplay);

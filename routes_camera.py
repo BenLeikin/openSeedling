@@ -465,7 +465,9 @@ def api_display():
         active = r.stdout.strip() or "unknown"
     except Exception:
         active = "unknown"
-    return jsonify(kiosk=active, display=state)
+    with config.settings_lock:
+        cal = dict(config.settings.get("screen_touch_cal") or {})
+    return jsonify(kiosk=active, display=state, touch_cal=cal)
 
 
 _tap_log = []  # times of recent tap reports, to bound how many reach the journal

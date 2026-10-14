@@ -525,3 +525,30 @@ body.notrend #t-trend {
     opacity: 0;
   }
 }
+
+/* touch calibration (screen_touch.js): hold a finger on the screen for 3 s */
+.calib {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(10, 14, 11, 0.94);
+}
+.calmsg {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 40%;
+  text-align: center;
+  padding: 0 1.5rem;
+  font-size: 1.25rem;
+  color: #dfe9d8;
+}
+.caltarget {
+  position: absolute;
+  width: 3.5rem;
+  height: 3.5rem;
+  margin: -1.75rem 0 0 -1.75rem;
+  border: 0.19rem solid #8fc196;
+  border-radius: 50%;
+  background: radial-gradient(circle, #8fc196 0 0.3rem, transparent 0.32rem);
+}

@@ -316,6 +316,12 @@ Settings, External display sets up the touchscreen from the dashboard:
   `kiosk.sh install --rotate` angle; a blank mode leaves the display's own
   choice. A panel that is fed a larger mode than its own scales it down, which
   costs the Pi memory and drawing time for nothing.
+* **Touch calibration**: hold a finger on the touchscreen for 3 seconds and
+  tap the four targets. `static/screen_touch.js` fits the straight-line
+  mapping from where the taps arrived to the targets, saves it
+  (`screen_touch_cal`) and corrects every later tap with it, blocking the
+  browser's own misplaced click. It fixes any turn, mirror or squeeze between
+  the panel and the page; `kiosk.sh touch-rotate` is then not needed.
 * **Summary screen**: how often the charts turn, which charts are shown, how
   long the full dashboard stays up untouched before returning to the summary,
   a dark screen while every light is off (tap to wake for a minute), and

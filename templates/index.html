@@ -614,6 +614,11 @@
         <div><label>Display mode (blank = the display's choice)
           <input name="screen_mode" type="text" placeholder="1024x600">
           <select class="modepick"><option value="">pick a mode&hellip;</option></select></label></div>
+        <div class="tzrow pairrow">
+          <button type="button" id="touchcalreset">Reset touch calibration</button>
+          <span id="touchcalinfo" class="fhint">To calibrate touch, hold a finger anywhere on the
+            touchscreen for 3 seconds, then tap the four targets.</span>
+        </div>
         <div class="tzrow"><span class="fhint">Rotation and mode change on the screen within a few
           seconds. The panel's own size (often listed as preferred) is the sharpest and the
           lightest for the Pi; a larger mode is scaled down by the panel. If taps land in the
@@ -783,6 +788,7 @@
 <script id="formspec" type="application/json">{{ form_spec|tojson }}</script>
 <!-- the dashboard: ES modules under static/js, entered through main.js -->
 <script type="module" src="{{ url_for('static', filename='js/main.js', v=v) }}"></script>
-{% if onscreen %}<script src="/static/screen_touch.js?v={{ v }}"></script>{% endif %}
+{% if onscreen %}<script>window.TOUCH_CAL = {{ touch_cal|tojson }};</script>
+<script src="/static/screen_touch.js?v={{ v }}"></script>{% endif %}
 </body>
 </html>

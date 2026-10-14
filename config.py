@@ -5,6 +5,7 @@ import json
 import os
 import re
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo, available_timezones
@@ -88,6 +89,9 @@ DEFAULTS = {
     "screen_back_min": 3,  # the full dashboard returns to the summary after this
     "screen_night": "off",  # "dim": a dark screen while every light is off
     "screen_buddy": True,  # Little Buddy on the summary too (when it is on at all)
+    # taps on the touchscreen corrected in the page: {"m": [a, b, c, d, e, f],
+    # "at": epoch}, x' = a x + b y + c, y' = d x + e y + f (screen_touch.js)
+    "screen_touch_cal": {},
     "usb_device": "/dev/video0",
     # a second camera beside the first ("" for none); photos are the two
     # stitched once aligned (Settings, Camera, Align cameras -> cam_stitch)
@@ -820,7 +824,32 @@ def _form_validator(spec):
     return globals()[spec["check"]]
 
 
+def _v_touch_cal(v):
+    """{} or {"m": six numbers, "at": time}: the touch correction worked out by
+    the touchscreen's own calibration (hold a finger on it for 3 s)."""
+    if not v:
+        return {}
+    if not isinstance(v, dict) or not isinstance(v.get("m"), list) or len(v["m"]) != 6:
+        raise ValueError("must be {} or {m: [a, b, c, d, e, f]}")
+    try:
+        m = [float(x) for x in v["m"]]
+    except (TypeError, ValueError):
+        raise ValueError("the six values must be numbers") from None
+    # a squeezed mapping needs a large factor to undo it (taps on the rig
+    # arrived within about a twentieth of the screen's height)
+    if any(abs(x) > 200 for x in (m[0], m[1], m[3], m[4])) or any(
+        abs(x) > 200000 for x in (m[2], m[5])
+    ):
+        raise ValueError("those values would throw taps far off the screen")
+    try:
+        at = int(v.get("at") or time.time())
+    except (TypeError, ValueError):
+        at = int(time.time())
+    return {"m": [round(x, 6) for x in m], "at": at}
+
+
 SETTINGS_VALIDATORS = {
+    "screen_touch_cal": _v_touch_cal,
     "usb_warmup_frames": _v_int(1, 20),
     "live_interval_s": _v_int(0, 120),
     "heat_mode": _v_choice("off", "auto", "on"),
