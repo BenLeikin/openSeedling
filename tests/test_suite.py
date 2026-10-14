@@ -3368,6 +3368,27 @@ def _external_display():
         "pages for the Pi's own screen click what a tap lands on when the browser does not, "
         "and report the first taps to the journal (only from that screen)",
     )
+    # touch-rotate: the eight ways a touch layer can sit over its picture
+    sh_k = (APP / "scripts" / "kiosk.sh").read_text()
+    mats = dict(re.findall(r'\n\s+(\d+(?:-flip)?)\)\s+m="([-\d ]*)"', sh_k))
+    maps = []
+    for _name, m in sorted(mats.items()):
+        a, b, cc, d, e, f = [float(v) for v in m.split()] if m else (1, 0, 0, 0, 1, 0)
+        maps.append(
+            tuple(
+                (round(a * x + b * y + cc, 3), round(d * x + e * y + f, 3))
+                for x, y in ((0, 0), (1, 0), (1, 1), (0, 1))
+            )
+        )
+    corners = {(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)}
+    check(
+        len(mats) == 8
+        and all(set(mp) == corners for mp in maps)
+        and len(set(maps)) == 8
+        and "systemctl kill -s KILL growlight-kiosk" in sh_k,
+        f"touch-rotate offers all eight orientations, rotations and mirror images, each a "
+        f"distinct mapping of the screen onto itself ({sorted(mats)})",
+    )
     try:
         config._v_screen_mode("1024x600@60")
         config._v_screen_mode("")

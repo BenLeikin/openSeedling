@@ -2,7 +2,7 @@
 # The dashboard on a touchscreen plugged into this Pi's HDMI port.
 #
 #   bash scripts/kiosk.sh install [--rotate 0|90|180|270]   default 90
-#   bash scripts/kiosk.sh touch-rotate 0|90|180|270         only if taps land wrong
+#   bash scripts/kiosk.sh touch-rotate 0|90|180|270[-flip]  only if taps land wrong
 #   bash scripts/kiosk.sh status                            running? memory used?
 #   bash scripts/kiosk.sh remove                            back to headless
 #
@@ -29,7 +29,7 @@ main() {
   : "${DROPIN_DIR:=${UNIT_PATH}.d}"
   case "$cmd" in
     install)      install_kiosk "$@" ;;
-    touch-rotate) touch_rotate "${1:?touch-rotate needs 0, 90, 180 or 270}" ;;
+    touch-rotate) touch_rotate "${1:?touch-rotate needs 0, 90, 180 or 270, or one of those with -flip}" ;;
     status)       status ;;
     remove)       remove_kiosk ;;
     *) sed -n '2,8p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2 ;;
@@ -115,23 +115,36 @@ install_kiosk() {
 }
 
 touch_rotate() {
+  # The calibration matrix libinput applies to the panel's touches. The
+  # -flip forms mirror left and right as well, for a panel whose touch layer
+  # is mounted the other way round from its picture.
   local rot="$1" m
-  valid_rotation "$rot" || { echo "rotation must be 0, 90, 180 or 270"; exit 2; }
   case "$rot" in
-    0)   sudo rm -f "$TOUCH_RULE" ;;
-    90)  m="0 1 0 -1 0 1" ;;
-    180) m="-1 0 1 0 -1 1" ;;
-    270) m="0 -1 1 1 0 0" ;;
+    0)        m="" ;;
+    90)       m="0 1 0 -1 0 1" ;;
+    180)      m="-1 0 1 0 -1 1" ;;
+    270)      m="0 -1 1 1 0 0" ;;
+    0-flip)   m="-1 0 1 0 1 0" ;;
+    90-flip)  m="0 -1 1 -1 0 1" ;;
+    180-flip) m="1 0 0 0 -1 1" ;;
+    270-flip) m="0 1 0 1 0 0" ;;
+    *) echo "touch-rotate takes 0, 90, 180 or 270, or one of those with -flip (e.g. 90-flip)"; exit 2 ;;
   esac
-  if [[ "$rot" != 0 ]]; then
-    printf '%s\n' "# openSeedling: turn touch input to match the portrait screen (kiosk.sh touch-rotate)" \
+  if [[ -z "$m" ]]; then
+    sudo rm -f "$TOUCH_RULE"
+  else
+    printf '%s\n' "# openSeedling: turn touch input to match the portrait screen (kiosk.sh touch-rotate $rot)" \
       "ENV{ID_INPUT_TOUCHSCREEN}==\"1\", ENV{LIBINPUT_CALIBRATION_MATRIX}=\"$m\"" \
       | sudo tee "$TOUCH_RULE" > /dev/null
   fi
   sudo udevadm control --reload
   sudo udevadm trigger --subsystem-match=input
+  sudo systemctl kill -s KILL growlight-kiosk 2>/dev/null || true
   sudo systemctl restart growlight-kiosk
-  echo "Touch rotation set to $rot. If it is now worse, run: bash scripts/kiosk.sh touch-rotate 0"
+  local cal
+  cal="$(sudo libinput list-devices 2>/dev/null | awk '/Capabilities:.*touch/{t=1} t && /Calibration:/{sub(/^Calibration: */, ""); print; exit}')"
+  echo "Touch set to $rot (libinput now reports calibration: ${cal:-unknown})."
+  echo "If taps are still off, try another: 0, 90, 180, 270, or with -flip (e.g. 90-flip)."
 }
 
 status() {

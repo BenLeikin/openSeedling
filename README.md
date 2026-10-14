@@ -255,6 +255,7 @@ second computer:
 
     bash scripts/kiosk.sh install --rotate 90     # portrait; 0, 90, 180 or 270
     bash scripts/kiosk.sh touch-rotate 90         # only if taps land in the wrong place
+                                                  # (0/90/180/270, or 90-flip etc. if mirrored)
     bash scripts/kiosk.sh status                  # running? memory used?
     bash scripts/kiosk.sh remove                  # back to headless
 
