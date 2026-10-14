@@ -468,6 +468,38 @@ def api_display():
     return jsonify(kiosk=active, display=state)
 
 
+_tap_log = []  # times of recent tap reports, to bound how many reach the journal
+
+
+@routes.app.route("/api/screen_event", methods=["POST"])
+def api_screen_event():
+    """A tap on the Pi's own touchscreen, reported by screen_touch.js: where it
+    landed and whether the browser made a click of it. Journal only; accepted
+    only from that screen, and at most 20 a minute."""
+    if not request.is_json:
+        return jsonify(ok=False, error="JSON body required"), 415
+    if not routes.on_screen():
+        return jsonify(ok=False), 403
+    now = time.time()
+    _tap_log[:] = [t for t in _tap_log if now - t < 60]
+    if len(_tap_log) >= 20:
+        return jsonify(ok=True, logged=False)
+    _tap_log.append(now)
+    d = request.get_json(silent=True) or {}
+
+    def num(k):
+        try:
+            return int(d.get(k))
+        except (TypeError, ValueError):
+            return -1
+
+    log.info(
+        f"touchscreen tap at {num('x')},{num('y')} of {num('w')}x{num('h')} on "
+        f"{str(d.get('target') or '?')[:60]}; browser click: {'yes' if d.get('native') else 'no'}"
+    )
+    return jsonify(ok=True, logged=True)
+
+
 @routes.app.route("/preview.jpg")
 def preview_img():
     if not camera_mod.PREVIEW_PATH.exists():

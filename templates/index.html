@@ -783,5 +783,6 @@
 <script id="formspec" type="application/json">{{ form_spec|tojson }}</script>
 <!-- the dashboard: ES modules under static/js, entered through main.js -->
 <script type="module" src="{{ url_for('static', filename='js/main.js', v=v) }}"></script>
+{% if onscreen %}<script src="/static/screen_touch.js?v={{ v }}"></script>{% endif %}
 </body>
 </html>

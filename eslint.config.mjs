@@ -21,7 +21,7 @@ export default [
     },
   },
   {
-    files: ["static/screen.js"],
+    files: ["static/screen.js", "static/screen_touch.js"],
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: "script",

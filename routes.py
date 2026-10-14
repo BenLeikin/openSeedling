@@ -224,12 +224,20 @@ def _revalidate_scripts(resp):
     return resp
 
 
+# posts that report rather than change anything (no new status to announce)
+NOT_CHANGES = {"/api/screen_event"}
+
+
 @app.after_request
 def _changed(resp):
     """Any change through the API announces a new status: open tabs and the
     touchscreen update at once, and the shared status build is not reused
     across the change (status.shared_payload keys its cache on this)."""
-    if request.method in ("POST", "PUT", "DELETE") and resp.status_code < 500:
+    if (
+        request.method in ("POST", "PUT", "DELETE")
+        and resp.status_code < 500
+        and request.path not in NOT_CHANGES
+    ):
         status_mod.publish("change")
     return resp
 

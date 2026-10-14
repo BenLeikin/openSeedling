@@ -4,6 +4,10 @@ One entry per update zip, newest first. Install any update with
 `bash scripts/update.sh openSeedling-update-N.zip`; each is cumulative from
 the 4-17 baseline. The installer commits each one with the heading below.
 
+## 60 (2026-10-14): Taps on the touchscreen
+- The panel delivers clean touches (libinput shows them), so taps are now handled on the page itself: each tap shows a brief ring where it landed, and when the browser does not turn a tap into a click, the button under the finger is clicked anyway (screen_touch.js, only on pages served to the Pi's own screen).
+- The first taps of each page go to the controller's journal: where they landed, on what, and whether the browser made a click of it.
+
 ## 59 (2026-10-14): Little Buddy on the touchscreen
 - Little Buddy crosses the touchscreen summary's tiles too, the same characters and walk as the dashboard, sized with the summary's text. It follows the Little Buddy setting under System, can be kept off the screen in Settings, External display, and stays away while the night screen is up.
 - Its styles moved from style.css to buddy.css, shared by both pages.

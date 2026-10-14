@@ -3342,6 +3342,32 @@ def _external_display():
         "Little Buddy walks on the touchscreen summary too, from the dashboard's own "
         "module and one shared stylesheet, and can be kept off the screen",
     )
+    was = config.TRUST_LOCALHOST
+    try:
+        config.TRUST_LOCALHOST = True
+        local = c.get("/screen").get_data(as_text=True)
+        local_dash = c.get("/").get_data(as_text=True)
+        ok_tap = c.post(
+            "/api/screen_event",
+            json={"kind": "tap", "x": 5, "y": 7, "w": 600, "h": 1024, "native": False},
+        ).status_code
+        proxied = c.post(
+            "/api/screen_event", json={"kind": "tap"}, headers={"X-Forwarded-For": "203.0.113.9"}
+        ).status_code
+        config.TRUST_LOCALHOST = False
+        plain = c.get("/screen").get_data(as_text=True)
+    finally:
+        config.TRUST_LOCALHOST = was
+    check(
+        "/static/screen_touch.js" in local
+        and "/static/screen_touch.js" in local_dash
+        and "/static/screen_touch.js" not in plain
+        and ok_tap == 200
+        and proxied == 403
+        and "/api/screen_event" in routes.NOT_CHANGES,
+        "pages for the Pi's own screen click what a tap lands on when the browser does not, "
+        "and report the first taps to the journal (only from that screen)",
+    )
     try:
         config._v_screen_mode("1024x600@60")
         config._v_screen_mode("")

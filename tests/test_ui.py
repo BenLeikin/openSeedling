@@ -800,6 +800,23 @@ def screen(pw, base, app):
     check(
         h <= 1024 and not errs, f"the touchscreen summary fits 600x1024 without scrolling ({h} px)"
     )
+    # a tap the browser does not turn into a click (as on the Pi's WPE) still
+    # works: screen_touch.js clicks what is under the finger
+    page.add_script_tag(url="/static/screen_touch.js")
+    page.evaluate(
+        """()=>{ const b=document.querySelector('.seg[data-ctl="fan"] button[data-v="on"]');
+           const r=b.getBoundingClientRect(), x=r.left+r.width/2, y=r.top+r.height/2;
+           const t=new Touch({identifier:1, target:b, clientX:x, clientY:y});
+           b.dispatchEvent(new TouchEvent('touchstart',{touches:[t],changedTouches:[t],bubbles:true}));
+           b.dispatchEvent(new TouchEvent('touchend',{touches:[],changedTouches:[t],bubbles:true})); }"""
+    )
+    page.wait_for_timeout(1500)
+    rings = page.evaluate("()=>document.querySelectorAll('.tapring').length")
+    check(
+        saved(app).get("fan_mode") == "on",
+        f"a tap with no click from the browser is clicked by screen_touch.js "
+        f"({saved(app).get('fan_mode')}, rings {rings})",
+    )
     page.click('.seg[data-ctl="fan"] button[data-v="off"]')
     page.wait_for_timeout(1500)
     check(
