@@ -3301,6 +3301,47 @@ def _external_display():
         f"it changes only what differs from Settings ({told!r}), refuses a mode the display "
         "lacks, and writes what it sees for Settings to show",
     )
+    # the display off while the lights are off, back on for a touch or a light
+    lit = {
+        "brightness": 0,
+        "light2": {"level": 0},
+        "setups": [{"light": "main"}, {"light": "second"}],
+    }
+    sleep_cfg = {"screen_night": "sleep"}
+    check(
+        dw.lights_off(lit)
+        and not dw.lights_off(dict(lit, brightness=40))
+        and not dw.lights_off(dict(lit, light2={"level": 20}))
+        and not dw.lights_off(None)
+        and dw.want_on({"screen_night": "dim"}, lit, 100, 0)
+        and not dw.want_on(sleep_cfg, lit, 100, 0)
+        and dw.want_on(sleep_cfg, lit, 100, 150)
+        and dw.want_on(sleep_cfg, dict(lit, brightness=5), 100, 0)
+        and dw.parse(sample.replace("Enabled: yes", "Enabled: no"))["enabled"] is False
+        and dw.touch_device(
+            'I: Bus=0003\nN: Name="mouse"\nH: Handlers=mouse0 event3\nB: ABS=3\n\n'
+            'I: Bus=0003\nN: Name="wch.cn USB2IIC_CTP_CONTROL"\n'
+            "H: Handlers=mouse1 event0\nB: ABS=2608000 3\n"
+        )
+        == "/dev/input/event0",
+        "with 'turn the display off', the screen goes dark while every light is off and "
+        "comes on for a light or a touch (the panel read directly, found by its touch bits)",
+    )
+    path = os.environ["PATH"]
+    os.environ["PATH"] = f"{d}:{path}"
+    dw.CONFIG, dw.STATE = d / "config.json", d / "display_state.json"
+    try:
+        calls.write_text("")
+        dw.CONFIG.write_text(json.dumps({"screen_night": "sleep"}))
+        dw.step(90, log=lambda m: None, status=lit, woke_until=0, now=100)
+        went_off = calls.read_text().strip()
+    finally:
+        os.environ["PATH"] = path
+        dw.CONFIG, dw.STATE = real_cfg, real_state
+    check(
+        went_off == "--output HDMI-A-1 --off",
+        f"the watcher turns the output off when it should be dark ({went_off!r})",
+    )
     sess = (APP / "scripts" / "kiosk-session.sh").read_text()
     html = c.get("/").get_data(as_text=True)
     js = page_js()

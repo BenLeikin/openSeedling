@@ -324,7 +324,9 @@ Settings, External display sets up the touchscreen from the dashboard:
   the panel and the page; `kiosk.sh touch-rotate` is then not needed.
 * **Summary screen**: how often the charts turn, which charts are shown, how
   long the full dashboard stays up untouched before returning to the summary,
-  a dark screen while every light is off (tap to wake for a minute), and
+  while every light is off either a dark page or the display switched off
+  (the HDMI output off, so the panel's backlight goes dark; a touch, read
+  from the panel directly, wakes it for a minute), and
   whether Little Buddy (on under System) also walks across the summary's tiles
   (`static/screen_buddy.js` loads the dashboard's `buddy.js`; styles in
   `buddy.css`).

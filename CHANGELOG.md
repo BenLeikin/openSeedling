@@ -4,6 +4,9 @@ One entry per update zip, newest first. Install any update with
 `bash scripts/update.sh openSeedling-update-N.zip`; each is cumulative from
 the 4-17 baseline. The installer commits each one with the heading below.
 
+## 63 (2026-10-14): Display off at night
+- Settings, External display, When the lights are off: a third choice, Turn the display off. The HDMI output goes off while every light is off (the panel's backlight goes dark with it) and comes back when a light comes on; a touch wakes it for a minute (the watcher reads the touch panel itself, since the compositor has nowhere to send a tap on a dark screen).
+
 ## 62 (2026-10-14): Touch calibration on the screen
 - Hold a finger anywhere on the touchscreen for 3 seconds, then tap the four targets: the page works out how taps arrive (turned, mirrored, even squeezed into a corner) and corrects every tap from then on, on the summary and the full dashboard. Settings, External display shows when it was done and can reset it.
 - The status-sharing check in the test suite allows for a background status announcement landing mid-run.

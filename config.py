@@ -87,7 +87,7 @@ DEFAULTS = {
     "screen_chart_light": True,
     "screen_chart_air": True,
     "screen_back_min": 3,  # the full dashboard returns to the summary after this
-    "screen_night": "off",  # "dim": a dark screen while every light is off
+    "screen_night": "off",  # while every light is off: "dim" a dark page, "sleep" display off
     "screen_buddy": True,  # Little Buddy on the summary too (when it is on at all)
     # taps on the touchscreen corrected in the page: {"m": [a, b, c, d, e, f],
     # "at": epoch}, x' = a x + b y + c, y' = d x + e y + f (screen_touch.js)
@@ -747,7 +747,7 @@ FORM = {
     "screen_chart_light": {"kind": "bool"},
     "screen_chart_air": {"kind": "bool"},
     "screen_back_min": {"kind": "int", "min": 1, "max": 60},
-    "screen_night": {"kind": "choice", "choices": ["off", "dim"]},
+    "screen_night": {"kind": "choice", "choices": ["off", "dim", "sleep"]},
     "screen_buddy": {"kind": "bool"},
     "usb_device": {"kind": "text", "check": "_v_usb_device"},
     "usb_device2": {"kind": "text", "check": "_v_usb_device2"},
