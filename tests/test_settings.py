@@ -12,6 +12,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from harness import (
+    photos_mod,
     APP,
     WORK,
     c,
@@ -168,8 +169,8 @@ def test_config_safety():
     )
     # 3. a full SD card: photos give way, and it is alerted
     shots = []
-    real_free, real_tp = camera_mod.disk_free_gb, camera_mod.take_photo
-    camera_mod.disk_free_gb = lambda path=None: 0.4
+    real_free, real_tp = photos_mod.disk_free_gb, camera_mod.take_photo
+    photos_mod.disk_free_gb = lambda path=None: 0.4
     camera_mod.take_photo = lambda cfg_, now_: shots.append(now_) or None
     with config.settings_lock:
         saved_cam = {k: config.settings.get(k) for k in ("camera_enabled", "capture_enabled")}
@@ -183,7 +184,7 @@ def test_config_safety():
     try:
         ls = camera_mod._capture_tick(None)
     finally:
-        camera_mod.disk_free_gb, camera_mod.take_photo = real_free, real_tp
+        photos_mod.disk_free_gb, camera_mod.take_photo = real_free, real_tp
         camera_mod.capture_window = real_win
         with config.settings_lock:
             config.settings.update(saved_cam)

@@ -57,7 +57,10 @@ control.py          the control loop: lights from the schedule, the fan
 setups.py           grow setups, light windows, DLI integration and curves, Plan verdicts
 water.py            fills, reservoir, probe filtering and moisture, auto-water, post-fill checks
 monitor.py          sampling and live readings, validation, sensor health, alerts, AI report loop
-camera.py           capture, crop and flatten, thumbnails, focus sweep, render, canopy
+camera.py           the cameras: capture, two-camera stitching, focus sweep, canopy
+photos.py           the stored photos: thumbnails, cropped and flattened views, disk space
+video.py            the timelapse video render
+tools.py            running helper programs (imgtool, ffmpeg) as first to die on out-of-memory
 heat.py             heat mat thermostat on a smart plug
 status.py           status payload, display units, redaction, live event stream
 db.py               SQLite logging (WAL) with downsampling

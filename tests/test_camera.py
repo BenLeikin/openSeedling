@@ -15,6 +15,9 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from harness import (
+    photos_mod,
+    tools,
+    video_mod,
     APP,
     Code,
     WORK,
@@ -42,20 +45,20 @@ def test_camera_flatten():
     assert squash(js).count("'/thumb/'+frames[") == 2 and "?v='+thumbsV" in js, (
         "scrubber thumbnail URLs carry a version, so browsers drop cached ones"
     )
-    camera_mod.TIMELAPSE_DIR.mkdir(parents=True, exist_ok=True)
-    camera_mod.THUMB_DIR.mkdir(parents=True, exist_ok=True)
+    photos_mod.TIMELAPSE_DIR.mkdir(parents=True, exist_ok=True)
+    photos_mod.THUMB_DIR.mkdir(parents=True, exist_ok=True)
     for i in range(3):
-        (camera_mod.TIMELAPSE_DIR / f"2026092{i}_120000.jpg").write_bytes(b"photo")
-        (camera_mod.THUMB_DIR / f"2026092{i}_120000.jpg").write_text("flat")
-    real_mt = camera_mod.make_thumb
+        (photos_mod.TIMELAPSE_DIR / f"2026092{i}_120000.jpg").write_bytes(b"photo")
+        (photos_mod.THUMB_DIR / f"2026092{i}_120000.jpg").write_text("flat")
+    real_mt = photos_mod.make_thumb
 
     def fake_thumb(ph, cfg=None, dst_dir=None):
         time.sleep(0.05)
-        ((dst_dir or camera_mod.THUMB_DIR) / ph.name).write_text(
+        ((dst_dir or photos_mod.THUMB_DIR) / ph.name).write_text(
             "flat" if (cfg or {}).get("timelapse_flatten", True) else "raw"
         )
 
-    camera_mod.make_thumb = fake_thumb
+    photos_mod.make_thumb = fake_thumb
     counts = []
     try:
         v0 = c.get("/api/photos").get_json().get("v", 0)
@@ -65,16 +68,16 @@ def test_camera_flatten():
         for _ in range(40):
             counts.append(len(c.get("/api/photos").get_json()["names"]))
             if (
-                not camera_mod._thumbs_lock.locked()
+                not photos_mod._thumbs_lock.locked()
                 and counts[-1]
                 and c.get("/api/photos").get_json().get("v", 0) != v0
             ):
                 break
             time.sleep(0.05)
-        kinds = {p.read_text() for p in camera_mod.THUMB_DIR.glob("*.jpg")}
+        kinds = {p.read_text() for p in photos_mod.THUMB_DIR.glob("*.jpg")}
         v1 = c.get("/api/photos").get_json().get("v", 0)
     finally:
-        camera_mod.make_thumb = real_mt
+        photos_mod.make_thumb = real_mt
     assert kinds == {"raw"}, f"turning flattening off rebuilds the thumbnails raw ({kinds})"
     assert min(counts) == 3, (
         f"the scrubber's frame list never empties during a rebuild (min {min(counts)})"
@@ -148,20 +151,20 @@ def test_camera_modes_and_reset():
 
 def test_camera_crop():
     assert (
-        camera_mod.crop_box({"roi": "0.1,0.2,0.5,0.6"}) == (0.1, 0.2, 0.5, 0.6)
-        and camera_mod.crop_box({"roi": ""}) is None
-        and camera_mod.crop_box({"roi": "junk"}) is None
+        photos_mod.crop_box({"roi": "0.1,0.2,0.5,0.6"}) == (0.1, 0.2, 0.5, 0.6)
+        and photos_mod.crop_box({"roi": ""}) is None
+        and photos_mod.crop_box({"roi": "junk"}) is None
     ), "the crop setting parses, and blank or bad means full frame"
     gl = app_source()
     assert '"--roi"' not in gl, "photos are always stored full frame (no capture-time crop)"
     calls = {"n": 0}
-    real_rb = camera_mod.rebuild_thumbs_async
-    camera_mod.rebuild_thumbs_async = lambda: calls.__setitem__("n", calls["n"] + 1)
+    real_rb = photos_mod.rebuild_thumbs_async
+    photos_mod.rebuild_thumbs_async = lambda: calls.__setitem__("n", calls["n"] + 1)
     try:
         r = c.post("/api/settings", json={"roi": "0.1,0.2,0.5,0.6"}).get_json()
         bad = c.post("/api/settings", json={"roi": "0.9,0.9,0.5,0.5"}).get_json()
     finally:
-        camera_mod.rebuild_thumbs_async = real_rb
+        photos_mod.rebuild_thumbs_async = real_rb
     assert r["ok"] and calls["n"] == 1, "saving a crop rebuilds the thumbnails"
     assert (
         not bad["ok"] and "roi" in bad["errors"] and config.settings["roi"] == "0.1,0.2,0.5,0.6"
@@ -173,7 +176,7 @@ def test_camera_crop():
         pytest.skip("cropped snapshot, thumbnail and AI image (OpenCV not installed here)")
     img = np.zeros((600, 1000, 3), np.uint8)
     for n in ("20260925_120000.jpg",):
-        cv2.imwrite(str(camera_mod.TIMELAPSE_DIR / n), img)
+        cv2.imwrite(str(photos_mod.TIMELAPSE_DIR / n), img)
     snap = c.get("/photo/cropped.jpg")
     shape = None
     if snap.status_code == 200:
@@ -183,9 +186,9 @@ def test_camera_crop():
 
     b = base64.b64decode(
         ai_report._image_b64(
-            camera_mod.TIMELAPSE_DIR / "20260925_120000.jpg",
+            photos_mod.TIMELAPSE_DIR / "20260925_120000.jpg",
             (0.1, 0.2, 0.5, 0.6),
-            camera_mod.imgtool,
+            tools.imgtool,
         )
     )
     ai_shape = cv2.imdecode(np.frombuffer(b, np.uint8), 1).shape[:2]
@@ -195,7 +198,7 @@ def test_camera_crop():
             cfgc = dict(config.settings, timelapse_flatten=False)
         out = WORK / "thumbtest"
         out.mkdir(exist_ok=True)
-        camera_mod.make_thumb(camera_mod.TIMELAPSE_DIR / "20260925_120000.jpg", cfgc, dst_dir=out)
+        photos_mod.make_thumb(photos_mod.TIMELAPSE_DIR / "20260925_120000.jpg", cfgc, dst_dir=out)
         t = cv2.imread(str(out / "20260925_120000.jpg"))
         assert t is not None and t.shape[:2] == (460, 640), (
             f"raw thumbnails are cut to the crop ({None if t is None else t.shape[:2]}, want (460, 640))"
@@ -244,7 +247,7 @@ def test_timelapse_sharp():
         pytest.skip("full-size frame, its framing and caching (OpenCV not installed here)")
     name = "20260926_080000.jpg"
     img = (np.random.default_rng(3).integers(0, 255, (1200, 1600, 3))).astype(np.uint8)
-    cv2.imwrite(str(camera_mod.TIMELAPSE_DIR / name), img)
+    cv2.imwrite(str(photos_mod.TIMELAPSE_DIR / name), img)
     with config.settings_lock:
         saved = {k: config.settings.get(k) for k in ("grid", "timelapse_flatten", "roi")}
         config.settings.update(
@@ -262,7 +265,7 @@ def test_timelapse_sharp():
         f = cv2.imdecode(np.frombuffer(r.data, np.uint8), 1) if r.status_code == 200 else None
         out = WORK / "sharptest"
         out.mkdir(exist_ok=True)
-        camera_mod.make_thumb(camera_mod.TIMELAPSE_DIR / name, cfgf, dst_dir=out)
+        photos_mod.make_thumb(photos_mod.TIMELAPSE_DIR / name, cfgf, dst_dir=out)
         t = cv2.imread(str(out / name))
         ok = (
             f is not None
@@ -295,12 +298,12 @@ def test_timelapse_sharp():
             config.settings.update(timelapse_flatten=False, roi="")
         raw = c.get(f"/frame/{name}")
         assert (
-            raw.status_code == 200 and raw.data == (camera_mod.TIMELAPSE_DIR / name).read_bytes()
+            raw.status_code == 200 and raw.data == (photos_mod.TIMELAPSE_DIR / name).read_bytes()
         ), "with flattening off and no crop, the frame is the photo itself"
     finally:
         with config.settings_lock:
             config.settings.update(saved)
-        (camera_mod.TIMELAPSE_DIR / name).unlink(missing_ok=True)
+        (photos_mod.TIMELAPSE_DIR / name).unlink(missing_ok=True)
     # the video: sharper scaler and less compression, same preset and threads
     seen = []
     real_run = camera_mod.subprocess.run
@@ -313,13 +316,13 @@ def test_timelapse_sharp():
     try:
         with config.settings_lock:
             config.settings["timelapse_flatten"] = False
-        camera_mod.render_worker()
+        video_mod.render_worker()
     finally:
         camera_mod.subprocess.run = real_run
         with config.settings_lock:
             config.settings.update(saved)
-        with camera_mod.render_lock:
-            camera_mod.render.update(state="idle", msg="", frames=0)
+        with video_mod.render_lock:
+            video_mod.render.update(state="idle", msg="", frames=0)
     enc = next((a for a in seen if "libx264" in a), [])
     vf = enc[enc.index("-vf") + 1] if "-vf" in enc else ""
     fr = enc[enc.index("-framerate") + 1] if "-framerate" in enc else ""
@@ -345,11 +348,11 @@ def test_timelapse_sharp():
         "an older config's shared speed percentage becomes the video speed (33% of 24 = 7.92 frames/s)"
     )
     started = []
-    real_sr = camera_mod.start_render
-    camera_mod.start_render = lambda: started.append(1) or True
-    had_video = camera_mod.VIDEO_PATH.exists()
+    real_sr = video_mod.start_render
+    video_mod.start_render = lambda: started.append(1) or True
+    had_video = video_mod.VIDEO_PATH.exists()
     if not had_video:
-        camera_mod.VIDEO_PATH.write_bytes(b"x")
+        video_mod.VIDEO_PATH.write_bytes(b"x")
     try:
         db.kv_set("video_fps_rendered", 24.0)
         r1 = c.post("/api/settings", json={"video_fps": 8}).get_json()
@@ -357,9 +360,9 @@ def test_timelapse_sharp():
         r2 = c.post("/api/settings", json={"video_fps": 8, "player_fps": 5}).get_json()
         st_ = c.get("/api/status").get_json()
     finally:
-        camera_mod.start_render = real_sr
+        video_mod.start_render = real_sr
         if not had_video:
-            camera_mod.VIDEO_PATH.unlink(missing_ok=True)
+            video_mod.VIDEO_PATH.unlink(missing_ok=True)
     assert r1["ok"] and r2["ok"] and started == [1] and st_.get("video_fps") == 8.0, (
         "a new video speed re-renders the video; an "
         "unchanged one does not; the status says what speed the video has"
@@ -482,7 +485,7 @@ def test_oom():
     """Camera and image helpers are the kernel's first choice when memory runs
     out, ask the driver for as few buffers as they need, and report an
     out-of-memory kill as one."""
-    of = getattr(camera_mod, "oom_first", lambda c: list(c))
+    of = tools.oom_first
     wrapped = of(["v4l2-ctl", "--all"])
     ok_wrap = wrapped[:2] == ["sh", "-c"] and wrapped[-2:] == ["v4l2-ctl", "--all"]
     if sys.platform.startswith("linux") and Path("/proc/self/oom_score_adj").exists():
@@ -521,16 +524,19 @@ def test_oom():
     assert not ok and err and "out of memory" in err and "3264x2448" in err, (
         f"a capture killed for memory says so instead of 'no frames' ({err})"
     )
-    killed = camera_mod._imgtool_err(types.SimpleNamespace(returncode=-9, stderr=b""))
-    crashed = camera_mod._imgtool_err(types.SimpleNamespace(returncode=-11, stderr=b""))
+    killed = tools._imgtool_err(types.SimpleNamespace(returncode=-9, stderr=b""))
+    crashed = tools._imgtool_err(types.SimpleNamespace(returncode=-11, stderr=b""))
     assert "out of memory" in killed and crashed == "killed by signal 11", (
         f"an image job killed by a signal reports why ({crashed})"
     )
-    cam_src = (APP / "camera.py").read_text()
+    cam_src = "\n".join(
+        (APP / f).read_text() for f in ("camera.py", "photos.py", "video.py", "tools.py")
+    )
     sq = squash(cam_src)
     runs = [sq[m.end() : m.end() + 40] for m in re.finditer(r"subprocess\.run\(", sq)]
-    unwrapped = [r for r in runs if not r.startswith(("oom_first(", '["v4l2-ctl","-d",dev'))]
-    heavy = sq.count("subprocess.run(oom_first(") + sq.count('oom_first(["ffmpeg"')
+    wrapped = ("oom_first(", "tools.oom_first(", '["v4l2-ctl","-d",dev')
+    unwrapped = [r for r in runs if not r.startswith(wrapped)]
+    heavy = sq.count("oom_first(cmd)") + sq.count('oom_first(["ffmpeg"')
     rsrc = "\n".join(
         (APP / f).read_text()
         for f in (
@@ -544,9 +550,7 @@ def test_oom():
     assert (
         not unwrapped
         and heavy >= 5
-        and code_has(
-            rsrc, "camera_mod.oom_first([sys.executable, str(helper)", "camera_mod.oom_first(cmd)"
-        )
+        and code_has(rsrc, "tools.oom_first([sys.executable, str(helper)", "tools.oom_first(cmd)")
     ), (
         "captures, thumbnails, the render, canopy analysis, previews and corner detection all run OOM-first"
     )
@@ -1014,7 +1018,7 @@ def test_two_cameras():
         "size they are used, matching at 640 px, output at most 3072 px wide)"
     )
     sh = (APP / "scripts" / "usbcheck.sh").read_text()
-    cam = (APP / "camera.py").read_text()
+    cam = (APP / "video.py").read_text()
     assert (
         'check_camera "Camera 2" "$dev2"' in sh
         and "force_original_aspect_ratio=decrease" in cam
@@ -1045,7 +1049,7 @@ def test_flatten_proportions():
 def test_capture_scratch():
     """Files a capture is still working on are never taken for photos, and
     what an interrupted capture leaves behind is cleared."""
-    tl = camera_mod.TIMELAPSE_DIR
+    tl = photos_mod.TIMELAPSE_DIR
     jpeg = b"\xff\xd8\xff\xd9"
     photo = tl / "20260101_120000.jpg"
     photo.write_bytes(jpeg)
@@ -1076,16 +1080,16 @@ def test_capture_scratch():
     def fake_imgtool(args, timeout=120):
         # both cameras' frames are on disk here; the stitched photo is not yet
         seen["listed"] = sorted(p.name for p in tl.glob("*.jpg"))
-        seen["latest"] = camera_mod.photo_inventory()[1]
+        seen["latest"] = photos_mod.photo_inventory()[1]
         Path(args[3]).write_bytes(jpeg)
         return types.SimpleNamespace(returncode=0, stderr=b"", stdout=b"")
 
-    real = camera_mod._usb_capture, camera_mod.imgtool
-    camera_mod._usb_capture, camera_mod.imgtool = fake_capture, fake_imgtool
+    real = camera_mod._usb_capture, tools.imgtool
+    camera_mod._usb_capture, tools.imgtool = fake_capture, fake_imgtool
     try:
         ok, _ = camera_mod._usb_capture_view(cfg, out, 1200, 900)
     finally:
-        camera_mod._usb_capture, camera_mod.imgtool = real
+        camera_mod._usb_capture, tools.imgtool = real
     assert (
         ok
         and out.exists()
@@ -1101,7 +1105,7 @@ def test_capture_scratch():
     ghost = tl / "99991231_235959.jpg"  # listed, but gone by the time it is read
     ghost.symlink_to(tl / "nowhere.jpg")
     try:
-        n, latest, when = camera_mod.photo_inventory()
+        n, latest, when = photos_mod.photo_inventory()
     finally:
         ghost.unlink()
     assert latest is not None and latest != ghost and when is not None, (
@@ -1128,4 +1132,4 @@ def test_capture_scratch():
     finally:
         for f in (fresh, photo, out, *stale):
             f.unlink(missing_ok=True)
-        (camera_mod.THUMB_DIR / out.name).unlink(missing_ok=True)
+        (photos_mod.THUMB_DIR / out.name).unlink(missing_ok=True)

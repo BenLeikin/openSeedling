@@ -29,6 +29,8 @@ import setups as setups_mod
 import water
 import heat as heat_mod
 import camera as camera_mod
+import photos as photos_mod
+import tools
 
 AI_REPORT_PATH = Path(__file__).with_name("ai_report.json")
 report_lock = threading.Lock()
@@ -489,7 +491,7 @@ def run_report(reason="daily"):
         if not ai_report.have_key():
             return {"ok": False, "error": "no API key on the controller"}
         photos = sorted(
-            p for p in camera_mod.TIMELAPSE_DIR.glob("*.jpg") if not p.name.startswith("_")
+            p for p in photos_mod.TIMELAPSE_DIR.glob("*.jpg") if not p.name.startswith("_")
         )
         # prefer scheduled frames: a manual (_m) capture can be off-schedule
         # and dark; fall back to manual only when nothing else exists
@@ -500,9 +502,9 @@ def run_report(reason="daily"):
         result = ai_report.generate(
             photo,
             gather_report_data(),
-            crop=None if _flat_on else camera_mod.crop_box(),
+            crop=None if _flat_on else photos_mod.crop_box(),
             model=cfg.get("ai_model"),
-            imgtool=camera_mod.imgtool,
+            imgtool=tools.imgtool,
         )
         result["reason"] = reason
         try:
@@ -887,11 +889,11 @@ def run_alerts(readings):
         )
         spd = min(spds) if spds else None
         snap["_camera_slow_link"] = f"{spd:g} Mbit/s" if spd is not None and spd < 480 else ""
-        free = camera_mod.disk_free_gb()
+        free = photos_mod.disk_free_gb()
         snap["_disk_low"] = (
             f"{free:.1f} GB free on the SD card"
-            + (" (photos have stopped)" if free < camera_mod.MIN_FREE_GB else "")
-            if free < camera_mod.LOW_FREE_GB
+            + (" (photos have stopped)" if free < photos_mod.MIN_FREE_GB else "")
+            if free < photos_mod.LOW_FREE_GB
             else ""
         )
         # A plug that stops responding leaves the light it switches stuck on

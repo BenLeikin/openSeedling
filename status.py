@@ -24,6 +24,8 @@ import water
 import monitor
 import heat as heat_mod
 import camera as camera_mod
+import photos as photos_mod
+import video as video_mod
 
 
 # Never sent to the browser: /api/status is readable without login, and the
@@ -190,7 +192,7 @@ def status_payload(authed=None):
     if s["on"] is None:
         return {"error": "warming up"}
     tz = ZoneInfo(cfg["timezone"])
-    count, _, latest_time = camera_mod.photo_inventory()
+    count, _, latest_time = photos_mod.photo_inventory()
     snap = db.latest()  # one query serves the whole response
     # Overlay the live read, so the chips show the room as it is and not as it
     # was at the last logged sample. The overlay keeps db.latest()'s
@@ -285,11 +287,11 @@ def status_payload(authed=None):
         # canopy readings are due only while photos are taken; null at night
         canopy_due_since=camera_mod.canopy_due_since(cfg),
         heat=heat_mod.status(cfg),
-        render=dict(camera_mod.render),
+        render=dict(video_mod.render),
         video_fps=db.kv_get("video_fps_rendered"),
         video_time=(
-            datetime.fromtimestamp(camera_mod.VIDEO_PATH.stat().st_mtime).isoformat()
-            if camera_mod.VIDEO_PATH.exists()
+            datetime.fromtimestamp(video_mod.VIDEO_PATH.stat().st_mtime).isoformat()
+            if video_mod.VIDEO_PATH.exists()
             else None
         ),
         light_backend=light_mod.light_backend(cfg),

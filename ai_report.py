@@ -49,7 +49,7 @@ def have_key():
 def _image_b64(path, crop=None, imgtool=None):
     """The photo as a base64 JPEG for the API.
 
-    With `imgtool` (camera.imgtool: a callable that runs imgtool.py in its own
+    With `imgtool` (tools.imgtool: a callable that runs imgtool.py in its own
     process, so the caller never loads OpenCV) it is cut to `crop`, (x, y, w,
     h) fractions, and scaled down to MAX_IMG_W on the long edge. Without it,
     or if that fails, the file is sent as it is.

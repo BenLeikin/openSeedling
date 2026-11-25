@@ -11,13 +11,14 @@ import pytest
 from harness import (
     APP,
     alerts,
-    camera_mod,
     config,
     control,
     db,
     hardware,
     light_mod,
     monitor,
+    photos_mod,
+    video_mod,
     water,
 )
 
@@ -79,19 +80,19 @@ def clean_slate():
 def _let_image_jobs_finish():
     """A thumbnail rebuild or a render started by a test runs in a thread of
     its own; wait for it, so it cannot touch the next test's photos."""
-    if camera_mod._thumbs_lock.acquire(timeout=30):
-        camera_mod._thumbs_lock.release()
+    if photos_mod._thumbs_lock.acquire(timeout=30):
+        photos_mod._thumbs_lock.release()
     deadline = time.time() + 30
-    while camera_mod.render.get("state") == "running" and time.time() < deadline:
+    while video_mod.render.get("state") == "running" and time.time() < deadline:
         time.sleep(0.05)
 
 
 def _empty_photo_folder():
-    for folder in (camera_mod.TIMELAPSE_DIR, camera_mod.THUMB_DIR):
+    for folder in (photos_mod.TIMELAPSE_DIR, photos_mod.THUMB_DIR):
         for p in folder.glob("*"):
             if p.is_file():
                 p.unlink(missing_ok=True)
-    for cache in (camera_mod._rect_cache, camera_mod._crop_cache):
+    for cache in (photos_mod._rect_cache, photos_mod._crop_cache):
         cache.update(key=None, bytes=None)
 
 

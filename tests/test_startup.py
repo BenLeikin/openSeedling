@@ -19,10 +19,13 @@ from harness import (
     light_mod,
     monitor,
     page_js,
+    photos_mod,
     routes,
     setups_mod,
     squash,
     status_mod,
+    tools,
+    video_mod,
     water,
 )
 
@@ -84,6 +87,9 @@ def test_patched_names_live_in_one_module():
     test passes without testing anything."""
     mods = {
         "config": config,
+        "photos_mod": photos_mod,
+        "video_mod": video_mod,
+        "tools": tools,
         "hardware": hardware,
         "light_mod": light_mod,
         "setups_mod": setups_mod,

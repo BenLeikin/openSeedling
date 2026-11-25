@@ -10,6 +10,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from harness import (
+    photos_mod,
     APP,
     APP_MODULES,
     PWM_WRITES,
@@ -298,19 +299,19 @@ def test_light_holder(control_loop):
 
     # the photo gives the light back before it is rotated and thumbnailed
     at_thumb = []
-    real = camera_mod._usb_capture_view, camera_mod.make_thumb
+    real = camera_mod._usb_capture_view, photos_mod.make_thumb
     camera_mod._usb_capture_view = lambda cfg_, out, w, h, warmup=None: (
         at_thumb.append(("capture", lm.holder())),
         Path(out).write_bytes(b"\xff\xd8\xff\xd9"),
         (True, None),
     )[2]
-    camera_mod.make_thumb = lambda path, cfg_=None, **k: at_thumb.append(("thumb", lm.holder()))
+    photos_mod.make_thumb = lambda path, cfg_=None, **k: at_thumb.append(("thumb", lm.holder()))
     real_sleep = camera_mod.time.sleep
     camera_mod.time.sleep = lambda s_: None
     try:
         shot = camera_mod.take_photo(dict(cfg, capture_set_light=False), now)
     finally:
-        camera_mod._usb_capture_view, camera_mod.make_thumb = real
+        camera_mod._usb_capture_view, photos_mod.make_thumb = real
         camera_mod.time.sleep = real_sleep
         if shot:
             shot.unlink(missing_ok=True)

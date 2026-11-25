@@ -40,6 +40,9 @@ APP_MODULES = (
     "monitor.py",
     "heat.py",
     "camera.py",
+    "photos.py",
+    "video.py",
+    "tools.py",
     "status.py",
     "routes.py",
     "routes_camera.py",
@@ -289,6 +292,9 @@ import water
 import monitor
 import heat
 import camera as camera_mod
+import photos as photos_mod
+import tools
+import video as video_mod
 import status as status_mod
 import events
 import readings as readings_mod
@@ -353,6 +359,7 @@ __all__ = [
     "now",
     "ON_SCREEN",
     "page_js",
+    "photos_mod",
     "PWM_WRITES",
     "readings_mod",
     "REPO",
@@ -363,7 +370,9 @@ __all__ = [
     "squash",
     "squash_index",
     "status_mod",
+    "tools",
     "tz",
+    "video_mod",
     "water",
     "WORK",
 ]

@@ -21,6 +21,9 @@ import db
 import auth
 import config
 import camera as camera_mod
+import photos as photos_mod
+import tools
+import video as video_mod
 import light as light_mod
 
 
@@ -29,7 +32,7 @@ bp = Blueprint("camera", __name__)
 
 @bp.route("/photo/latest")
 def latest_photo():
-    count, latest, _ = camera_mod.photo_inventory()
+    count, latest, _ = photos_mod.photo_inventory()
     if not count:
         return "no photos yet", 404
     resp = send_file(latest, mimetype="image/jpeg")
@@ -43,12 +46,12 @@ def photo_list():
         v = db.kv_get("thumbs_version") or 0
     except Exception:
         v = 0
-    return jsonify(names=[p.name for p in sorted(camera_mod.THUMB_DIR.glob("*.jpg"))], v=v)
+    return jsonify(names=[p.name for p in sorted(photos_mod.THUMB_DIR.glob("*.jpg"))], v=v)
 
 
 @bp.route("/thumb/<name>")
 def thumb(name):
-    resp = send_from_directory(camera_mod.THUMB_DIR, name, mimetype="image/jpeg")
+    resp = send_from_directory(photos_mod.THUMB_DIR, name, mimetype="image/jpeg")
     resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
     return resp
 
@@ -59,17 +62,17 @@ def frame(name):
     timelapse player shows this once it stops on a frame."""
     if Path(name).name != name or not name.endswith(".jpg") or name.startswith((".", "_")):
         return ("no such photo", 404)
-    path = camera_mod.TIMELAPSE_DIR / name
+    path = photos_mod.TIMELAPSE_DIR / name
     if not path.is_file():
         return ("no such photo", 404)
     with config.settings_lock:
         cfg = dict(config.settings)
-    tag = camera_mod.frame_etag(path, cfg)
+    tag = photos_mod.frame_etag(path, cfg)
     if request.if_none_match.contains(tag):
         resp = Response(status=304)  # unchanged: skip the warp entirely
     else:
         try:
-            data, raw = camera_mod.frame_view(path, cfg)
+            data, raw = photos_mod.frame_view(path, cfg)
         except Exception as e:
             return (f"frame failed: {e}", 500)
         resp = (
@@ -147,7 +150,7 @@ def update_grid():
 @bp.route("/api/detect_grid", methods=["POST"])
 @auth.require_auth
 def detect_grid():
-    count, latest, _ = camera_mod.photo_inventory()
+    count, latest, _ = photos_mod.photo_inventory()
     if not count or latest is None:
         return jsonify(ok=False, error="No photo to detect from yet."), 200
     helper = Path(__file__).with_name("detect_corners.py")
@@ -155,7 +158,7 @@ def detect_grid():
         return jsonify(ok=False, error="Detector not installed."), 200
     try:
         r = subprocess.run(
-            camera_mod.oom_first([sys.executable, str(helper), str(latest)]),
+            tools.oom_first([sys.executable, str(helper), str(latest)]),
             capture_output=True,
             timeout=60,
         )
@@ -178,15 +181,15 @@ def api_reset_timelapse():
     `clear_readings` so are the camera-derived series."""
     data = request.get_json(silent=True) or {}
     if not data.get("confirm"):
-        count, _, _ = camera_mod.photo_inventory()
+        count, _, _ = photos_mod.photo_inventory()
         return jsonify(
             ok=False, needs_confirm=True, photos=count, error=f"{count} photos would be archived"
         ), 200
     stamp = datetime.now(ZoneInfo(config.settings["timezone"])).strftime("%Y%m%d_%H%M%S")
-    dest = camera_mod.ARCHIVE_DIR / stamp
+    dest = photos_mod.ARCHIVE_DIR / stamp
     dest.mkdir(parents=True, exist_ok=True)
     moved = 0
-    for ph in sorted(camera_mod.TIMELAPSE_DIR.glob("*.jpg")):
+    for ph in sorted(photos_mod.TIMELAPSE_DIR.glob("*.jpg")):
         if ph.name.startswith("_"):
             continue
         try:
@@ -194,13 +197,13 @@ def api_reset_timelapse():
             moved += 1
         except Exception as e:
             log.error(f"archive {ph.name} failed: {e}")
-    for t in camera_mod.THUMB_DIR.glob("*.jpg"):
+    for t in photos_mod.THUMB_DIR.glob("*.jpg"):
         t.unlink(missing_ok=True)
-    if camera_mod.VIDEO_PATH.exists():
+    if video_mod.VIDEO_PATH.exists():
         try:
-            camera_mod.VIDEO_PATH.rename(dest / camera_mod.VIDEO_PATH.name)
+            video_mod.VIDEO_PATH.rename(dest / video_mod.VIDEO_PATH.name)
         except Exception:
-            camera_mod.VIDEO_PATH.unlink(missing_ok=True)
+            video_mod.VIDEO_PATH.unlink(missing_ok=True)
     cleared = 0
     if data.get("clear_readings"):
         # camera-derived series only: probes, temperature and light stay
@@ -209,8 +212,8 @@ def api_reset_timelapse():
                 cleared += db.delete_series_prefix(prefix)
             except Exception as e:
                 log.error(f"clear {prefix} failed: {e}")
-    with camera_mod.render_lock:
-        camera_mod.render.update(state="idle", frames=0, msg="", started=None, elapsed=None)
+    with video_mod.render_lock:
+        video_mod.render.update(state="idle", frames=0, msg="", started=None, elapsed=None)
     log.info(f"timelapse reset: {moved} photos archived to {dest}, {cleared} readings cleared")
     return jsonify(ok=True, archived=moved, cleared=cleared, path=str(dest))
 
@@ -224,17 +227,17 @@ def api_rebuild_thumbs():
     flattening is toggled the existing ones keep the geometry they were built
     with.
     """
-    camera_mod.rebuild_thumbs_async()
+    photos_mod.rebuild_thumbs_async()
     return jsonify(ok=True, started=True)
 
 
 @bp.route("/api/render", methods=["POST"])
 @auth.require_auth
 def api_render():
-    count, _, _ = camera_mod.photo_inventory()
+    count, _, _ = photos_mod.photo_inventory()
     if count < 2:
         return jsonify(error="Need at least 2 photos to render."), 400
-    camera_mod.start_render()
+    video_mod.start_render()
     return jsonify(ok=True)
 
 
@@ -324,10 +327,10 @@ def api_preview():
                 "--height",
                 str(ph),
             ]
-            r = subprocess.run(camera_mod.oom_first(cmd), capture_output=True, timeout=20)
+            r = subprocess.run(tools.oom_first(cmd), capture_output=True, timeout=20)
             if r.returncode != 0:
                 camera_mod._camera_fail(
-                    camera_mod.killed_msg(r, "the preview")
+                    tools.killed_msg(r, "the preview")
                     or r.stderr.decode(errors="replace")[-150:]
                     or "preview failed"
                 )
@@ -516,10 +519,10 @@ def preview_img():
 
 @bp.route("/video")
 def video():
-    if not camera_mod.VIDEO_PATH.exists():
+    if not video_mod.VIDEO_PATH.exists():
         return "no video rendered yet", 404
     return send_file(
-        camera_mod.VIDEO_PATH,
+        video_mod.VIDEO_PATH,
         mimetype="video/mp4",
         as_attachment=True,
         download_name="grow_timelapse.mp4",
@@ -583,27 +586,27 @@ def frame_context():
 @bp.route("/photo/cropped.jpg")
 def cropped_image():
     """The latest photo cut to the view crop, cached per (photo, crop)."""
-    _, latest, _ = camera_mod.photo_inventory()
+    _, latest, _ = photos_mod.photo_inventory()
     if not latest:
         return ("no photo yet", 404)
-    roi = camera_mod.crop_box()
+    roi = photos_mod.crop_box()
     if not roi:
         return ("no crop set", 404)  # the page falls back to the full frame
     key = (str(latest), latest.stat().st_mtime, roi)
-    with camera_mod._rect_lock:
-        if camera_mod._crop_cache["key"] == key:
+    with photos_mod._rect_lock:
+        if photos_mod._crop_cache["key"] == key:
             return Response(
-                camera_mod._crop_cache["bytes"],
+                photos_mod._crop_cache["bytes"],
                 mimetype="image/jpeg",
                 headers={"Cache-Control": "no-store"},
             )
     try:
-        r = camera_mod.imgtool(["crop", latest, "-", json.dumps(list(roi)), "--q", 88])
+        r = tools.imgtool(["crop", latest, "-", json.dumps(list(roi)), "--q", 88])
         if r.returncode != 0 or not r.stdout:
-            return (f"crop failed: {camera_mod._imgtool_err(r)}", 500)
+            return (f"crop failed: {tools._imgtool_err(r)}", 500)
         data = r.stdout
-        with camera_mod._rect_lock:
-            camera_mod._crop_cache.update(key=key, bytes=data)
+        with photos_mod._rect_lock:
+            photos_mod._crop_cache.update(key=key, bytes=data)
         return Response(data, mimetype="image/jpeg", headers={"Cache-Control": "no-store"})
     except Exception as e:
         return (f"crop failed: {e}", 500)
@@ -617,7 +620,7 @@ def rectified_image():
 
     Cached per (photo, geometry), so the warp is recomputed only when a new
     photo lands or the corners move."""
-    _, latest, _ = camera_mod.photo_inventory()
+    _, latest, _ = photos_mod.photo_inventory()
     if not latest:
         return ("no photo yet", 404)
     with config.settings_lock:
@@ -631,16 +634,16 @@ def rectified_image():
         latest.stat().st_mtime,
         json.dumps([corners, grid.get("rows"), grid.get("cols")]),
     )
-    with camera_mod._rect_lock:
-        if camera_mod._rect_cache["key"] == key:
+    with photos_mod._rect_lock:
+        if photos_mod._rect_cache["key"] == key:
             return Response(
-                camera_mod._rect_cache["bytes"],
+                photos_mod._rect_cache["bytes"],
                 mimetype="image/jpeg",
                 headers={"Cache-Control": "no-store"},
             )
     try:
         # photos are stored already rotated
-        r = camera_mod.imgtool(
+        r = tools.imgtool(
             [
                 "rectify",
                 latest,
@@ -653,10 +656,10 @@ def rectified_image():
             ]
         )
         if r.returncode != 0 or not r.stdout:
-            return (f"rectify failed: {camera_mod._imgtool_err(r)}", 500)
+            return (f"rectify failed: {tools._imgtool_err(r)}", 500)
         data = r.stdout
-        with camera_mod._rect_lock:
-            camera_mod._rect_cache.update(key=key, bytes=data)
+        with photos_mod._rect_lock:
+            photos_mod._rect_cache.update(key=key, bytes=data)
         return Response(data, mimetype="image/jpeg", headers={"Cache-Control": "no-store"})
     except Exception as e:
         return (f"rectify failed: {e}", 500)

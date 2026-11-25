@@ -11,6 +11,8 @@ import types
 from pathlib import Path
 
 from harness import (
+    photos_mod,
+    tools,
     APP,
     Code,
     WORK,
@@ -218,9 +220,9 @@ def test_clean_start():
     )
     # 3. two ffmpeg runs thumbnailing the same new photo at once
     name = "20260925_160943_m.jpg"
-    photo = camera_mod.TIMELAPSE_DIR / name
+    photo = photos_mod.TIMELAPSE_DIR / name
     photo.write_bytes(b"\xff\xd8\xff\xd9")
-    dst = camera_mod.THUMB_DIR / name
+    dst = photos_mod.THUMB_DIR / name
     dst.unlink(missing_ok=True)
     runs = []
     real_run = camera_mod.subprocess.run
@@ -235,14 +237,14 @@ def test_clean_start():
         cfgt = dict(config.settings, timelapse_flatten=False, roi="")
     camera_mod.subprocess.run = fake_run
     try:
-        th = [threading.Thread(target=camera_mod.make_thumb, args=(photo, cfgt)) for _ in range(2)]
+        th = [threading.Thread(target=photos_mod.make_thumb, args=(photo, cfgt)) for _ in range(2)]
         for t in th:
             t.start()
         for t in th:
             t.join(5)
     finally:
         camera_mod.subprocess.run = real_run
-    parts = list(camera_mod.THUMB_DIR.glob("*.part"))
+    parts = list(photos_mod.THUMB_DIR.glob("*.part"))
     assert len(runs) == 1 and dst.exists() and not parts and runs[0][-1].endswith(".part"), (
         f"a new photo is thumbnailed once, written aside and renamed ({len(runs)} runs, {len(parts)} leftovers)"
     )
@@ -251,10 +253,10 @@ def test_clean_start():
         returncode=1, stderr=b"bad", stdout=b""
     )
     try:
-        camera_mod.make_thumb(photo, cfgt)
+        photos_mod.make_thumb(photo, cfgt)
     finally:
         camera_mod.subprocess.run = real_run
-    assert not dst.exists() and not list(camera_mod.THUMB_DIR.glob("*.part")), (
+    assert not dst.exists() and not list(photos_mod.THUMB_DIR.glob("*.part")), (
         "a failed thumbnail leaves nothing behind, so it is tried again"
     )
     tick = re.search(r"def _capture_tick\([\s\S]*?\n(?=def )", app_source())
@@ -277,6 +279,9 @@ def test_memory_and_status():
         f: (APP / f).read_text()
         for f in (
             "camera.py",
+            "photos.py",
+            "video.py",
+            "tools.py",
             "routes.py",
             "routes_camera.py",
             "routes_garden.py",
@@ -294,7 +299,7 @@ def test_memory_and_status():
     no_import = [f for f, t in srcs.items() if "import cv2" in t or "import numpy" in t]
     assert (
         not no_import
-        and "def imgtool(args, timeout=120):" in srcs["camera.py"]
+        and "def imgtool(args, timeout=120):" in (APP / "tools.py").read_text()
         and (APP / "imgtool.py").exists()
     ), (
         f"no controller module imports OpenCV or NumPy; image work runs in imgtool.py "
@@ -311,13 +316,13 @@ def test_memory_and_status():
         img = np.zeros((600, 800, 3), np.uint8)
         img[:, 400:] = (0, 200, 0)
         cv2.imwrite(str(src), img)
-        r1 = camera_mod.imgtool(["crop", src, "-", "[0.5, 0, 0.5, 1]", "--q", 90])
+        r1 = tools.imgtool(["crop", src, "-", "[0.5, 0, 0.5, 1]", "--q", 90])
         dec = (
             cv2.imdecode(np.frombuffer(r1.stdout, np.uint8), cv2.IMREAD_COLOR)
             if r1.stdout
             else None
         )
-        r2 = camera_mod.imgtool(
+        r2 = tools.imgtool(
             [
                 "rectify",
                 src,
@@ -330,8 +335,8 @@ def test_memory_and_status():
             ]
         )
         rr = cv2.imread(str(WORK / "it_r.jpg"))
-        r3 = camera_mod.imgtool(["sharpness", src])
-        r4 = camera_mod.imgtool(["rotate", src, 90])
+        r3 = tools.imgtool(["sharpness", src])
+        r4 = tools.imgtool(["rotate", src, 90])
         rot = cv2.imread(str(src))
         assert (
             r1.returncode == 0
@@ -404,10 +409,10 @@ def test_memory_and_status():
         (arch / name).mkdir(parents=True)
         (arch / name / "a.jpg").write_bytes(b"x" * 1000)
     free = {"gb": 2.0}
-    real_arch = camera_mod.ARCHIVE_DIR
-    camera_mod.ARCHIVE_DIR = arch
+    real_arch = photos_mod.ARCHIVE_DIR
+    photos_mod.ARCHIVE_DIR = arch
     try:
-        first = camera_mod.prune_archives(
+        first = photos_mod.prune_archives(
             lambda: (
                 free["gb"]
                 + 1.0
@@ -418,9 +423,9 @@ def test_memory_and_status():
         )
         left = sorted(p.name for p in arch.iterdir())
         free["gb"] = 5.0
-        none = camera_mod.prune_archives(lambda: free["gb"])
+        none = photos_mod.prune_archives(lambda: free["gb"])
     finally:
-        camera_mod.ARCHIVE_DIR = real_arch
+        photos_mod.ARCHIVE_DIR = real_arch
     assert (
         first == ["20260801_090000", "20260901_090000"]
         and left == ["20260920_090000"]
