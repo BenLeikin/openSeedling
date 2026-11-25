@@ -8,7 +8,6 @@ import json
 import secrets
 import queue
 import threading
-import time
 from datetime import timedelta
 from pathlib import Path
 from markupsafe import Markup
@@ -98,12 +97,16 @@ app.session_interface = _SessionInterface()
 
 # One password check at a time. Werkzeug's scrypt hash needs about 32 MB per
 # check; with waitress's 16 threads, a burst of parallel logins against the
-# public URL could ask for 512 MB on a 512 MB board. Serializing also makes
-# the delay a limit on guessing across all threads.
-_login_lock = threading.Lock()
-_login_fails = {"n": 0}
-LOGIN_DELAY_S = 0.5
-LOGIN_DELAY_MAX_S = 8.0
+# public URL could ask for 512 MB on a 512 MB board.
+_hash_lock = threading.Lock()
+HASH_WAIT_S = 3.0  # how long a login waits for another one's check before it is refused
+
+
+def _try_later(seconds):
+    seconds = max(1, int(seconds + 0.999))
+    resp = jsonify(ok=False, error=f"too many attempts; try again in {seconds} s")
+    resp.headers["Retry-After"] = str(seconds)
+    return resp, 429
 
 
 @app.route("/api/login", methods=["POST"])
@@ -114,17 +117,24 @@ def login():
     if not h:
         return jsonify(ok=True, authed=True)  # no password set -> open
     pw = str((request.get_json(silent=True) or {}).get("password", ""))[:256]
-    with _login_lock:
-        # doubles per consecutive failure, whoever is guessing
-        time.sleep(min(LOGIN_DELAY_MAX_S, LOGIN_DELAY_S * 2 ** min(_login_fails["n"], 4)))
+    who = request.remote_addr or "?"
+    wait = auth.logins.begin(who)
+    if wait:
+        return _try_later(wait)
+    if not _hash_lock.acquire(timeout=HASH_WAIT_S):
+        auth.logins.cancel(who)
+        return _try_later(1)
+    try:
         ok = check_password_hash(h, pw)
-        _login_fails["n"] = 0 if ok else _login_fails["n"] + 1
+    finally:
+        _hash_lock.release()
+    fails = auth.logins.end(who, ok)
     if ok:
         session["authed"] = True
         session.permanent = True
         return jsonify(ok=True, authed=True)
-    if _login_fails["n"] in (5, 20, 100):
-        log.warning(f"{_login_fails['n']} failed logins in a row")
+    if fails in (5, 20, 100):
+        log.warning(f"{fails} failed logins in a row from {who}")
     return jsonify(ok=False, error="wrong password"), 401
 
 

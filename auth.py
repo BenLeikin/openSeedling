@@ -2,6 +2,8 @@
 the check every route that changes something goes through."""
 
 import ipaddress
+import threading
+import time
 
 from flask import current_app, has_request_context, jsonify, request, session
 
@@ -39,6 +41,76 @@ def is_authed():
     if config.config_broken:
         return on_screen()
     return not auth_enabled() or bool(session.get("authed")) or on_screen()
+
+
+class LoginThrottle:
+    """Back-off for wrong passwords, kept per client address.
+
+    An attempt is charged as a failure before the password is checked, so a
+    burst from one address gets one check and the rest are refused without
+    one; the right password clears the charge. The wait doubles with each
+    failure in a row, from BASE_S up to MAX_S, and a client is forgotten after
+    FORGET_S without an attempt.
+
+    Refusing costs nothing and holds no server thread, so one client guessing
+    does not keep anyone else from signing in. Behind a reverse proxy every
+    client has the proxy's address and shares one back-off.
+    """
+
+    BASE_S = 1.0
+    MAX_S = 60.0
+    FORGET_S = 900.0
+    MAX_CLIENTS = 512
+
+    def __init__(self, clock=time.monotonic):
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._clients = {}  # address -> [failures in a row, refused until, last attempt]
+
+    def begin(self, who):
+        """Charge an attempt to `who`. Returns 0 to go ahead with the password
+        check, or the seconds this client still has to wait."""
+        now = self._clock()
+        with self._lock:
+            c = self._clients.get(who)
+            if c and now - c[2] > self.FORGET_S:
+                c = None
+            if c and now < c[1]:
+                return c[1] - now
+            if c is None:
+                if len(self._clients) >= self.MAX_CLIENTS:
+                    del self._clients[min(self._clients, key=lambda k: self._clients[k][2])]
+                c = self._clients[who] = [0, 0.0, now]
+            c[0] += 1
+            c[1] = now + min(self.MAX_S, self.BASE_S * 2 ** (c[0] - 1))
+            c[2] = now
+            return 0
+
+    def cancel(self, who):
+        """Take back the charge for an attempt whose password was never checked."""
+        with self._lock:
+            c = self._clients.get(who)
+            if c:
+                c[0] -= 1
+                c[1] = self._clock()
+                if c[0] <= 0:
+                    del self._clients[who]
+
+    def end(self, who, ok):
+        """Record how the check went. Returns the client's failures in a row."""
+        with self._lock:
+            if ok:
+                self._clients.pop(who, None)
+                return 0
+            c = self._clients.get(who)
+            return c[0] if c else 1
+
+    def clear(self):
+        with self._lock:
+            self._clients.clear()
+
+
+logins = LoginThrottle()
 
 
 def public(fn):

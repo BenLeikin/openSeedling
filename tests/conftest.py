@@ -11,6 +11,7 @@ import pytest
 from harness import (
     APP,
     alerts,
+    auth,
     config,
     control,
     db,
@@ -73,6 +74,7 @@ def clean_slate():
         st.update(running=False, reserved=0.0)
     water.fill_failures.clear()
     alerts.reset()
+    auth.logins.clear()
     light_mod.release(light_mod.holder())
     hardware.SHUTTING_DOWN.clear()
 

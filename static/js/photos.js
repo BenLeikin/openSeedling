@@ -621,7 +621,11 @@ export async function doLogin() {
       pw.value = '';
       restartStream();
       refresh();
-    } else err.textContent = 'wrong password';
+    } else {
+      // 401 for a wrong password, 429 with the wait when there were too many
+      const j = await r.json().catch(() => ({}));
+      err.textContent = j.error || 'login failed';
+    }
   } catch (e) {
     err.textContent = 'login failed';
   }

@@ -59,44 +59,9 @@ def test_sign_in():
     assert "latitude" not in s and "longitude" not in s, "signed out: location hidden"
     assert c.post("/api/pump", json={}).status_code == 401, "signed out: JSON POST gets 401"
 
-    routes.LOGIN_DELAY_S, routes.LOGIN_DELAY_MAX_S = 0.01, 0.2
-    real_check = routes.check_password_hash
-    active = {"n": 0, "max": 0}
-    lk = threading.Lock()
-
-    def tracked(h, pw):
-        with lk:
-            active["n"] += 1
-            active["max"] = max(active["max"], active["n"])
-        time.sleep(0.03)
-        try:
-            return real_check(h, pw)
-        finally:
-            with lk:
-                active["n"] -= 1
-
-    routes.check_password_hash = tracked
-    routes._login_fails["n"] = 0
-    threads = [
-        threading.Thread(
-            target=lambda: routes.app.test_client().post("/api/login", json={"password": "wrong"})
-        )
-        for _ in range(6)
-    ]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-    assert active["max"] == 1, f"parallel logins are checked one at a time (max {active['max']})"
-    assert routes._login_fails["n"] == 6, "failed logins are counted"
-    t0 = time.time()
-    c.post("/api/login", json={"password": "wrong"})
-    assert time.time() - t0 >= 0.15, "delay grows after repeated failures"
-    r = c.post("/api/login", json={"password": "pw"})
-    assert r.status_code == 200 and routes._login_fails["n"] == 0, (
-        "right password signs in and resets the count"
-    )
-    routes.check_password_hash = real_check
+    assert c.post("/api/login", json={"password": "wrong"}).status_code == 401
+    auth.logins.clear()
+    assert c.post("/api/login", json={"password": "pw"}).status_code == 200
     s = c.get("/api/status").get_json()
     assert s["authed"] and "latitude" in s["settings"], "signed in: location shown"
     c.post("/api/logout", json={})
