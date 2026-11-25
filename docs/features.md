@@ -469,6 +469,13 @@ settings require a session):
 ./venv/bin/python scripts/set_password.py
 ```
 
+What a signed-out viewer can read is cut to what the read-only page shows: the
+readings, charts, photos, trays and the light's day. The location, the
+timezone, device paths, alert thresholds and the notes for the AI report stay
+with the owner, sunrise and sunset are rounded to the quarter hour (to the
+second they give away where the grow is), and the device tiles leave out the
+Pi's name and address.
+
 Every request goes through one check (`auth.check_request`) before its route
 runs. A route needs a login unless it is marked public in the code, and a
 request that changes anything must carry a JSON object, which is what stops

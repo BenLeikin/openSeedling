@@ -28,17 +28,60 @@ import photos as photos_mod
 import video as video_mod
 
 
-# Never sent to the browser: /api/status is readable without login, and the
-# frontend has no use for any of these.
+# Never sent to the browser, signed in or not: the frontend has no use for any
+# of these.
 SECRET_SETTINGS = ("password_hash", "discord_webhook", "ntfy_topic", "kasa_user", "kasa_pass")
-# Only for a signed-in viewer: where the grow is. The public dashboard does not
-# need coordinates to render, and a precise latitude/longitude is a home address.
-PRIVATE_SETTINGS = ("latitude", "longitude")
+# What a signed-out viewer gets: the settings the read-only dashboard and the
+# touchscreen summary draw with, plus every screen_* one. /api/status is
+# readable without a login, on the public site as well, so a setting is
+# private unless it is listed here. A new one the read-only page needs has to
+# be added, or that page falls back to its default for it.
+VISITOR_SETTINGS = frozenset(
+    {
+        "buddy_model",
+        "camera_enabled",
+        "canopy_factor",
+        "capture_enabled",
+        "capture_interval_min",
+        "dli_target_high",
+        "dli_target_low",
+        "grid",
+        "humidity_high",
+        "humidity_low",
+        "little_buddy",
+        "lux_to_ppfd_k",
+        "player_fps",
+        "probe_cal",
+        "probe_names",
+        "roi",
+        "sample_interval_min",
+        "setups",
+        "soil_temp_high_f",
+        "soil_temp_low_f",
+        "theme",
+        "timelapse_flatten",
+        "trays",
+        "units",
+    }
+)
 
 
 def public_settings(cfg, authed=True):
-    hide = SECRET_SETTINGS if authed else SECRET_SETTINGS + PRIVATE_SETTINGS
-    return {k: v for k, v in cfg.items() if k not in hide}
+    if authed:
+        return {k: v for k, v in cfg.items() if k not in SECRET_SETTINGS}
+    return {k: v for k, v in cfg.items() if k in VISITOR_SETTINGS or k.startswith("screen_")}
+
+
+# Sunrise and sunset to the second give the latitude and longitude to within a
+# few kilometres. A signed-out viewer gets them to the nearest quarter hour,
+# which narrows it to a region.
+VISITOR_SUN_STEP_S = 15 * 60
+
+
+def _coarse(when):
+    """`when` to the nearest VISITOR_SUN_STEP_S."""
+    step = VISITOR_SUN_STEP_S
+    return datetime.fromtimestamp(round(when.timestamp() / step) * step, when.tzinfo)
 
 
 # ---- live updates (server-sent events) ----------------------------------
@@ -213,6 +256,12 @@ def status_payload(authed=None):
         cfg = dict(config.settings)
     if s["on"] is None:
         return {"error": "warming up"}
+    authed = auth.is_authed() if authed is None else bool(authed)
+    on, off, sunrise, sunset = s["on"], s["off"], s["sunrise"], s["sunset"]
+    if not authed:
+        sunrise, sunset = _coarse(sunrise), _coarse(sunset)
+        if cfg.get("schedule_mode", "solar") == "solar":  # the light follows the sun
+            on, off = _coarse(on), _coarse(off)
     tz = ZoneInfo(cfg["timezone"])
     count, _, latest_time = photos_mod.photo_inventory()
     snap = db.latest()  # one query serves the whole response
@@ -245,9 +294,7 @@ def status_payload(authed=None):
         and (cam_on or not k.startswith("canopy:"))
         and (not k.startswith("canopy:") or k[7:] in _cam_trays)
     }
-    setups_out = [
-        setups_mod.setup_status(cfg, st, s["on"], s["off"], tz) for st in setups_mod.setups(cfg)
-    ]
+    setups_out = [setups_mod.setup_status(cfg, st, on, off, tz) for st in setups_mod.setups(cfg)]
     day = setups_out[0]["day"]
     return dict(
         rev=rev,
@@ -257,10 +304,10 @@ def status_payload(authed=None):
         # just after a change must name the mode that was asked for
         light_override=cfg.get("light_override", "auto"),
         manual_bright=cfg.get("manual_bright", 100),
-        on=s["on"].isoformat(),
-        off=s["off"].isoformat(),
-        sunrise=s["sunrise"].isoformat(),
-        sunset=s["sunset"].isoformat(),
+        on=on.isoformat(),
+        off=off.isoformat(),
+        sunrise=sunrise.isoformat(),
+        sunset=sunset.isoformat(),
         ramp=cfg["ramp_min"],
         max=cfg["max_bright"],
         schedule_mode=cfg.get("schedule_mode", "solar"),
@@ -313,7 +360,7 @@ def status_payload(authed=None):
         capturing=camera_mod.capturing,
         # canopy readings are due only while photos are taken; null at night
         canopy_due_since=camera_mod.canopy_due_since(cfg),
-        heat=heat_mod.status(cfg),
+        heat=heat_mod.status(cfg) if authed else {**heat_mod.status(cfg), "plug_error": ""},
         render=dict(video_mod.render),
         video_fps=db.kv_get("video_fps_rendered"),
         video_time=(
@@ -339,16 +386,18 @@ def status_payload(authed=None):
             "running": light_mod.lightning_state["running"],
         },
         kasa={
-            "host": light_mod.kasa_conf(cfg)[0],
+            # the plug's address on the home network is the owner's to see
+            "host": light_mod.kasa_conf(cfg)[0] if authed else None,
             "from_env": bool(light_mod.KASA_HOST_ENV),
             "on": light_mod.kasa_state["on"],
             "ok": light_mod.kasa_state["ok"],
-            "error": light_mod.kasa_state["error"],
+            # the library's errors name the address it could not reach
+            "error": light_mod.kasa_state["error"] if authed else "",
             "fails": light_mod.kasa_state["fails"],
         }
         if light_mod.light_backend(cfg) == "kasa"
         else None,
-        settings=public_settings(cfg, authed=auth.is_authed() if authed is None else bool(authed)),
+        settings=public_settings(cfg, authed),
         probe_default_cal=water.PROBE_DEFAULT_CAL,
         probe_cal_flags={
             t: f

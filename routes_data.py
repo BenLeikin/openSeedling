@@ -230,9 +230,19 @@ def series_all():
     return jsonify(hours=hours, series=out)
 
 
+HOST_PRIVATE = ("host", "ip", "wifi")
+
+
 @bp.route("/api/host")
 @auth.public
 def api_host():
     """Pi health. Separate from /api/status so the 15s poll stays cheap:
-    vcgencmd shells out, and none of this changes fast."""
-    return jsonify(hoststats.all_stats())
+    vcgencmd shells out, and none of this changes fast.
+
+    A signed-out viewer gets the health figures without what identifies the
+    machine on its network: its hostname, its address and its Wi-Fi link."""
+    stats = hoststats.all_stats()
+    if not auth.is_authed():
+        for key in HOST_PRIVATE:
+            stats.pop(key, None)
+    return jsonify(stats)

@@ -741,6 +741,77 @@ def phone(pw, base):
     b.close()
 
 
+def drawn(pw, base):
+    """How many charts and trays the dashboard draws."""
+    b = pw.chromium.launch()
+    page = b.new_context(viewport={"width": 1400, "height": 1000}).new_page()
+    page.goto(base + "/")
+    page.wait_for_timeout(4000)
+    n = page.evaluate(
+        """()=>[document.querySelectorAll('#sensorcard svg, #sensorcard canvas').length,
+                document.getElementById('trayswrap').children.length]"""
+    )
+    b.close()
+    return n
+
+
+def visitor(pw, base, owner_sees):
+    """The read-only page a signed-out viewer gets, with the settings trimmed
+    to the visitor list: it draws what the owner's page draws, and shows
+    nothing that needs a login."""
+    b = pw.chromium.launch()
+    page = b.new_context(viewport={"width": 1400, "height": 1000}).new_page()
+    errs, refused = [], []
+    page.on("pageerror", lambda e: errs.append(str(e)))
+    page.on(
+        "response",
+        lambda r: refused.append(r.url.split("/", 3)[-1]) if r.status in (401, 500) else None,
+    )
+    page.goto(base + "/")
+    page.wait_for_timeout(4000)
+    got = page.evaluate(
+        """async()=>{
+          const st = await (await fetch('/api/status')).json();
+          const shown = sel => { const e = document.querySelector(sel);
+                                 return !!e && getComputedStyle(e).display !== 'none'; };
+          return {
+            readonly: document.body.classList.contains('readonly'),
+            authed: st.authed,
+            settings: Object.keys(st.settings).length,
+            hasNotes: 'ai_notes' in st.settings || 'timezone' in st.settings,
+            sensors: shown('#sensorcard'),
+            chips: document.querySelectorAll('#sensorcard svg, #sensorcard canvas').length,
+            trays: document.getElementById('trayswrap').children.length,
+            settingsForm: shown('details.aset'),
+            lightCtl: shown('#lightctl'),
+            login: shown('#loginbtn'),
+            hostTiles: [...document.querySelectorAll('#hgrid .hlabel')].map(e => e.textContent),
+          }; }"""
+    )
+    check(
+        got["readonly"] and not got["authed"] and got["login"] and not got["hasNotes"],
+        f"a signed-out viewer gets the read-only page and a trimmed status ({got['settings']} settings)",
+    )
+    check(
+        got["sensors"]
+        and got["chips"] > 0
+        and [got["chips"], got["trays"]] == owner_sees
+        and not errs,
+        f"the read-only page draws the same charts and trays as the owner's "
+        f"({got['chips']} charts, {got['trays']} trays; owner {owner_sees}; errors {errs[:2]})",
+    )
+    check(
+        not got["settingsForm"] and not got["lightCtl"],
+        "Settings and the light controls are not shown to a signed-out viewer",
+    )
+    check(
+        got["hostTiles"] and "Host" not in got["hostTiles"] and "WiFi" not in got["hostTiles"],
+        f"the device tiles leave out the machine's name and network ({got['hostTiles']})",
+    )
+    check(not refused, f"the read-only page asks for nothing that needs a login ({refused[:3]})")
+    b.close()
+
+
 def camera_pair(page, base, app):
     """With a second camera set, Settings' Align cameras asks and then aligns,
     and the camera card's own Align button still opens the align view."""
@@ -1045,6 +1116,17 @@ def main():
             phone(pw, base)
             print("Touchscreen")
             screen(pw, base, app)
+            print("Signed-out viewer")
+            owner_sees = drawn(pw, base)
+            proc.terminate()
+            proc.wait(15)
+            from werkzeug.security import generate_password_hash
+
+            cfg = saved(app)
+            cfg["password_hash"] = generate_password_hash("pw", method="pbkdf2:sha256:1000")
+            (app / "config.json").write_text(json.dumps(cfg))
+            proc, base = start(app, port)
+            visitor(pw, base, owner_sees)
     finally:
         proc.terminate()
         try:

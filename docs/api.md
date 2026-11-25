@@ -51,4 +51,9 @@ Signed-out viewers see neither the location nor any credential in
 | POST | `/api/login`, `/api/logout` | Auth. A wrong password makes that client address wait (1 s, doubling to 60 s); a login sent during the wait gets 429 with `Retry-After` |
 
 Secrets (`password_hash`, webhook URLs, ntfy topic, Kasa credentials) are
-redacted from `/api/status`; the read-only dashboard never exposes them.
+never in `/api/status`. With a password set, a signed-out viewer gets a
+shorter status still: only the settings the read-only page draws with
+(`status.VISITOR_SETTINGS` and the `screen_*` ones), sunrise and sunset to the
+nearest quarter hour (and the light window too, when it follows the sun), and
+no address for the smart plug. `/api/host` leaves out the hostname, the IP
+address and the Wi-Fi link for them.

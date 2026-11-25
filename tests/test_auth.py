@@ -363,3 +363,137 @@ def test_forwarded_headers_count_from_the_trusted_proxy_only():
         set_password(False)
         behind.close()
         direct.close()
+
+
+def _status(client):
+    return client.get("/api/status").get_json()
+
+
+def test_a_signed_out_viewer_gets_only_the_settings_the_page_draws_with():
+    with config.settings_lock:
+        config.settings.update(
+            ai_notes="the tray by the kitchen window",
+            latitude=34.2,
+            longitude=-118.8,
+            kasa_user="me@example.com",
+            screen_night="dim",
+        )
+    everything = _status(c)["settings"]
+    assert {"ai_notes", "latitude", "timezone", "usb_device"} <= set(everything), "no password"
+    assert "kasa_user" not in everything, "credentials are never in the status"
+
+    set_password(True)
+    try:
+        seen = set(_status(routes.app.test_client())["settings"])
+        extra = {k for k in seen if k not in status_mod.VISITOR_SETTINGS and k[:7] != "screen_"}
+        assert not extra, f"a signed-out viewer got settings off the list: {sorted(extra)}"
+        assert {"units", "trays", "screen_night"} <= seen, "and does get what the page needs"
+
+        owner = routes.app.test_client()
+        owner.post("/api/login", json={"password": "pw"})
+        assert {"ai_notes", "latitude", "timezone"} <= set(_status(owner)["settings"])
+    finally:
+        set_password(False)
+    assert not status_mod.VISITOR_SETTINGS & set(status_mod.SECRET_SETTINGS)
+
+
+def test_every_setting_the_read_only_page_reads_is_on_the_visitor_list():
+    """The dashboard's scripts name the settings they read. One that is read
+    outside the Settings form but missing from the list would silently fall
+    back to its default for signed-out viewers."""
+    import re
+    from pathlib import Path
+
+    from harness import APP
+
+    # read only to fill Settings controls, which a signed-out viewer never sees
+    form_only = {"ai_enabled", "ai_report_hour", "ai_report_minute", "heat_sensor"}
+    read = set()
+    for script in list(Path(APP, "static", "js").glob("*.js")) + list(
+        Path(APP, "static").glob("*.js")
+    ):
+        src = script.read_text()
+        read |= set(re.findall(r"\bsettings\??\.([a-z_0-9]+)", src))
+        read |= set(re.findall(r"\bsettings\[['\"]([a-z_0-9]+)['\"]\]", src))
+        for fn, arg in re.findall(r"function (fillForm|setAiControls|setDliBand)\((\w+)\)", src):
+            body = src[src.index(f"function {fn}({arg})") :]
+            body = body[: body.index("\nexport ", 1) if "\nexport " in body[1:] else len(body)]
+            read |= set(re.findall(rf"\b{arg}\??\.([a-z_0-9]+)", body))
+            read |= set(re.findall(rf"\b{arg}\[['\"]([a-z_0-9]+)['\"]\]", body))
+    read = {k for k in read if k in config.DEFAULTS}
+    assert len(read) > 15, f"the scan found the page's settings ({sorted(read)})"
+    missing = {
+        k
+        for k in read
+        if k not in status_mod.VISITOR_SETTINGS and k not in form_only and k[:7] != "screen_"
+    }
+    assert not missing, f"read by the page but not on the visitor list: {sorted(missing)}"
+
+
+def test_a_signed_out_viewer_gets_sun_times_to_the_quarter_hour():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo(config.settings["timezone"])
+    day = datetime.now(tz).replace(microsecond=0)
+    exact = {
+        "sunrise": day.replace(hour=6, minute=37, second=59),
+        "sunset": day.replace(hour=16, minute=46, second=36),
+        "on": day.replace(hour=6, minute=7, second=59),
+        "off": day.replace(hour=17, minute=16, second=36),
+    }
+    with config.state_lock:
+        config.state.update(exact)
+    with config.settings_lock:
+        config.settings["schedule_mode"] = "solar"
+
+    def times(client):
+        j = _status(client)
+        return {k: datetime.fromisoformat(j[k]) for k in exact}
+
+    assert times(c) == exact, "no password: as computed"
+    set_password(True)
+    try:
+        anon = routes.app.test_client()
+        got = times(anon)
+        for k, t in got.items():
+            assert (t.minute % 15, t.second) == (0, 0), f"{k} is on a quarter hour ({t})"
+            assert abs((t - exact[k]).total_seconds()) <= 450, f"{k} is the nearest one"
+        assert got["sunrise"].hour == 6 and got["sunrise"].minute == 45
+
+        # a window the owner typed in says nothing about where the sun is
+        with config.settings_lock:
+            config.settings["schedule_mode"] = "fixed"
+        got = times(anon)
+        assert (got["on"], got["off"]) == (exact["on"], exact["off"])
+        assert got["sunrise"] != exact["sunrise"], "sunrise is still rounded"
+
+        owner = routes.app.test_client()
+        owner.post("/api/login", json={"password": "pw"})
+        assert times(owner) == exact, "signed in: as computed"
+    finally:
+        set_password(False)
+
+
+def test_a_signed_out_viewer_does_not_get_the_machines_name_or_address():
+    import hoststats
+
+    real = hoststats.all_stats
+    hoststats.all_stats = lambda: {
+        "cpu_temp_c": 48.2,
+        "host": "openSeedling",
+        "ip": "10.0.2.220",
+        "wifi": {"iface": "wlan0", "percent": 70, "dbm": -58},
+        "model": "Raspberry Pi Zero 2 W",
+    }
+    try:
+        assert set(c.get("/api/host").get_json()) >= {"host", "ip", "wifi"}, "no password"
+        set_password(True)
+        anon = routes.app.test_client().get("/api/host").get_json()
+        assert set(anon) == {"cpu_temp_c", "model"}, f"signed out: health only ({sorted(anon)})"
+        owner = routes.app.test_client()
+        owner.post("/api/login", json={"password": "pw"})
+        assert owner.get("/api/host").get_json()["ip"] == "10.0.2.220"
+    finally:
+        hoststats.all_stats = real
+        set_password(False)
