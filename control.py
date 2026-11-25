@@ -16,9 +16,10 @@ import setups as setups_mod
 LOOP_SECONDS = 30
 
 
-def control_loop():
+def control_loop(stop=None):
+    """Run until `stop` (an Event) is set; forever when there is none."""
     logged = {}  # the last window written to the log, and each step's last error
-    while True:
+    while stop is None or not stop.is_set():
         with config.settings_lock:
             cfg = dict(config.settings)
         window = _step("lights", logged, _lights, cfg, logged)
