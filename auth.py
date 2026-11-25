@@ -76,7 +76,9 @@ class LoginThrottle:
     An attempt is charged as a failure before the password is checked, so a
     burst from one address gets one check and the rest are refused without
     one; the right password clears the charge. The wait doubles with each
-    failure in a row, from BASE_S up to MAX_S, and a client is forgotten after
+    failure in a row, from BASE_S up to MAX_S, and runs from the moment the
+    check came back wrong: a check takes about a second on a Pi Zero, which
+    would otherwise use up the first wait. A client is forgotten after
     FORGET_S without an attempt.
 
     Refusing costs nothing and holds no server thread, so one client guessing
@@ -110,9 +112,12 @@ class LoginThrottle:
                     del self._clients[min(self._clients, key=lambda k: self._clients[k][2])]
                 c = self._clients[who] = [0, 0.0, now]
             c[0] += 1
-            c[1] = now + min(self.MAX_S, self.BASE_S * 2 ** (c[0] - 1))
+            c[1] = now + self._wait(c[0])
             c[2] = now
             return 0
+
+    def _wait(self, failures):
+        return min(self.MAX_S, self.BASE_S * 2 ** (failures - 1))
 
     def cancel(self, who):
         """Take back the charge for an attempt whose password was never checked."""
@@ -131,7 +136,10 @@ class LoginThrottle:
                 self._clients.pop(who, None)
                 return 0
             c = self._clients.get(who)
-            return c[0] if c else 1
+            if not c:
+                return 1
+            c[1] = self._clock() + self._wait(c[0])
+            return c[0]
 
     def clear(self):
         with self._lock:

@@ -40,6 +40,13 @@ def test_wrong_passwords_back_off_per_client():
 
     t.clear()
     assert t.begin("a") == 0
+    clock.now += 0.8  # the password check, on a Pi Zero
+    assert t.begin("a") > 0, "a second attempt during the check is refused"
+    t.end("a", ok=False)
+    assert t.begin("a") == pytest.approx(1.0), "the wait runs from when the check failed"
+
+    t.clear()
+    assert t.begin("a") == 0
     t.cancel("a")
     assert t.begin("a") == 0, "an attempt that was never checked is not charged"
 
