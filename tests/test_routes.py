@@ -270,3 +270,19 @@ def test_a_refused_request_announces_no_change():
         events.unsubscribe(seen.append)
     assert "change" not in refused, "a request that was refused changed nothing"
     assert "change" in seen, "one that was accepted announces the change"
+
+
+def test_every_reply_carries_the_security_headers():
+    for path in ("/", "/screen", "/api/status", "/static/style.css", "/no/such/page"):
+        h = c.get(path).headers
+        assert h["X-Content-Type-Options"] == "nosniff", path
+        assert h["X-Frame-Options"] == "DENY", path
+        assert h["Referrer-Policy"] == "no-referrer", path
+        policy = h["Content-Security-Policy"]
+        assert "script-src 'self'" in policy and "frame-ancestors 'none'" in policy, path
+        assert "unsafe-eval" not in policy and "script-src 'self' 'unsafe-inline'" not in policy
+    for page in ("/", "/screen"):
+        html = c.get(page, environ_base={"REMOTE_ADDR": "127.0.0.1"}).get_data(as_text=True)
+        inline = re.findall(r"<script(?![^>]*\bsrc=)(?![^>]*application/json)[^>]*>", html)
+        assert not inline, f"{page} has a script the policy would refuse: {inline[:1]}"
+        assert not re.search(r"\son[a-z]+=", html), f"{page} has an inline event handler"

@@ -23,7 +23,18 @@
   const WAIT_MS = 350; // how long a native click may take to follow the tap
   const HOLD_MS = 3000; // a finger held this long starts calibration
   const REPORT_TAPS = 5;
-  const CAL = (window.TOUCH_CAL && window.TOUCH_CAL.m) || null;
+  // The saved calibration is in the page as data: the content policy allows
+  // no inline script to set it.
+  const saved = (() => {
+    if (window.TOUCH_CAL) return window.TOUCH_CAL;
+    const el = document.getElementById('touchcal');
+    try {
+      return el ? JSON.parse(el.textContent) : null;
+    } catch (e) {
+      return null;
+    }
+  })();
+  const CAL = (saved && saved.m) || null;
   let start = null,
     moved = false,
     clickedAt = 0,

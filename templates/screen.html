@@ -44,7 +44,7 @@
 </footer>
 <script src="/static/screen.js?v={{ v }}"></script>
 <script type="module" src="/static/screen_buddy.js?v={{ v }}"></script>
-{% if onscreen %}<script>window.TOUCH_CAL = {{ touch_cal|tojson }};</script>
+{% if onscreen %}<script id="touchcal" type="application/json">{{ touch_cal|tojson }}</script>
 <script src="/static/screen_touch.js?v={{ v }}"></script>{% endif %}
 </body>
 </html>

@@ -457,7 +457,7 @@ def test_external_display():
         good_cal["m"][0] == -6.6
         and config._v_touch_cal({}) == {}
         and len(refused) == 3
-        and "window.TOUCH_CAL = " in page_cal
+        and '<script id="touchcal" type="application/json">' in page_cal
         and '"m": [-6.6' in page_cal.replace("[-6.6,", "[-6.6")
         and "HOLD_MS = 3000" in tj
         and 'id="touchcalreset"' in c.get("/").get_data(as_text=True)

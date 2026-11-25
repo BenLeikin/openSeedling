@@ -180,6 +180,20 @@ def saved(app):
 # tests
 
 
+refused_by_policy = []
+
+
+def watch_policy(page):
+    """Collect what the page's content policy refuses (an inline script, a
+    resource from elsewhere): the browser says so on the console."""
+    page.on(
+        "console",
+        lambda m: (
+            refused_by_policy.append(m.text[:200]) if "Content Security Policy" in m.text else None
+        ),
+    )
+
+
 def open_all(page):
     page.evaluate("()=>document.querySelectorAll('details').forEach(d=>d.open=true)")
 
@@ -763,6 +777,7 @@ def visitor(pw, base, owner_sees):
     page = b.new_context(viewport={"width": 1400, "height": 1000}).new_page()
     errs, refused = [], []
     page.on("pageerror", lambda e: errs.append(str(e)))
+    watch_policy(page)
     page.on(
         "response",
         lambda r: refused.append(r.url.split("/", 3)[-1]) if r.status in (401, 500) else None,
@@ -885,6 +900,7 @@ def screen(pw, base, app):
     page = ctx.new_page()
     errs = []
     page.on("pageerror", lambda e: errs.append(str(e)))
+    watch_policy(page)
     page.goto(base + "/screen")
     page.wait_for_timeout(1500)
     # the Settings round trip earlier flipped every field, the night screen
@@ -1113,6 +1129,7 @@ def main():
             page = b.new_context(viewport={"width": 1400, "height": 1000}).new_page()
             errs = []
             page.on("pageerror", lambda e: errs.append(str(e)))
+            watch_policy(page)
             for name, fn in (
                 ("Settings", lambda: settings_round_trip(page, base, app)),
                 ("Unsaved edits", lambda: edit_survives_update(page, base, app)),
@@ -1155,6 +1172,11 @@ def main():
             os.environ.update(GROWLIGHT_TRUSTED_PROXY="10.0.0.5", GROWLIGHT_LOGIN_HTTPS_ONLY="1")
             proc, base = start(app, port)
             https_only(pw, base)
+            check(
+                not refused_by_policy,
+                f"nothing on the dashboard, the touchscreen or the read-only page is refused "
+                f"by the content policy ({refused_by_policy[:2]})",
+            )
     finally:
         proc.terminate()
         try:

@@ -789,7 +789,7 @@
 <script id="formspec" type="application/json">{{ form_spec|tojson }}</script>
 <!-- the dashboard: ES modules under static/js, entered through main.js -->
 <script type="module" src="{{ url_for('static', filename='js/main.js', v=v) }}"></script>
-{% if onscreen %}<script>window.TOUCH_CAL = {{ touch_cal|tojson }};</script>
+{% if onscreen %}<script id="touchcal" type="application/json">{{ touch_cal|tojson }}</script>
 <script src="/static/screen_touch.js?v={{ v }}"></script>{% endif %}
 </body>
 </html>

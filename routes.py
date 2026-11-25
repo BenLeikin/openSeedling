@@ -194,6 +194,37 @@ def _revalidate_scripts(resp):
     return resp
 
 
+# What every page and reply carries. The policy is the one the pages are
+# written to: each script and style sheet is a file of the dashboard's own,
+# nothing is loaded from another site, and no other site may frame it.
+SECURITY_HEADERS = {
+    "Content-Security-Policy": "; ".join(
+        [
+            "default-src 'self'",
+            "script-src 'self'",
+            "style-src 'self' 'unsafe-inline'",  # style="" attributes in the pages
+            "img-src 'self' data: blob:",
+            "font-src 'self'",
+            "connect-src 'self'",
+            "object-src 'none'",
+            "frame-ancestors 'none'",
+            "base-uri 'self'",
+            "form-action 'self'",
+        ]
+    ),
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+}
+
+
+@app.after_request
+def _security_headers(resp):
+    for name, value in SECURITY_HEADERS.items():
+        resp.headers.setdefault(name, value)
+    return resp
+
+
 # posts that report rather than change anything (no new status to announce)
 NOT_CHANGES = {"/api/screen_event"}
 
