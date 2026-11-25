@@ -15,9 +15,8 @@ import config
 PROBE_CONFIRM = 3  # consecutive agreeing readings that make a change real
 
 # How large a departure from the recent baseline counts as suspicious, per
-# sensor. These are in each sensor's own units, which is the whole point: 0.08V
-# is meaningful for a probe and meaningless for humidity. A value under the
-# threshold is passed through untouched, so ordinary drift is never filtered.
+# sensor, in that sensor's own units. A value under the threshold is passed
+# through untouched, so ordinary drift is never filtered.
 SENSOR_JUMP = {
     "probe:": 0.08,  # volts
     "temp:soil": 2.0,  # Celsius; a real soil change is slower than this
@@ -26,10 +25,8 @@ SENSOR_JUMP = {
     "pressure": 2.0,  # hPa
     "canopy:": 5.0,  # percent of tray area
 }
-# Deliberately absent: lux. It legitimately steps by thousands the moment the
-# light switches or a capture raises brightness, and the DLI integration needs
-# the real values. Filtering it would either reject genuine transitions or
-# corrupt the day's light total.
+# Lux has no entry: it steps by thousands when the light switches or a capture
+# raises brightness, and the DLI integration needs the real values.
 
 
 def sensor_jump(key):
@@ -81,13 +78,11 @@ reject_last = {}
 
 
 def validate_readings(readings):
-    """Drop implausible values before they ever reach the database.
+    """Drop implausible values before they reach the database; returns the rest.
 
-    A probe reading the 3.3V rail means the signal is gone, not that the soil
-    is bone dry. Letting that into history corrupts the charts, the alert
-    thresholds and any calibration done afterwards, and it is indistinguishable
-    from real data later. Rejections are counted and logged as events so a
-    wiring fault is visible rather than silent.
+    A probe reading the 3.3V rail has lost its signal, and stored, that value
+    would skew the charts, the alert thresholds and any later calibration.
+    Each rejection is counted and logged as an event.
     """
     clean, dropped = {}, []
     for k, v in readings.items():

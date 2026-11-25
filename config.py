@@ -21,7 +21,7 @@ DEFAULTS = {
     "timezone": "America/Los_Angeles",
     "max_bright": 100,  # percent
     "ramp_min": 30,  # minutes
-    "light_override": "auto",  # auto = follow the sun schedule; on|off = manual hold
+    "light_override": "auto",  # auto = follow the schedule; on|off = manual hold
     "manual_bright": 100,  # brightness held when light_override is "on"
     "fan_mode": "auto",  # auto | on | off
     "fan_speed": 100,  # manual speed held when fan_mode is "on"
@@ -34,43 +34,43 @@ DEFAULTS = {
     "alert_cooldown_hours": 24,  # reminder interval while a problem persists
     "alert_dry_pct": 15,  # calibrated trays only
     "alert_humidity_high": 80,  # 0 disables
-    "alert_dli_high": 0,  # ceiling counterpart to alert_dli_low: a day
-    #   finishing above this many mol means the
-    #   fixture is turned up too far or hung too
-    #   close. 0 disables (default, since it only
-    #   makes sense once a target is chosen).
+    # Ceiling counterpart to alert_dli_low: a day finishing above this many
+    # mol/m2 means the fixture is turned up too far or hung too close. 0 disables.
+    "alert_dli_high": 0,
     # Seedling DLI target band (mol/m2/day): the Day card's DLI bar, the Plan
     # verdict and advice, and the AI report all judge against it. 10-15 is the
     # extension range for vegetable transplants in general; 15-20 is peppers
-    # close to transplant. See the README.
-    "dli_target_low": 10.0,  # band for the default setup when no setups are
-    "dli_target_high": 15.0,  # defined; each setup carries its own band
+    # close to transplant (docs/features.md). This is the band for the default
+    # setup when no setups are defined; each setup carries its own.
+    "dli_target_low": 10.0,
+    "dli_target_high": 15.0,
     # Grow setups: separate areas, each with its own light, light sensor, DLI
     # band and a chosen subset of the sensors. Empty = one setup, "Main", with
-    # everything. See setups().
+    # everything. See setups.setups().
     "setups": [],
     # sensors per tray, set in Settings, Setups: {tray id: [sensor keys]}. A
     # tray not listed has the probe and float of its own number (setups.tray_sensors)
     "tray_sensors": {},
-    "alert_dli_low": 4,  # checked once daily just after lights-off:
-    #   a day that finishes under this many mol/m2
-    #   means the light was off, dimmed or blocked.
-    #   0 disables.
-    "units": "imperial",  # "imperial" (F, inHg) or "metric" (C, hPa);
-    #   storage stays Celsius/hPa either way
-    "humidity_low": 40,  # comfort band drawn on the humidity chart;
-    "humidity_high": 60,  #   display only, the alert uses its own setting
-    "canopy_factor": 1.0,  # sensor plane -> canopy multiplier. The sensor
-    #   sits at soil level; measure lux at canopy and
-    #   divide by the soil reading to get this. 1.0 =
-    #   sensor is already at canopy height.
-    "lux_to_ppfd_k": 60,  # lux -> PPFD divisor; set for your fixture's
-    #   spectrum (0 = hide PPFD/DLI). ~60 suits a
-    #   white-dominant mixed red/blue/white panel.
-    "soil_temp_high_f": 85,  # target band for the soil temp chart and alerts.
-    "soil_temp_low_f": 80,  #   Chile germination is best 80-85F; drop the
-    #   band to about 70-80F once seedlings are up.
-    #   Either bound at 0 disables that side.
+    # Checked once daily just after lights-off: a day that finishes under this
+    # many mol/m2 means the light was off, dimmed or blocked. 0 disables.
+    "alert_dli_low": 4,
+    # "imperial" (F, inHg) or "metric" (C, hPa); storage stays Celsius/hPa either way
+    "units": "imperial",
+    # comfort band drawn on the humidity chart; display only, the alert uses its own setting
+    "humidity_low": 40,
+    "humidity_high": 60,
+    # Sensor plane -> canopy multiplier. The sensor sits at soil level; measure
+    # lux at canopy and divide by the soil reading to get this. 1.0 = the sensor
+    # is already at canopy height.
+    "canopy_factor": 1.0,
+    # lux -> PPFD divisor; set for the fixture's spectrum (0 = hide PPFD/DLI).
+    # About 60 suits a white-dominant mixed red/blue/white panel.
+    "lux_to_ppfd_k": 60,
+    # Target band for the soil temp chart and alerts. Chile germination is best
+    # at 80-85F; drop the band to about 70-80F once seedlings are up. Either
+    # bound at 0 disables that side.
+    "soil_temp_high_f": 85,
+    "soil_temp_low_f": 80,
     "schedule_mode": "solar",  # solar | fixed | duration
     "fixed_on": "06:00",  # fixed mode: lights on
     "fixed_off": "20:00",  # fixed mode: lights off
@@ -116,9 +116,9 @@ DEFAULTS = {
     "cam2_rotate": 0,  # the same for camera 2, which may be mounted differently
     "timelapse_flatten": True,  # show the snapshot, thumbnails and video flattened
     "cam_rectify": True,  # flatten the tray plane before canopy analysis
-    "camera_enabled": False,  # master switch for all camera features (photos,
-    #   timelapse, camera vision, AI report). Off until
-    #   a working camera is connected.
+    # Master switch for all camera features (photos, timelapse, camera vision,
+    # AI report). Off until a working camera is connected.
+    "camera_enabled": False,
     "capture_enabled": False,
     "capture_interval_min": 30,
     # Timelapse speeds, set separately: the dashboard player steps through
@@ -133,75 +133,75 @@ DEFAULTS = {
     # "heat" (a heat mat thermostat on the soil temperature, see heat.py).
     "plug_use": "light",
     "heat_mode": "off",  # "off", "auto" (thermostat) or "on"
-    "heat_target_f": 75,  # soil temperature the mat holds (on 1F below)
+    "heat_target_f": 75,  # soil temperature the mat holds
     "heat_max_f": 95,  # cut-off: the mat goes off at this, any mode
     "heat_sensor": "temp:soil",  # which soil temperature probe it reads
     "capture_brightness": 100,  # light level held during each photo
-    "roi": "",  # view crop as "x,y,w,h" fractions of the stored
-    # frame, blank = full frame. Applied when photos
-    # are shown, thumbnailed, rendered or sent to the
-    # AI report; stored frames stay full.
-    "cam_width": 2304,  # capture resolution at full field of view. The
-    "cam_height": 1296,  #   Module 3 sensor is 4608x2592, but a full 12MP
-    #   capture exhausts the Pi Zero 2 W's 512MB RAM, so
-    #   default to the 2304x1296 binned mode (same view).
-    #   Raise to 4608x2592 only on a Pi with more memory
-    "live_interval_s": 10,  # how often the quick sensors are re-read for
-    # the dashboard only, nothing written; 0 off
+    # View crop as "x,y,w,h" fractions of the stored frame, blank = full frame.
+    # Applied when photos are shown, thumbnailed, rendered or sent to the AI
+    # report; stored frames stay full.
+    "roi": "",
+    # Capture resolution at full field of view. The Module 3 sensor is
+    # 4608x2592, but a full 12MP capture exhausts the Pi Zero 2 W's 512MB RAM,
+    # so the default is the 2304x1296 binned mode (same view). Raise to
+    # 4608x2592 only on a Pi with more memory.
+    "cam_width": 2304,
+    "cam_height": 1296,
+    # Seconds between re-reads of the quick sensors, for the dashboard only
+    # (nothing is written); 0 = off.
+    "live_interval_s": 10,
     "sample_interval_min": 5,  # how often to read + log sensors
     "ntfy_topic": "",  # set to enable push notifications (see notify.py)
     "discord_webhook": "",  # set to enable Discord alerts (see discord_alert.py)
-    "password_hash": "",  # set to enable login (see README); blank = open
+    "password_hash": "",  # set to enable login (docs/features.md); blank = open
     "cookie_secure": "auto",  # auto: Secure only when the request came over HTTPS; or true/false
-    "auto_wet_cal": False,  # re-capture the wet anchor after a fill that
-    # actually tripped the float, if the reading
-    # passes every check a manual capture must
+    # Re-capture the wet anchor after a fill that tripped the float, if the
+    # reading passes every check a manual capture must.
+    "auto_wet_cal": False,
     "auto_wet_cal_max_move": 0.10,  # volts one auto-capture may move it
-    "probe_median_depth": 5,  # smoothing depth: how many recent readings the
-    # spike/step filter looks at. Applies to every
-    # smoothed sensor, not just probes; 1 disables
+    # Smoothing depth: how many recent readings the spike/step filter looks at.
+    # Applies to every smoothed sensor, not just probes; 1 disables.
+    "probe_median_depth": 5,
     "theme": "auto",  # "auto" follows the device, or force light/dark
-    "little_buddy": True,  # the character that wanders across a card every
-    # half minute. Purely decorative; off by choice.
+    "little_buddy": True,  # a decorative character that crosses a card every half minute
     "buddy_model": "sprout",  # which character walks; "random" picks per outing
     "kasa_host": "",  # smart plug IP; set from Settings > Smart plug
     "kasa_user": "",  # TP-Link account, only for KLAP firmware
-    "kasa_pass": "",  # ...redacted from every response, like the
-    #    dashboard password hash
-    "light2_on": False,  # a second light, independently scheduled, on
-    # whichever PWM fixture the main light is not
+    "kasa_pass": "",  # redacted from every response, like the dashboard password hash
+    # A second light, independently scheduled, on whichever PWM fixture the
+    # main light is not.
+    "light2_on": False,
     "light2_start": "08:00",
     "light2_end": "20:00",
     "light2_bright": 50,
     "light2_ramp_min": 5,
     "light2_override": "auto",  # "auto" follows its schedule; "on" / "off"
-    "dim_below_min": "hold",  # what to do when asked for less light than
-    # the driver can hold: "hold" its lowest
-    # level, or "cycle" on and off to average
-    # down to the setting. Cycling is exact for
-    # a daily total but visibly blinks.
+    # What to do when asked for less light than the driver can hold: "hold" its
+    # lowest level, or "cycle" on and off to average down to the setting.
+    # Cycling is exact for a daily total but visibly blinks.
+    "dim_below_min": "hold",
     "light_linear_on": False,  # map dashboard % onto measured light output
     "light_linear": {},  # the table built by a calibration sweep
-    "light_floor_pct": 0,  # the brightness at which the fixture first
-    # lights. 1-100% is mapped onto floor..100
-    # so no part of the scale is dead; 0 is
-    # still hard off. Measure it with the
-    # light response sweep.
-    "light_backend": "pwm",  # "pwm" 5V panel on a MOSFET, "dim" an AC
-    # fixture on a 0-10V line through an
-    # optocoupler, "kasa" a smart
-    # plug (on/off only, fixture knob sets intensity)
+    # The brightness at which the fixture first lights. 1-100% is mapped onto
+    # floor..100 so no part of the scale is dead; 0 is still hard off. Measure
+    # it with the light response sweep.
+    "light_floor_pct": 0,
+    # "pwm" a 5V panel on a MOSFET, "dim" an AC fixture on a 0-10V line through
+    # an optocoupler, "kasa" a smart plug (on/off only, the fixture's knob sets
+    # intensity).
+    "light_backend": "pwm",
     "auto_water": False,  # true while any tray is armed (see auto_water_trays)
-    "auto_water_trays": [],  # trays armed for auto-watering; keep them off
-    # until each tray's probe is calibrated
-    "moisture_threshold_pct": 30,  # CALIBRATION TODO: "dry" trigger, per-probe
+    # trays armed for auto-watering; keep them off until each tray's probe is calibrated
+    "auto_water_trays": [],
+    "moisture_threshold_pct": 30,  # auto-watering fills a tray at or below this probe moisture %
     "pump_max_seconds": 20,  # hard cap on a single dose (anti-flood/dry-run)
     "pump_cooldown_min": 30,  # min wait between auto doses (soil wicks slowly)
     "pump_daily_max_seconds": 180,  # runaway backstop
     "fill_max_seconds": 60,  # hard cap on a fill-to-float run (if float never trips)
-    "probe_cal": {},  # per-tray {wet,dry} raw ADC anchors -> probe moisture %
-    "probe_names": {},  # custom probe labels; default "Soil moisture 1/2"
-    # (ADS1115 A0 = probe 1 in tray 1, A1 = probe 2)
+    "probe_cal": {},  # per-probe {wet, dry} anchor voltages -> probe moisture %
+    # custom probe labels; default "Soil moisture 1/2" (ADS1115 A0 = probe 1 in
+    # tray 1, A1 = probe 2)
+    "probe_names": {},
     "ai_enabled": False,  # daily Claude vision report (needs an API key, see ai_report.py)
     "ai_model": "claude-sonnet-5",  # any Claude model with vision; config.json only
     "ai_report_hour": 8,  # local hour (0-23) to run the daily report
@@ -217,23 +217,22 @@ DEFAULTS = {
         "show": True,
         "locked": False,
     },
-    # What is actually planted where. Two trays, 3 wide x 4 deep, cells A1..C4.
+    # What is planted where. Two trays, 3 wide x 4 deep, cells A1..C4.
     # Each cell: {"seed": name, "equipment": what's occupying it, "planted": ISO date}
     "trays": {
         "1": {"label": "Tray 1", "rows": 4, "cols": 3, "cells": {}},
         "2": {"label": "Tray 2", "rows": 4, "cols": 3, "cells": {}},
     },
 }
-HTTP_PORT = int(
-    os.environ.get("GROWLIGHT_HTTP_PORT", "5000")
-)  # tests/test_ui.py runs on a spare port
+# GROWLIGHT_HTTP_PORT moves the dashboard to another port; tests/test_ui.py
+# uses it to run on a spare one.
+HTTP_PORT = int(os.environ.get("GROWLIGHT_HTTP_PORT", "5000"))
 
 # The touchscreen on this Pi's own HDMI port (scripts/kiosk.sh) can change
-# settings without a login. It gets its own listener for that: SCREEN_PORT,
-# bound to 127.0.0.1 and opened only while this is on. A request is the
-# screen's because of the port it arrived on, which nothing in the request can
-# fake, so a reverse proxy pointed at the main port is never trusted, whatever
-# headers it sends or leaves out.
+# settings without a login. It has its own listener for that: SCREEN_PORT,
+# bound to 127.0.0.1 and opened only while GROWLIGHT_TRUST_LOCALHOST is 1. A
+# request is the screen's because of the port it arrived on, so a reverse
+# proxy pointed at the main port is not trusted, whatever headers it sends.
 TRUST_LOCALHOST = os.environ.get("GROWLIGHT_TRUST_LOCALHOST", "") == "1"
 SCREEN_PORT = int(os.environ.get("GROWLIGHT_SCREEN_PORT", "5001"))
 
@@ -256,14 +255,13 @@ CONFIG_BAK = CONFIG_PATH.with_name("config.json.bak")
 # The app then runs on defaults to keep the lights and loops going, but it
 # must not save (that would overwrite the real settings with defaults) and
 # must not accept changes (the defaults have no password, so the dashboard
-# would be open to anyone who can reach it). routes.require_auth checks it.
+# would be open to anyone who can reach it). auth.require_auth checks it.
 config_broken = ""
 
 
 def atomic_write_text(path, text):
-    """Write a file so it is either the old contents or the new, never half:
-    a power cut or a full disk mid-write used to be able to leave config.json
-    truncated, and a truncated config.json meant defaults on the next start."""
+    """Write a file so that it holds either the old contents or the new, never
+    half of either, through a power cut or a full disk mid-write."""
     path = Path(path)
     tmp = path.with_name(path.name + ".tmp")
     with open(tmp, "w") as f:
@@ -300,17 +298,16 @@ if CONFIG_PATH.exists():
         )
         log.error(config_broken)
     else:
-        # keys starting with "_" are runtime state that older builds persisted
-        # by accident (e.g. _seen_sensors); loading them back made a removed
-        # sensor alert forever
+        # keys starting with "_" are runtime state (e.g. _seen_sensors); loaded
+        # back from a file, a removed sensor would alert forever
         _saved = {k: v for k, v in _saved.items() if not k.startswith("_")}
         _file_keys = set(_saved)
         settings.update(_saved)
 
 
-# Migration: version 24 had one speed for both, as a percentage (100 = player
-# 8 frames/s, video 24). The video keeps its speed; the player gets its own
-# default, since the shared slow speed was too slow on the page.
+# Migration: timelapse_speed_pct is one speed for the player and the video, as
+# a percentage (100 = player 8 frames/s, video 24). The video keeps its speed;
+# the player takes its own default.
 if "timelapse_speed_pct" in settings:
     _pct = settings.pop("timelapse_speed_pct")
     if "video_fps" not in _file_keys:
@@ -323,10 +320,9 @@ if "timelapse_speed_pct" in settings:
 def save_config():
     """Persist settings to config.json. Caller must hold settings_lock.
 
-    The single place config is written, so the no-runtime-keys rule cannot be
-    forgotten at one of a dozen call sites: anything starting with "_" is
-    in-memory state and never lands on disk. Written atomically, and the
-    previous good file is kept as config.json.bak."""
+    Keys starting with "_" are in-memory state and are not written. The write
+    is atomic, and the previous good file is kept as config.json.bak. Nothing
+    is written when config.json was unreadable at start."""
     if config_broken:
         log.error("not saving settings: config.json was unreadable at start")
         return
@@ -340,9 +336,9 @@ def save_config():
     atomic_write_text(CONFIG_PATH, json.dumps(data, indent=2))
 
 
-# One-time migration: trays were first laid out 4 wide x 3 deep (A1..D3); the
-# physical trays are 3 wide x 4 deep (A1..C4). Transpose saved cells so each
-# entry stays on the same physical spot, then persist the new shape.
+# Migration: a saved tray laid out 4 wide x 3 deep (A1..D3) becomes 3 wide x
+# 4 deep (A1..C4), the shape of the physical trays. Cells are transposed so
+# each entry stays on the same physical spot.
 def _migrate_trays():
     changed = False
     for tid, t in (settings.get("trays") or {}).items():
@@ -369,9 +365,8 @@ def _migrate_trays():
 
 _migrate_trays()
 
-# The probes were once labeled by tray ("Tray 1"), which read as the tray
-# itself and went stale when a tray was renamed. Drop those stored old
-# defaults so the new default name applies; a name someone chose stays.
+# Migration: a stored probe name of "Tray N" for probe N is an old default.
+# Drop it so the current default name applies; a name someone chose stays.
 _pn = settings.get("probe_names") or {}
 _old = {t: n for t, n in _pn.items() if n == f"Tray {t}"}
 if _old:
@@ -382,9 +377,9 @@ if _old:
         log.warning(f"probe name update not persisted ({e})")
 
 
-# Migration: config.json stores every key, so an earlier default model was
-# written into it and would otherwise stay forever. Move that one value (and
-# only that value) to the current default; a model chosen deliberately stays.
+# Migration: config.json stores every key, including defaults nobody chose. A
+# stored ai_model that is a retired default moves to the current default; any
+# other model stays.
 _RETIRED_AI_DEFAULTS = ("claude-opus-4-8",)
 if settings.get("ai_model") in _RETIRED_AI_DEFAULTS:
     log.info(
@@ -397,9 +392,10 @@ if settings.get("ai_model") in _RETIRED_AI_DEFAULTS:
     except Exception as e:
         log.warning(f"AI model change not persisted ({e})")
 
-# Migration: older configs keep the soil low bound under an alerts-only key;
-# adopt it once so the chart and the alerts can never disagree. Checked against
-# the file's own keys, since DEFAULTS always supplies soil_temp_low_f.
+# Migration: alert_soil_low_f is an older, alerts-only key for the soil low
+# bound. Its value becomes soil_temp_low_f, which the chart and the alerts
+# share, unless the file sets that itself. Checked against the file's own
+# keys, since DEFAULTS always supplies soil_temp_low_f.
 if "alert_soil_low_f" in settings:
     _old = settings.pop("alert_soil_low_f")
     if _file_keys and "soil_temp_low_f" not in _file_keys:
@@ -407,7 +403,7 @@ if "alert_soil_low_f" in settings:
     try:
         save_config()
     except Exception as e:
-        # a setting that looks saved and is not is worth saying out loud
+        # logged as an error because the setting looks saved and is not
         log.error(f"settings not written to config.json: {e}")
 
 
@@ -418,18 +414,15 @@ state = {"brightness": 0.0, "on": None, "off": None, "sunrise": None, "sunset": 
 state_lock = threading.Lock()
 
 
-# --------------------------- control loop ---------------------------
-
-
 def _today_str():
     return datetime.now(ZoneInfo(settings["timezone"])).date().isoformat()
 
 
-# ---- per-field settings validation ----
+# ----------------------- per-field settings validation -----------------------
 # Each validator returns the cleaned value or raises ValueError with a short,
-# user-facing reason. update_settings applies every valid field and reports
-# the invalid ones by name: rejecting a whole save for one bad field silently
-# throws away every other change in it.
+# user-facing reason. routes.update_settings applies every valid field and
+# reports the invalid ones by name, so one bad field does not discard the
+# other changes in a save.
 
 
 def _v_bool(v):
@@ -531,9 +524,9 @@ def _v_roi(v):
 
 
 def _v_host(v):
-    """An IP address or hostname, or blank. Deliberately strict: this string is
-    handed to the plug library, and a stray scheme or port produces a confusing
-    connection error rather than an obvious validation one."""
+    """An IP address or hostname, or blank. Strict, because this string is
+    handed to the plug library, where a stray scheme or port produces a
+    confusing connection error."""
     v = str(v or "").strip()
     if not v:
         return ""
@@ -620,11 +613,11 @@ def _v_secret(v):
 # One definition per field on the Settings form: its kind, the range the
 # server accepts, and the step the form offers. The server's validators for
 # these keys, the form's min/max/step attributes (routes.form_attrs) and the
-# page's save and fill code (static/js/photos.js, from the embedded copy of this table) are
-# all generated from it, so a field cannot be accepted by one and rejected or
-# dropped by another. Kinds: int, float, bool, choice, time, text (with a
-# check function), secret (blank keeps the stored value), tempF (stored in F,
-# shown in the display units; zero_off: 0 means off and is never converted).
+# page's save and fill code (static/js/photos.js, from the copy of this table
+# embedded in the page) are all generated from it, so they cannot disagree
+# about a field. Kinds: int, float, bool, choice, time, text (with a check
+# function), secret (blank keeps the stored value), tempF (stored in F, shown
+# in the display units; zero_off: 0 means off and is never converted).
 FORM = {
     "light_backend": {"kind": "choice", "choices": ["pwm", "dim", "kasa"]},
     "max_bright": {"kind": "int", "min": 1, "max": 100, "clamp": False},

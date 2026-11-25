@@ -1,11 +1,11 @@
 """Heat mat: a thermostat on the smart plug, driven by a soil temperature probe.
 
-The plug was the light's on/off backend. Settings, System, Smart plug, "Use the plug
-for" now gives it to one job: the light, or the heat mat. With the heat mat
-the light code never touches it, and this module is its only writer.
+The plug has one job at a time, chosen in Settings, System, Smart plug, "Use
+the plug for": the light, or the heat mat. While it is the heat mat's, the
+light code does not touch it and this module is its only writer.
 
-Temperatures are settings in Fahrenheit, like the soil temperature band, and
-readings are Celsius, like every stored reading.
+Temperature settings are in Fahrenheit; readings are in Celsius, like every
+stored reading.
 """
 
 import threading
@@ -21,9 +21,9 @@ import light as light_mod
 
 LOOP_S = 30  # how often the thermostat decides
 
-# Auto is time-proportional PI control, not on/off: each WINDOW_S the mat gets
-# a duty (0 to 1) and is on for that share of the window, in one pulse, so the
-# soil responds to the average power. Gains and feed-forward come from a model
+# Auto is time-proportional PI control: each WINDOW_S the mat gets a duty
+# (0 to 1) and is on for that share of the window, in one pulse, so the soil
+# responds to the average power. Gains and feed-forward come from a model
 # fitted to the rig's measured response; see docs/heat-tuning.md.
 WINDOW_S = 900  # one on-pulse per 15 min
 MIN_PULSE_S = 60  # skip on or off pulses shorter than this (relay wear)
@@ -40,17 +40,17 @@ REASSERT_S = 600  # re-send the state now and then (the Kasa app can flip it)
 STALE_SAMPLES = 3  # a reading older than this many sample intervals is gone
 
 heat_state = {
-    "on": None,  # what we last commanded (None: never)
+    "on": None,  # the state last commanded (None: never)
     "reason": "not in use",
     "temp_c": None,  # the reading the last decision used
     "since": 0.0,  # when the plug last changed
-    "sent": 0.0,  # when we last sent a command
+    "sent": 0.0,  # when a command was last sent
     "fault": "",  # why the mat is being held off, for alerts
     "duty": None,  # Auto's share of the current window (0 to 1)
     "integral": 0.0,  # the PI controller's integral term
     "window": None,  # start of the current window (epoch s)
-    "on_until": 0.0,
-}  # the mat is on until this time in the window
+    "on_until": 0.0,  # the mat is on until this time in the window
+}
 _lock = threading.Lock()
 _pass_lock = threading.Lock()  # the loop and a button press never decide at once
 _prev_use = None
@@ -65,10 +65,12 @@ def f_to_c(f):
 
 
 def duty_for(cfg, temp_c, air_c, st, window_s=WINDOW_S):
-    """PI with an air-temperature feed-forward: the share of the next window
-    the mat is on. Updates st["integral"] (not while pinned at 0 or 1 in the
-    direction of the error, so it cannot wind up overnight when the mat is
-    flat out and still short)."""
+    """The share of the next window the mat is on (0 to 1): PI control with an
+    air-temperature feed-forward.
+
+    Updates st["integral"], except while the output is pinned at 0 or 1 in the
+    direction of the error, so it cannot wind up while the mat is flat out and
+    still short."""
     target_c = f_to_c(cfg.get("heat_target_f", 75))
     err = target_c - temp_c
     ff = (target_c - FF_BASE_C - FF_AIR * air_c) / FF_GAIN_C if air_c is not None else 0.7

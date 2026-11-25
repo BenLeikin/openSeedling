@@ -18,9 +18,9 @@ def on_screen():
     screen's own listener (config.SCREEN_PORT, bound to 127.0.0.1) while the
     kiosk's local trust is on.
 
-    Which listener took the request is the server's knowledge, not the
-    client's. Nothing sent in the request (a Host or forwarding header, or
-    the lack of one) makes a request to the main port count.
+    The test is the port the server accepted the request on. Nothing sent in
+    the request (a Host or forwarding header, or the lack of one) makes a
+    request to the main port count.
     """
     return bool(
         config.TRUST_LOCALHOST

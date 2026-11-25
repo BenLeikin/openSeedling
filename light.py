@@ -1,6 +1,6 @@
 """Both lights: backends (PWM, dim line, Kasa), schedules and ramps,
-calibration tables and sweeps, below-minimum dithering, the storm, and
-the control loop."""
+calibration tables and sweeps, below-minimum dithering, and the lightning
+effect."""
 
 import asyncio
 import os
@@ -18,16 +18,16 @@ import config
 import hardware
 
 
-# light response sweep: brightness % -> measured lux, so the dashboard can show
-# what the driver actually delivers (PWM dimming is rarely linear)
+# Light response sweep: brightness % -> measured lux, so the dashboard can show
+# what the driver delivers (PWM dimming is rarely linear). "cancel" is a
+# request; "running" means the worker thread is still holding the light.
 sweep_state = {
     "running": False,
     "pct": 0,
     "error": "",
     "started": 0.0,
     "cancel": False,
-}  # cancel is a request; running means the
-# worker thread is still holding the light
+}
 sweep_lock = threading.Lock()
 HOLD_SWEEP = "calibration sweep"
 
@@ -79,13 +79,12 @@ def holder():
 
 
 # ---- light output backends ----
-# "pwm" is the original path: a dimmable 5V panel on hardware PWM.
-# "kasa" drives a TP-Link smart plug for an AC fixture that has no controllable
-# dimming, so output is on/off and the fixture's own knob sets intensity.
-# Both are kept: switching backends is a settings change, not a redeploy.
-# Plug connection details. The environment still wins, so an existing .env
-# keeps working untouched; otherwise these come from settings, which is what
-# lets a plug be set up from the dashboard instead of over SSH.
+# "pwm" is a dimmable 5V panel on hardware PWM and "dim" an AC fixture on a
+# 0-10V dim line (see light_backend). "kasa" drives a TP-Link smart plug for an
+# AC fixture that has no controllable dimming, so output is on/off and the
+# fixture's own knob sets intensity.
+# Plug connection details come from the environment when set there, otherwise
+# from settings.
 KASA_HOST_ENV = (os.environ.get("GROWLIGHT_KASA_HOST") or "").strip()
 KASA_USER_ENV = (os.environ.get("GROWLIGHT_KASA_USER") or "").strip()
 KASA_PASS_ENV = os.environ.get("GROWLIGHT_KASA_PASS") or ""
@@ -106,7 +105,7 @@ def kasa_conf(cfg=None):
 KASA_ON_AT = 1.0  # brightness above this percent means "on"
 
 kasa_state = {
-    "on": None,  # last state we believe the plug is in
+    "on": None,  # the state the plug is believed to be in
     "ok": None,  # last command succeeded?
     "error": "",  # human-readable last failure
     "fails": 0,  # consecutive failures
@@ -118,12 +117,11 @@ _kasa_dev = None
 
 
 def _kasa_run(coro, timeout=12):
-    """Run a python-kasa coroutine from this threaded app.
+    """Run a python-kasa coroutine and return its result.
 
-    python-kasa is async and the app is threads, so all plug I/O happens on one
-    dedicated event loop in its own thread. One loop (not asyncio.run per call)
-    because the library caches a session per device and reconnecting on every
-    poll is both slow and hard on the plug.
+    All plug I/O shares one long-lived event loop in its own thread: the
+    library caches a session per device, and reconnecting on every call is
+    slow and hard on the plug.
     """
     global _kasa_loop
     if _kasa_loop is None:
@@ -163,9 +161,9 @@ async def _kasa_set(on):
 def kasa_apply(on, retries=1):
     """Drive the plug to `on`. Returns True on success.
 
-    Retries once because a single dropped packet over wifi is routine and not
-    worth an alert; a genuine failure (plug unplugged, wrong IP, auth broken)
-    fails both attempts and is recorded for the alert rules.
+    Retries once by default, since a single dropped packet over wifi is
+    routine. A failure of every attempt is recorded in kasa_state for the
+    alert rules.
     """
     global _kasa_dev
     if not kasa_conf()[0]:
@@ -192,11 +190,10 @@ def kasa_apply(on, retries=1):
 
 
 def release_backend(old):
-    """Turn off whichever output we are switching away from.
+    """Turn off the output of `old`, the backend being switched away from.
 
-    Without this the abandoned backend holds its last state forever: switch
-    from PWM to the plug while the panel is lit and the panel stays lit, drawing
-    power with nothing in the app able to reach it any more.
+    An abandoned backend would otherwise hold its last state with nothing in
+    the app driving it. The plug is switched off only while it is the light's.
     """
     try:
         if old == "kasa":
@@ -205,10 +202,9 @@ def release_backend(old):
             if plug_is_light:
                 kasa_apply(False)
         else:
-            # The duty that means dark depends on the backend being ABANDONED,
-            # not the new one: settings have already been updated by the time
-            # this runs, so asking pwm_duty_for would use the wrong wiring and
-            # leave the old fixture at full brightness.
+            # The dark duty is the old backend's. Settings already hold the
+            # new one when this runs, so pwm_duty_for would answer for the
+            # wrong wiring.
             hardware.pwm.change_duty_cycle(100.0 if old == "dim" else 0.0)
         log.info(f"light backend released: {old} set to off")
     except Exception as e:
@@ -223,9 +219,7 @@ def light_backend(cfg=None):
            and it dims all the way to dark, so no separate switch is needed
     "kasa" a smart plug: on/off only
 
-    These were once "pwm" plus a light_invert checkbox, which allowed the
-    nonsense combination of invert on a backend that cannot invert. A config
-    still carrying light_invert is read as "dim" so nothing breaks on upgrade.
+    A config that carries the older light_invert flag is read as "dim".
     """
     if cfg is None:
         with config.settings_lock:
@@ -239,12 +233,10 @@ def light_backend(cfg=None):
 
 
 def set_brightness(percent):
-    """Apply a dashboard brightness through the fixture's calibration.
+    """Set the main light to a dashboard brightness, through the calibration.
 
-    The dashboard speaks in intended light output. The hardware speaks in
-    duty cycle, and the two are not the same shape: a fixture has a cutoff at
-    the bottom, usually saturates well before the top, and bends in between.
-    hw_percent() maps one onto the other; this just applies it.
+    hw_percent() maps the percent onto duty cycle. A target below the driver's
+    minimum is reached by cycling, when that is switched on.
     """
     percent = max(0.0, min(100.0, percent))
     frac = _below_minimum(percent)
@@ -255,13 +247,13 @@ def set_brightness(percent):
         _dither_set(frac, hw_percent(percent))
 
 
-# ---- reaching below the driver's minimum ------------------------------------
+# ---- reaching below the driver's minimum ----
 # The dim-line driver holds about 20% of full and then cuts out, so nothing
 # between off and that minimum exists as a steady level. To follow the straight
-# response line down to zero anyway, the light cycles between off and the
-# minimum with the on-time set so the AVERAGE lands on the line. Plants
-# integrate light over far longer than this period, so for growth it is the
-# same as a steady dim level; the daily light integral is identical.
+# response line down to zero, the light cycles between off and the minimum,
+# with the on-time set so the average lands on the line. Plants integrate
+# light over far longer than the period, so the daily light integral is the
+# same as for a steady dim level.
 DITHER_PERIOD_S = 20.0
 _dither = {"frac": 0.0, "raw": 0.0, "on": False}
 _dither_lock = threading.Lock()
@@ -271,9 +263,9 @@ _dither_wake = threading.Event()
 def _below_minimum(percent, cfg=None):
     """On-fraction for a target below the fixture's minimum, else None.
 
-    None also when cycling is switched off, which is the default: the light
-    then simply holds the lowest level it can, and the bottom of a ramp is a
-    short steady dim instead of a fixture flicking on and off.
+    None also without a calibration in use, and when cycling is switched off
+    (dim_below_min "hold", the default): the light then holds the lowest level
+    it can.
     """
     if cfg is None:
         with config.settings_lock:
@@ -331,11 +323,11 @@ threading.Thread(target=_dither_loop, daemon=True, name="dither").start()
 
 
 def set_brightness_raw(percent):
-    """Drive the hardware directly, with no calibration applied.
+    """Drive the main light at a raw percent, with no calibration applied.
 
-    Used by the response sweep, which must measure the fixture as it really
-    is. Building a calibration from a sweep that was itself calibrated would
-    correct the correction.
+    Every write also sets the other outputs: the second light's fixture and,
+    when it is the light's, the plug. The response sweep measures the fixture
+    through this. During shutdown only 0 is accepted.
     """
     percent = max(0.0, min(100.0, percent))
     if hardware.SHUTTING_DOWN.is_set() and percent > 0:
@@ -345,11 +337,9 @@ def set_brightness_raw(percent):
     mode = light_backend(cfg)
 
     # The second light, if one is running, keeps its own level on its own
-    # fixture. Every OTHER output is driven OFF, not merely skipped: an output
-    # left alone holds whatever it had when the selection changed, which on a
-    # grow light means a fixture quietly running with nothing pointing at it.
-    # A sweep measures the main fixture alone, so the second one goes dark
-    # while it runs rather than adding its light to the calibration.
+    # fixture. Every other output is driven off: left alone, it would hold
+    # whatever it had when the selection changed. A sweep measures one fixture
+    # alone, so the other is dark while it runs.
     l2 = light2_fixture(cfg)
     if sweep_state["running"] and sweep_state.get("target") == "second":
         l2_level = float(sweep_state.get("l2_raw") or 0.0)  # raw: under test
@@ -371,25 +361,24 @@ def set_brightness_raw(percent):
             dim = percent if mode == "dim" else (l2_level if l2 == "dim" else 0.0)
             # the dim line: 0% duty is full brightness, so dark is 100
             hardware.pwm2.change_duty_cycle(100.0 - dim)
-    # The plug is the light's only when Settings, System, Smart plug gives it to the
-    # light. Given to the heat mat, heat.py is its only writer: driving it
-    # off here with every light write would switch the mat off each 30 s.
+    # The plug is the light's only when Settings, System, Smart plug gives it
+    # to the light. Given to the heat mat, heat.py is its only writer: driving
+    # it off here with every light write would switch the mat off each 30 s.
     if (KASA_HOST_ENV or cfg.get("kasa_host")) and cfg.get("plug_use", "light") == "light":
         set_plug(percent if mode == "kasa" else 0)
 
 
-# ---- the second light -------------------------------------------------------
+# ---- the second light ----
 # Independently scheduled, on whichever PWM fixture the main light is not
-# using. It deliberately has fewer features than the main light: no
-# calibration, no DLI plan, no lightning. It runs a simple window with a ramp
-# at each end, or a manual on/off.
+# using. It has its own calibration but no DLI plan and no lightning: it runs
+# a simple window with a ramp at each end, or a manual on/off.
 light2_state = {"level": 0.0, "why": "off"}
 
 
 def light2_fixture(cfg=None):
     """ "pwm" or "dim" for the second light, or None when it cannot run.
 
-    It takes the fixture the main light is NOT on, and needs both hardware
+    It takes the fixture the main light is not on, and needs both hardware
     PWM channels: with one channel the pin is already the main light's.
     """
     if cfg is None:
@@ -435,9 +424,9 @@ def light2_level(cfg, now):
 def hw_percent(percent, cfg=None):
     """Dashboard brightness -> the raw hardware percent that produces it.
 
-    With a linear calibration on file, 50% means half of the fixture's real
-    maximum output, the cutoff and the saturation both disappear from the
-    scale, and 0% is still hard off. Without one, the simpler floor applies.
+    With a linear calibration in use, 50% means half of the fixture's measured
+    maximum output and 0% is still hard off. Without one, the floor applies
+    (apply_floor).
     """
     if cfg is None:
         with config.settings_lock:
@@ -475,14 +464,12 @@ def dashboard_lux(pct, cfg, pts):
 
 
 def effective_curve(cfg):
-    """Dashboard brightness -> the lux it actually produces, 0..100.
+    """The lux each dashboard brightness 0..100 delivers, as [[pct, lux], ...].
 
-    The stored sweep is the fixture's RAW response and will always be the
-    shape the hardware makes. What the dashboard delivers is that response
-    seen through the calibration, and with one in use it is a straight line:
-    this is the curve that shows whether the calibration worked. Computed here
-    so the chart uses exactly the mapping the light uses, rather than a copy
-    of it in JavaScript that could drift.
+    The stored sweep is the fixture's raw response; this is that response seen
+    through the calibration, a straight line when the calibration is right.
+    None unless there is a stored sweep and a calibration in use. Computed
+    here so the chart uses the same mapping as the light.
     """
     pts = sorted((cfg.get("light_curve") or {}).get("points") or [])
     if not pts or not linear_table(cfg):
@@ -490,12 +477,10 @@ def effective_curve(cfg):
     return [[p, round(dashboard_lux(p, cfg, pts), 1)] for p in range(0, 101)]
 
 
-# Which mapping a stored calibration table was built for. A table is just 101
-# raw percentages; nothing in the numbers says what they mean. When the
-# mapping changed from "spread over the usable range" to "fraction of full
-# output", an old table read under the new meaning put 30% at 45% of full,
-# silently. Every table is now stamped, and one built for a different
-# mapping is refused rather than misread.
+# Which mapping a stored calibration table was built for. A table is 101 raw
+# percentages, and nothing in the numbers says what they mean: under mapping
+# 2, table[i] is the raw percent for i% of full output. Each table is stamped
+# with its mapping, and linear_table refuses one built for another.
 LINEAR_MAPPING = 2
 
 
@@ -540,10 +525,11 @@ def sensor_clipped(peak_lux):
 
 
 def calibration_clipped(cfg):
-    """A calibration on file that a saturated sensor capped: its "full output"
-    is where the sensor ran out, so the dashboard's 100% is only part of the
-    fixture. Flagged rather than switched off, because switching it off would
-    take the light straight to the fixture's real full power."""
+    """Whether the calibration in use was capped by a saturated sensor.
+
+    Its "full output" is then where the sensor ran out, so the dashboard's
+    100% is only part of the fixture's. It is flagged and left on: switching
+    it off would take the light to the fixture's real full power."""
     lin = cfg.get("light_linear") or {}
     return bool(
         cfg.get("light_linear_on")
@@ -557,12 +543,13 @@ def build_linear_table(points):
 
     points: [[raw_pct, lux], ...]. Output is normalised to 0..1 between the
     darkest and brightest readings, forced monotonic (sensor noise can make a
-    brighter step read a little lower, which would make the inverse jump
-    backwards), then inverted: for each target fraction, the smallest raw
-    level that reaches it, interpolated between measured steps.
+    brighter step read a little lower), then inverted: for each target
+    fraction, the smallest raw level that reaches it, interpolated between
+    measured steps.
 
     Returns (table, info) where table[i] is the raw percent for i% of full
-    output, pinned to the lowest lit level below the driver's minimum.
+    output, pinned to the lowest lit level below the driver's minimum. Raises
+    ValueError for a sweep no calibration can be built from.
     """
     pts = sorted((float(p), float(lux)) for p, lux in points)
     if len(pts) < 5:
@@ -575,8 +562,8 @@ def build_linear_table(points):
             "sensor under the fixture and the right backend set?"
         )
     # A sensor at its maximum reads the same however bright the light gets,
-    # which looks exactly like a fixture at full output: the calibration
-    # would then put the dashboard's 100% wherever the sensor ran out.
+    # which looks like a fixture at full output: the calibration would put
+    # the dashboard's 100% wherever the sensor ran out.
     if sensor_clipped(hi):
         top = min(p for p, lv in pts if lv >= hi * 0.999)
         raise ValueError(
@@ -591,12 +578,10 @@ def build_linear_table(points):
         run = max(run, f)
         norm.append((p, run))
 
-    # Many LED drivers cannot dim to zero: they hold a minimum level and then
-    # cut out entirely below it. Measured here the light sits near 20% of full
-    # and drops straight to off. Interpolating across that cliff would place
-    # small targets INSIDE the dark zone, so 1-2% would be off and the light
-    # would then snap on. Anything below the lowest lit output is pinned to
-    # the first lit sweep point instead: on always means on.
+    # Many LED drivers hold a minimum level and cut out below it (the dim-line
+    # fixture near 20% of full). Interpolating across that drop would place
+    # small targets inside the dark zone, so anything below the lowest lit
+    # output is pinned to the first lit sweep point.
     first_lit = next((i for i, (_, f) in enumerate(norm) if f > 0.01), None)
     min_f = norm[first_lit][1] if first_lit is not None else 0.0
     min_raw = norm[first_lit][0] if first_lit is not None else 0.0
@@ -605,7 +590,7 @@ def build_linear_table(points):
         if target <= 0:
             return 0.0
         if target <= min_f:
-            return min_raw  # the lowest level that is actually lit
+            return min_raw  # the lowest level that is lit
         for k in range(max(1, first_lit or 1), len(norm)):
             p1, f1 = norm[k]
             if f1 >= target:
@@ -617,9 +602,8 @@ def build_linear_table(points):
 
     # Dashboard percent is a fraction of full output, so the response follows
     # the straight line from zero to peak. Below the driver's minimum the table
-    # holds the lowest lit level, and set_brightness reaches the line by
-    # cycling between off and that level so the average lands on it. The DLI
-    # forecast converts through this same table.
+    # holds the lowest lit level; set_brightness goes lower by cycling it on
+    # and off. The DLI forecast converts through this same table.
     table = [0.0] + [round(raw_for(i / 100.0), 3) for i in range(1, 101)]
     # where light first appears, and where it stops increasing
     cutoff = next((p for p, f in norm if f > 0.01), pts[-1][0])
@@ -649,7 +633,7 @@ def set_plug(percent):
 
 
 def _stop_pwm(channel, mode):
-    """Release a PWM channel, unless releasing it would turn the light ON.
+    """Release a PWM channel, unless releasing it would turn the light on.
 
     A MOSFET gate has a pulldown, so a released pin means off and stopping is
     right. An optocoupler sinking a dim line is the opposite: released means
@@ -665,16 +649,12 @@ def _stop_pwm(channel, mode):
 
 
 def apply_floor(percent, cfg=None):
-    """Map the dashboard's 1-100% onto the range the fixture actually uses.
+    """Map the dashboard's 1-100% onto the range where the fixture is lit.
 
-    A fixture has a cutoff: below some level the driver produces no light at
-    all. Measured on the 0-10V fixture here, nothing happens until about 4%.
-    Left alone, the bottom of every ramp is dead time and the DLI code plans
-    light that never arrives.
-
-    With a floor set, 0% is still hard off (below the cutoff on purpose) and
+    Below some level a driver produces no light at all: on the 0-10V fixture,
+    nothing until about 4%. With light_floor_pct set, 0% is still hard off and
     1-100% is compressed into floor..100, so the first percent above zero is
-    the first percent that lights.
+    the first that lights. With no floor the percent is returned unchanged.
     """
     if cfg is None:
         with config.settings_lock:
@@ -694,13 +674,9 @@ def pwm_duty_for(percent, cfg=None):
 
     A MOSFET driving a 5V panel takes duty straight through: more duty, more
     light. An optocoupler on an AC driver's 0-10V dim input works the other
-    way round. The driver supplies its own ~10.8V and the optocoupler SINKS
+    way round. The driver supplies its own ~10.8V and the optocoupler sinks
     it, so the light is at full when the optocoupler is off and dark when it
     conducts hardest: 0% duty is full brightness, 100% duty is dark.
-
-    The "dim" backend means the dashboard's percentages match reality.
-    Without the flip, every percentage in the app -- schedules, ramps, the
-    response sweep, the DLI forecast -- would be backwards.
     """
     if cfg is None:
         with config.settings_lock:
@@ -723,14 +699,14 @@ def _clock(day, tz, hhmm, fallback="06:00"):
 def sun_window(cfg, day, tz):
     """The light window for `day`, in whichever scheduling mode is configured.
 
-    solar     - follow local sunrise/sunset with offsets (the original behaviour)
+    solar     - follow local sunrise/sunset with offsets
     fixed     - explicit on and off clock times
     duration  - a day length anchored to the off time, so lights-off stays put
                 and lights-on moves to give the requested hours
 
-    Always returns the real sunrise/sunset too, so the dashboard can show them
-    regardless of mode. A window that ends before it starts is treated as
-    crossing midnight.
+    Returns (sunrise, sunset, on, off). Sunrise and sunset are the real ones in
+    every mode, for the dashboard to show. A fixed window that ends before it
+    starts is treated as crossing midnight.
     """
     loc = LocationInfo(latitude=cfg["latitude"], longitude=cfg["longitude"])
     try:
@@ -767,10 +743,8 @@ def window_at(cfg, now):
     """The light window to follow at `now`: (sunrise, sunset, on, off).
 
     sun_window ties a window to a calendar day, but a window can cross
-    midnight: one that started last night is still running in the small
-    hours, and in duration mode the window that ends tomorrow morning starts
-    today. Yesterday's, today's and tomorrow's are all candidates. The one
-    that contains `now` is followed; when none does the light is off and
+    midnight, so yesterday's, today's and tomorrow's are all candidates. The
+    one that contains `now` is followed; when none does the light is off and
     today's is reported. Sunrise and sunset are always today's.
     """
     tz, today = now.tzinfo, now.date()
@@ -785,13 +759,11 @@ def window_at(cfg, now):
 
 
 def ramp_floor(cfg=None):
-    """The dimmest setting that actually changes the light.
+    """The dimmest setting that changes the light; ramps run from it to max.
 
-    A driver that cannot hold less than a fifth of full output makes the
-    bottom of a ramp pointless: the fixture sits at that minimum while the
-    schedule counts down through settings it cannot produce, then cuts out.
-    Ramping between this floor and max instead spends the whole ramp where
-    the light really moves, and ends with one step to off.
+    With a calibration in use and cycling off, this is the driver's minimum
+    output: at any lower setting the fixture sits at that minimum, then cuts
+    out. Otherwise it is light_floor_pct.
     """
     if cfg is None:
         with config.settings_lock:
@@ -831,18 +803,16 @@ def brightness_for(cfg, now, on_time, off_time):
     return mx
 
 
-# ---- lightning (an easter egg) -------------------------------------------
-# Only offered on the optocoupler wiring, where the light is an AC fixture on
-# a 0-10V dim line: that is the setup with enough range and speed to look like
-# weather. The 5V panel cannot do it convincingly and the smart plug has no
-# dimming at all.
+# ---- lightning (an easter egg) ----
+# Offered only on the optocoupler wiring, where the light is an AC fixture on
+# a 0-10V dim line: the one setup with the range and speed for it. The smart
+# plug has no dimming at all.
 LIGHTNING_MAX_S = 90
 HOLD_LIGHTNING = "lightning effect"
 lightning_state = {"running": False, "until": 0.0, "style": ""}
 _lightning_lock = threading.Lock()
-# Set to ask the storm to end. An Event rather than a flag so the gap between
-# strikes can be interrupted: those gaps run to several seconds, and a stop
-# that waits them out does not feel like a stop.
+# Set to ask the storm to end. An Event, so that the gap between strikes,
+# which can run to several seconds, is interrupted by a stop.
 _lightning_stop = threading.Event()
 
 
@@ -858,8 +828,8 @@ def _flash_prep():
 
 
 def _flash(level_pct):
-    """Set a raw brightness without touching state: the storm is transient and
-    must not be mistaken for a schedule change by anything watching.
+    """Set a raw brightness without touching state, so that nothing watching
+    takes the storm for a schedule change.
 
     Goes to whichever channel carries the dim fixture, which is its own pin
     when one is configured and the main pin otherwise.

@@ -1,32 +1,15 @@
 """Logging for the controller.
 
-Everything used to go to stdout with print(), which systemd captured into the
-journal. That worked, but every line arrived at the same priority: a pump
-refusing to run and a routine sample looked identical, and there was no way to
-ask for "only the problems" without grepping for words.
-
-This keeps that simplicity, in that a module still writes one line and does not
-care where it goes, but adds levels and a consistent prefix:
-
     from applog import log
-    log.info("fill tray %s complete in %.1fs", tray, elapsed)
     log.warning("plug not responding: %s", err)
-    log.exception("sample loop failed")     # inside an except: adds traceback
 
-Levels, and what belongs at each:
+A warning means something is wrong but the controller carried on; an error
+means an operation failed and did not happen.
 
-    debug     per-sample detail, only useful while chasing something
-    info      things that happened and were meant to: fills, light changes
-    warning   something is wrong but the controller carried on: a sensor gone
-              quiet, a plug that did not answer, a setting that would not save
-    error     an operation failed and did not happen: a pump that refused, a
-              capture that produced nothing
-    critical  the controller cannot continue
-
-Output goes to stderr, which systemd routes to the journal with the level
-preserved, so `journalctl -u growlight -p warning` shows only what matters.
-GROWLIGHT_LOG_LEVEL overrides the level (default info); GROWLIGHT_LOG_FILE
-additionally writes a rotating file, for running outside systemd.
+Lines go to stderr as plain text that starts with the level name. Under systemd
+the journal captures them, all at one journal priority, so filter on the level
+name in the text. GROWLIGHT_LOG_LEVEL sets the level (default info);
+GROWLIGHT_LOG_FILE also writes a rotating file, for running outside systemd.
 """
 
 import logging
@@ -39,12 +22,7 @@ _configured = False
 
 
 class _JournalFormatter(logging.Formatter):
-    """Plain lines under systemd, timestamped lines everywhere else.
-
-    The journal already records the time and the unit, so repeating them wastes
-    width in every line. Outside systemd there is nothing else keeping time, so
-    the timestamp goes in.
-    """
+    """Level, logger name and message, with a leading timestamp if with_time is set."""
 
     def __init__(self, with_time):
         fmt = (
@@ -67,7 +45,7 @@ def setup(level=None, logfile=None, force=False):
     logger.handlers.clear()
     logger.propagate = False
 
-    # under systemd the journal timestamps every line already
+    # the journal records the time of every line itself
     under_systemd = bool(os.environ.get("JOURNAL_STREAM") or os.environ.get("INVOCATION_ID"))
     stream = logging.StreamHandler(sys.stderr)
     stream.setFormatter(_JournalFormatter(not under_systemd))
@@ -80,7 +58,7 @@ def setup(level=None, logfile=None, force=False):
             fh.setFormatter(_JournalFormatter(True))
             logger.addHandler(fh)
         except OSError as e:
-            # a log file that cannot be opened must never stop the controller
+            # a log file that cannot be opened must not stop the controller
             logger.warning("log file %s unavailable: %s", path, e)
 
     _configured = True
