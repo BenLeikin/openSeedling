@@ -2786,6 +2786,81 @@ def _canopy_stale():
         config.wake.set()
 
 
+def _alert_reminders():
+    """A standing problem is announced once, reminded once a day, and not
+    announced again because the service restarted."""
+    import alerts
+
+    kept = dict(alerts._state)
+    alerts.reset()
+    try:
+        alerts.configure({"sustain_seconds": 600})
+        day = 86400
+        seq = [
+            alerts.evaluate("test:dry", True, now=1000),  # starts the sustain clock
+            alerts.evaluate("test:dry", True, now=1000 + 600),
+            alerts.evaluate("test:dry", True, now=1000 + 600 + 6 * 3600),
+            alerts.evaluate("test:dry", True, now=1000 + 600 + day - 60),
+            alerts.evaluate("test:dry", True, now=1000 + 600 + day),
+        ]
+        saved = json.loads(json.dumps(alerts.snapshot()))  # as it comes back from the database
+        alerts.reset()
+        alerts.configure({"sustain_seconds": 600})
+        alerts.restore(saved)
+        after_restart = [
+            alerts.evaluate("test:dry", True, now=1000 + 600 + day + 300),
+            alerts.evaluate("test:dry", True, now=1000 + 600 + 2 * day),
+            alerts.evaluate("test:dry", False, now=1000 + 600 + 2 * day + 300),
+        ]
+        alerts.restore({"bad": "x", "worse": {"since": "never"}, 7: None})
+        junk_ignored = set(alerts.snapshot()) == set()
+    finally:
+        alerts.reset()
+        alerts._state.update(kept)
+    check(
+        seq == [None, "fire", None, None, "remind"]
+        and config.DEFAULTS["alert_cooldown_hours"] == 24,
+        f"a problem that lasts is announced once and reminded once a day ({seq})",
+    )
+    # through the alert pass itself: saved to the database, read back at start
+    kept = dict(alerts._state)
+    real_check, real_deliver = alerts.check_all, monitor.deliver
+    was_saved = monitor._alert_rules_saved
+    sent = []
+    monitor.deliver = lambda notices: sent.extend(notices)
+
+    def one_rule(snap, cfg=None, unit="F"):
+        act = alerts.evaluate("test:standing", True, hold=0)
+        return [(act, "test:standing", "Test", "still wrong", "warning")] if act else []
+
+    alerts.check_all = one_rule
+    try:
+        alerts.reset()
+        monitor._alert_rules_saved = None
+        db.kv_set("alert_rules", {})
+        monitor.run_alerts({"humidity": 50.0})
+        stored = db.kv_get("alert_rules") or {}
+        alerts.reset()  # the process restarts: memory is gone
+        monitor._alert_rules_saved = None
+        monitor.run_alerts({"humidity": 50.0})
+    finally:
+        alerts.check_all, monitor.deliver = real_check, real_deliver
+        monitor._alert_rules_saved = was_saved
+        db.kv_set("alert_rules", {})
+        alerts.reset()
+        alerts._state.update(kept)
+    check(
+        stored.get("test:standing", {}).get("active") is True and [n[0] for n in sent] == ["Test"],
+        f"the alert pass keeps its rules in the database: one notice across a restart "
+        f"({len(sent)} sent)",
+    )
+    check(
+        after_restart == [None, "remind", "clear"] and junk_ignored,
+        f"after a restart a standing alert is not announced again; its reminder and its "
+        f"all-clear still come ({after_restart})",
+    )
+
+
 def _alert_delivery():
     """Alerts go to Discord and ntfy, and one that could not be sent is sent later."""
     sent = []
@@ -5254,6 +5329,7 @@ run("Photo light", _photo_light)
 run("Who has the light", _light_holder)
 run("Focus sweep", _focus_sweep)
 run("Canopy staleness", _canopy_stale)
+run("Alert reminders", _alert_reminders)
 run("Alert delivery", _alert_delivery)
 run("Stuck sensors", _stuck_in_the_dark)
 run("Daily report", _report_once)

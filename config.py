@@ -31,7 +31,7 @@ DEFAULTS = {
     "fan_humidity_on": 65,  # auto: also run above this RH (0 disables)
     "alerts_enabled": True,  # Discord threshold alerts (needs discord_webhook)
     "alert_sustain_min": 10,  # a condition must hold this long before firing
-    "alert_cooldown_hours": 6,  # reminder interval while a problem persists
+    "alert_cooldown_hours": 24,  # reminder interval while a problem persists
     "alert_dry_pct": 15,  # calibrated trays only
     "alert_humidity_high": 80,  # 0 disables
     "alert_dli_high": 0,  # ceiling counterpart to alert_dli_low: a day

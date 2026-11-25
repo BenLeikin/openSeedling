@@ -160,9 +160,9 @@ the watering controls, and the daily AI plant-health report.*
 
 ### Alerts (Discord and ntfy)
 
-- A real state machine, not level checks: a rule fires once after a sustain
-  window, reminds on a cooldown while it persists, and posts a recovery notice
-  when it clears. Analog rules clear with hysteresis margins and a clear-side
+- Each rule is a state machine: it fires once after a sustain window, reminds
+  once a day while the problem persists, and posts a recovery notice when it
+  clears. Analog rules clear with hysteresis margins and a clear-side
   sustain, so a value hovering at a threshold can neither spam nor flap.
 - Rules: soil too warm / too cold, tray dry (calibrated probes only), humidity
   high, daily light integral under the floor (judged once, just after
@@ -737,7 +737,7 @@ editable from the dashboard Settings panel; the rest are edited in the file.
 | `dli_target_low` / `dli_target_high` | 10 / 15 | DLI band for the single default setup when `setups` is empty |
 | `alert_dli_low` | 4 | Daily light integral floor (mol/m2/day), judged just after lights-off; 0 disables |
 | `alerts_enabled` | false | Master switch for threshold alerts |
-| `alert_sustain_min` / `alert_cooldown_hours` | 10 / 6 | Sustain window before a rule fires; reminder interval while it persists |
+| `alert_sustain_min` / `alert_cooldown_hours` | 10 / 24 | Sustain window before a rule fires; reminder interval while it persists |
 | `soil_temp_low_f` / `soil_temp_high_f` | 80 / 85 | Soil temp band: chart target band and the alert thresholds. Shipped defaults are the chile **germination** band; drop to ~70-80 once seedlings are up, or the low alert nags all day |
 | `alert_dry_pct` / `alert_humidity_high` | 15 / 80 | Dry-tray and high-humidity alert thresholds |
 | `fan_mode` / `fan_speed` / `fan_auto_speed` / `fan_min_speed` / `fan_humidity_on` | auto / 100 / 70 / 25 / 65 | Fan behaviour: mode, manual and auto speeds, stall floor, humidity trigger |
@@ -1057,10 +1057,10 @@ and sensors that stop reporting (a sensor silent three days is treated as
 removed and stops reminding).
 
 Each rule fires once when a condition has held for the sustain window, reminds
-on the cooldown interval while it persists, and posts a recovery notice when it
-clears. Hysteresis and the sustain window mean a sensor hovering at a threshold
-cannot spam the channel. Alert state is in memory, so a restart re-arms
-everything.
+once a day while it persists (the reminder interval is a setting), and posts a
+recovery notice when it clears. Hysteresis and the sustain window mean a sensor
+hovering at a threshold cannot spam the channel. Rule states are saved, so a
+restart does not announce a standing problem again.
 
 ---
 

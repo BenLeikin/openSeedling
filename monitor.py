@@ -804,7 +804,7 @@ def run_alerts(readings):
             return
         acfg = {
             "sustain_seconds": cfg.get("alert_sustain_min", 10) * 60,
-            "cooldown_seconds": cfg.get("alert_cooldown_hours", 6) * 3600,
+            "cooldown_seconds": cfg.get("alert_cooldown_hours", 24) * 3600,
             "soil_temp_high_f": cfg.get("soil_temp_high_f", 0),
             "soil_temp_low_f": cfg.get("soil_temp_low_f", 0),
             "probe_dry_pct": cfg.get("alert_dry_pct", 15),
@@ -928,6 +928,10 @@ def run_alerts(readings):
         # reporting on time but not measuring: invisible to the stale check
         snap["_stuck"] = stuck_sensors(max(1, int(cfg.get("sample_interval_min", 5))) * 60)
 
+        global _alert_rules_saved
+        if _alert_rules_saved is None:
+            alerts.restore(db.kv_get("alert_rules"))
+            _alert_rules_saved = alerts.snapshot()
         notices = []
         for action, key, title, message, level in alerts.check_all(
             snap, acfg, "C" if cfg.get("units") == "metric" else "F"
@@ -935,10 +939,19 @@ def run_alerts(readings):
             prefix = {"fire": "", "remind": "Still: ", "clear": "Resolved: "}[action]
             notices.append((prefix + title, message, "good" if action == "clear" else level))
             log.info(f"alert {action}: {key}")
+        rules = alerts.snapshot()
+        if rules != _alert_rules_saved:
+            db.kv_set("alert_rules", rules)
+            _alert_rules_saved = rules
         deliver(notices)
     except Exception:
         log.exception("alert check failed")
 
+
+# The alert rules' states as last written to the database, or None before the
+# first pass, which reads them back. Kept so a restart does not announce every
+# standing problem again, and written only when something changed.
+_alert_rules_saved = None
 
 NTFY_LOOK = {  # level -> (priority, tag)
     "error": ("high", "rotating_light"),

@@ -1,20 +1,15 @@
 """Threshold alerting for the grow controller.
 
-Design notes, because the failure mode of a naive alerter is worse than no
-alerter at all:
+* Every rule is a state machine, not a level check. It fires once when its
+  condition has held for the sustain period, reminds once a cooldown (a day by
+  default) while the problem lasts, and says so when it clears.
+* Clearing uses hysteresis: a rule that fires at 90F does not clear until 88F,
+  so sensor noise at the threshold does not toggle it.
+* The sustain period means one bad reading, or the light going off for a
+  moment during a capture, is ignored.
 
-* Every rule is a state machine, not a level check. A rule fires once when it
-  becomes true and stays quiet until it clears, so a soil probe hovering on the
-  threshold cannot spam the channel.
-* Clearing uses hysteresis: a rule that fires at 90F does not clear until 88F.
-  Without that margin, sensor noise alone toggles the state.
-* Rules must be true for a sustained period before firing, so one bad reading
-  from a probe or a momentary light-off during a capture is ignored.
-* Everything is re-armed on a cooldown, so a genuinely persistent problem
-  reminds you occasionally rather than either screaming or going silent.
-
-State lives in memory only: a restart re-arms every rule, which is the safe
-direction (you get told again) rather than silently suppressing.
+Rule states are plain data: snapshot() and restore() let the caller keep them
+across a restart, so a restart does not announce every standing problem again.
 """
 
 import time
@@ -25,7 +20,7 @@ _state = {}
 DEFAULTS = {
     "enabled": True,
     "sustain_seconds": 600,  # how long a condition must hold before firing
-    "cooldown_seconds": 21600,  # 6h between reminders while still active
+    "cooldown_seconds": 86400,  # a day between reminders while still active
     "soil_temp_high_f": 0,  # 0 = follow the chart threshold setting
     "soil_temp_low_f": 60,
     "probe_dry_pct": 15,
@@ -91,6 +86,35 @@ def evaluate(key, condition, now=None, release=None, hold=None, clear_hold=0.0):
         st["last_sent"] = now
         return "remind"
     return None
+
+
+def snapshot():
+    """The rule states worth keeping across a restart: rules that are active,
+    and rules part way through their sustain period."""
+    return {
+        key: dict(st)
+        for key, st in _state.items()
+        if key != "_cfg" and isinstance(st, dict) and (st.get("active") or st.get("since"))
+    }
+
+
+def restore(saved):
+    """Take up rule states from an earlier snapshot(). Anything malformed is
+    skipped: that rule starts fresh, which at worst repeats one notice."""
+    if not isinstance(saved, dict):
+        return
+    for key, st in saved.items():
+        if not isinstance(st, dict):
+            continue
+        try:
+            _state[str(key)] = {
+                "active": bool(st.get("active")),
+                "since": float(st.get("since") or 0),
+                "last_sent": float(st.get("last_sent") or 0),
+                "clear_since": float(st.get("clear_since") or 0),
+            }
+        except (TypeError, ValueError):
+            continue
 
 
 def configure(cfg):
