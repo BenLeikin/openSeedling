@@ -362,6 +362,7 @@ import heat  # noqa: E402
 import camera as camera_mod  # noqa: E402
 import status as status_mod  # noqa: E402
 import events  # noqa: E402
+import readings as readings_mod  # noqa: E402
 
 # Tests change settings directly and read the status straight back; the shared
 # poll build (reused up to 5 s between changes) is checked on its own.
@@ -2999,7 +3000,7 @@ def _heat_mat():
 
     sent = []
     reading = {"v": (c75 - 2, now)}
-    real_apply, real_rf = light_mod.kasa_apply, monitor.reading_filtered
+    real_apply, real_rf = light_mod.kasa_apply, readings_mod.reading_filtered
 
     def fake_apply(on, retries=1):
         sent.append(bool(on))
@@ -3007,7 +3008,7 @@ def _heat_mat():
         return True
 
     light_mod.kasa_apply = fake_apply
-    monitor.reading_filtered = lambda key, snap=None: (
+    readings_mod.reading_filtered = lambda key, snap=None: (
         (18.0, reading["v"][1]) if key == "temp:air" else reading["v"]
     )
     with config.settings_lock:
@@ -3168,7 +3169,7 @@ def _heat_mat():
         check(fired and fired[0][0] == "fire", "a held-off heat mat sends an alert")
         alerts.reset()
     finally:
-        light_mod.kasa_apply, monitor.reading_filtered = real_apply, real_rf
+        light_mod.kasa_apply, readings_mod.reading_filtered = real_apply, real_rf
         with config.settings_lock:
             config.settings.update(saved)
         heat.heat_state.update(

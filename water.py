@@ -10,6 +10,7 @@ import db
 import events
 import sensors
 import quality
+import readings as readings_mod
 
 import config
 import hardware
@@ -404,7 +405,7 @@ def compensated_volts(volts, cal, soil_temp_f):
 
 
 PROBE_JUMP_V = 0.08  # volts; a departure larger than this is judged
-PROBE_CONFIRM = 3  # consecutive agreeing readings that make it a step
+PROBE_CONFIRM = readings_mod.PROBE_CONFIRM
 _probe_verdict = {}  # tray -> "steady" | "spike" | "step", for display
 
 

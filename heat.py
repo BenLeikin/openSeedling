@@ -13,11 +13,11 @@ import time
 
 from applog import log
 import db
+import readings as readings_mod
 
 import config
 import hardware
 import light as light_mod
-import monitor
 
 LOOP_S = 30  # how often the thermostat decides
 
@@ -162,12 +162,12 @@ def _heat_pass(now=None):
         if not use:
             return
         key = cfg.get("heat_sensor") or "temp:soil"
-        temp_c, ts = monitor.reading_filtered(key)
+        temp_c, ts = readings_mod.reading_filtered(key)
         age = None if ts is None else now - ts
         with _lock:
             on_now, sent = heat_state["on"], heat_state["sent"]
         _restore_integral(now)
-        air_c, air_ts = monitor.reading_filtered("temp:air")
+        air_c, air_ts = readings_mod.reading_filtered("temp:air")
         if air_ts is None or now - air_ts > 3600:
             air_c = None  # feed-forward falls back to a guess
         with _lock:

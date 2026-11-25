@@ -19,6 +19,7 @@ import ai_report
 import discord_alert
 import alerts
 import quality
+import readings as readings_mod
 
 import config
 import hardware
@@ -29,70 +30,6 @@ import water
 AI_REPORT_PATH = Path(__file__).with_name("ai_report.json")
 report_lock = threading.Lock()
 report_state = {"generating": False}
-
-
-# How large a departure from the recent baseline counts as suspicious, per
-# sensor. These are in each sensor's own units, which is the whole point: 0.08V
-# is meaningful for a probe and meaningless for humidity. A value under the
-# threshold is passed through untouched, so ordinary drift is never filtered.
-SENSOR_JUMP = {
-    "probe:": 0.08,  # volts
-    "temp:soil": 2.0,  # Celsius; a real soil change is slower than this
-    "temp:air": 2.5,  # Celsius
-    "humidity": 6.0,  # percent
-    "pressure": 2.0,  # hPa
-    "canopy:": 5.0,  # percent of tray area
-}
-# Deliberately absent: lux. It legitimately steps by thousands the moment the
-# light switches or a capture raises brightness, and the DLI integration needs
-# the real values. Filtering it would either reject genuine transitions or
-# corrupt the day's light total.
-
-
-def sensor_jump(key):
-    best = None
-    for prefix, jump in SENSOR_JUMP.items():
-        if key.startswith(prefix) and (best is None or len(prefix) > len(best[0])):
-            best = (prefix, jump)
-    return best[1] if best else None
-
-
-def reading_filtered(key, snap=None):
-    """A sensor's latest value with single-sample transients rejected.
-
-    Same machinery as the probes: compare the newest reading against a baseline
-    of older ones, reject a lone excursion, accept a change that persists or
-    that moves steadily. Sensors without a jump threshold (lux) are returned
-    raw. Charts always show raw values; only decisions read this.
-
-    Returns (value, ts) or (None, None).
-    """
-    if snap is None:
-        snap = db.latest()
-    rec = snap.get(key)
-    if rec is None:
-        return None, None
-    ts, raw = rec
-    jump = sensor_jump(key)
-    if jump is None:
-        return raw, ts
-    with config.settings_lock:
-        depth = int(config.settings.get("probe_median_depth", 5))
-    if depth <= 1:
-        return raw, ts
-    try:
-        vals = db.recent_values(key, n=max(depth, water.PROBE_CONFIRM + 6))
-    except Exception as e:
-        log.info(f"filter fell back to raw for {key} ({e})")
-        return raw, ts
-    if len(vals) < 3:
-        return raw, ts
-    val, verdict = quality.spike_or_step(vals, jump=jump, confirm=water.PROBE_CONFIRM)
-    _filter_verdict[key] = verdict
-    return (val if val is not None else raw), ts
-
-
-_filter_verdict = {}  # sensor -> "steady" | "spike" | "step" | "trend"
 
 
 def gather_report_data():
@@ -755,7 +692,7 @@ def sample_loop():
         with config.settings_lock:
             interval = max(1, int(config.settings.get("sample_interval_min", 5)))
         try:
-            readings = validate_readings(sensors.read_all())
+            readings = readings_mod.validate_readings(sensors.read_all())
             mem = memory_readings()
             if mem:
                 # charted under Device; never alerted on or fed to the AI report
@@ -778,40 +715,8 @@ def sample_loop():
         time.sleep(interval * 60)
 
 
-# --- sensor data quality state (in memory; nothing here is worth persisting) ---
-# sensor -> count of implausible readings rejected in the current session, and
-# the reason for the most recent one. Feeds the health score and the dashboard.
-_reject_counts = {}
-_reject_last = {}
 # cached health payload; recomputing per status poll would hammer sqlite
 _health_cache = {"ts": 0.0, "data": {}}
-
-
-def validate_readings(readings):
-    """Drop implausible values before they ever reach the database.
-
-    A probe reading the 3.3V rail means the signal is gone, not that the soil
-    is bone dry. Letting that into history corrupts the charts, the alert
-    thresholds and any calibration done afterwards, and it is indistinguishable
-    from real data later. Rejections are counted and logged as events so a
-    wiring fault is visible rather than silent.
-    """
-    clean, dropped = {}, []
-    for k, v in readings.items():
-        why = quality.check_bounds(k, v)
-        if why is None:
-            clean[k] = v
-            continue
-        dropped.append((k, v, why))
-        _reject_counts[k] = _reject_counts.get(k, 0) + 1
-        _reject_last[k] = why
-    for k, v, why in dropped:
-        log.info(f"rejected {k}={v}: {why}")
-        try:
-            db.log_event("sensor", f"rejected {k}={v}: {why}")
-        except Exception:
-            pass
-    return clean
 
 
 # sensor -> last-seen unix ts; touched only by the sample thread via run_alerts
@@ -874,12 +779,12 @@ def sensor_health(cfg, snap=None, max_age=60):
             vals,
             age_s=age,
             cadence_s=cap if key.startswith("canopy:") else cadence,
-            rejects=_reject_counts.get(key, 0),
+            rejects=readings_mod.reject_counts.get(key, 0),
             verdict=verdict,
             noise_ref=0.01 if key.startswith("probe:") else None,
         )
-        if _reject_last.get(key) and not any("implausible" in w for w in why):
-            why.append(_reject_last[key])
+        if readings_mod.reject_last.get(key) and not any("implausible" in w for w in why):
+            why.append(readings_mod.reject_last[key])
         out[key] = {"score": score, "grade": grade, "why": why}
     _health_cache.update(ts=now, data=out)
     return out
@@ -914,9 +819,9 @@ def run_alerts(readings):
         # code keep using the raw series.
         snap = dict(readings)
         for key in list(snap):
-            if sensor_jump(key) is None or key.startswith("probe:"):
+            if readings_mod.sensor_jump(key) is None or key.startswith("probe:"):
                 continue  # probes are handled by their own filter below
-            fv, _ = reading_filtered(key)
+            fv, _ = readings_mod.reading_filtered(key)
             if fv is not None:
                 snap[key] = fv
 
@@ -1123,7 +1028,7 @@ def pressure_tendency():
     now_ts, now_v = pts[-1]
     # the current end of the trend is filtered: one bad sample at the newest
     # point swings a 3-hour tendency across a band and mislabels the weather
-    fv, _ = reading_filtered("pressure")
+    fv, _ = readings_mod.reading_filtered("pressure")
     if fv is not None:
         now_v = fv
 

@@ -12,6 +12,7 @@ import db
 import events
 import sensors
 import quality
+import readings as readings_mod
 
 import config
 import hardware
@@ -364,9 +365,9 @@ def status_payload(authed=None):
         },
         # and the same for every other smoothed sensor; charts stay raw
         filtered={
-            k: monitor.reading_filtered(k, snap)[0]
+            k: readings_mod.reading_filtered(k, snap)[0]
             for k in snap
-            if monitor.sensor_jump(k) is not None and not k.startswith("probe:")
+            if readings_mod.sensor_jump(k) is not None and not k.startswith("probe:")
         },
         quality={
             "health": monitor.sensor_health(cfg, snap),
@@ -385,8 +386,8 @@ def status_payload(authed=None):
             ],
             "postfill": water.postfill_result,
             "rejects": {
-                k: {"count": n, "last": monitor._reject_last.get(k, "")}
-                for k, n in monitor._reject_counts.items()
+                k: {"count": n, "last": readings_mod.reject_last.get(k, "")}
+                for k, n in readings_mod.reject_counts.items()
             },
             "probe_verdict": dict(water._probe_verdict),
         },

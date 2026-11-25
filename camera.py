@@ -16,11 +16,11 @@ from zoneinfo import ZoneInfo
 
 from applog import log
 import db
+import readings as readings_mod
 
 import config
 import light as light_mod
 import setups as setups_mod
-import monitor
 
 TIMELAPSE_DIR = Path(__file__).with_name("timelapse")
 PREVIEW_PATH = Path(__file__).with_name(
@@ -810,7 +810,7 @@ def record_growth(path, cfg, now):
         if out.get("error"):
             log.error(f"growth: {out['error']}")
         return
-    readings = monitor.validate_readings(out.get("readings") or {})
+    readings = readings_mod.validate_readings(out.get("readings") or {})
     if readings:
         db.log_many(list(readings.items()), ts=int(now.timestamp()))
 
