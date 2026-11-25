@@ -1309,7 +1309,10 @@ def run_focus_sweep():
                     timeout=10,
                 )
                 time.sleep(0.6)  # lens travel time
-                ok, err = _usb_capture(cfg, tmp, 1280, 720, warmup=3)
+                # _usb_capture applies the configured controls first, so the
+                # probe frame needs this focus value in the settings it is given
+                probe = {**cfg, "usb_auto_focus": False, "usb_focus_absolute": int(fv)}
+                ok, err = _usb_capture(probe, tmp, 1280, 720, warmup=3)
                 if not ok:
                     raise RuntimeError(err or "capture failed")
                 s = sharpness_score(tmp)

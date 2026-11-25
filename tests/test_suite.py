@@ -2225,6 +2225,45 @@ def _photo_light():
     )
 
 
+def _focus_sweep():
+    """Each probe frame of the focus sweep is taken at the focus being tested."""
+    seen = []
+    real_run = camera_mod.subprocess.run
+
+    def fake_run(a, **kw):
+        seen.append(" ".join(str(x) for x in a))
+        return types.SimpleNamespace(returncode=0, stderr=b"", stdout=b"")
+
+    dev = WORK / "video0"
+    dev.write_bytes(b"")
+    keys = ("usb_device", "usb_auto_focus", "usb_focus_absolute")
+    with config.settings_lock:
+        saved = {k: config.settings.get(k) for k in keys}
+        config.settings.update(usb_device=str(dev), usb_auto_focus=True, usb_focus_absolute=68)
+    camera_mod.subprocess.run = fake_run
+    # the sweep ends by waking the control loop, which would publish the real
+    # schedule over the state later sections set; give it an event nobody waits on
+    real_wake, config.wake = config.wake, threading.Event()
+    try:
+        camera_mod.run_focus_sweep()  # stops at the first probe: the fake writes no frame
+    finally:
+        camera_mod.subprocess.run = real_run
+        config.wake = real_wake
+        with config.settings_lock:
+            config.settings.update(saved)
+        with camera_mod.focus_lock:
+            camera_mod.focus_state["error"] = ""
+    shot = next((i for i, c in enumerate(seen) if "--stream-to" in c), len(seen))
+    before = " ".join(seen[:shot])
+    check(
+        shot < len(seen)
+        and "focus_absolute=0" in before
+        and "focus_absolute=68" not in before
+        and "focus_automatic_continuous=1" not in before,
+        "the focus sweep photographs each focus value it sets, not the configured one",
+    )
+
+
 def _canopy_stale():
     """Canopy comes from photos, taken only while the camera's light is on:
     at night its last reading is hours old by design and must not read stale."""
@@ -4477,6 +4516,7 @@ run("Startup log noise and thumbnail race", _startup_log_noise)
 run("Unsaved settings", _unsaved_settings)
 run("Out of memory", _oom)
 run("Photo light", _photo_light)
+run("Focus sweep", _focus_sweep)
 run("Canopy staleness", _canopy_stale)
 run("Heat mat", _heat_mat)
 run("Shared sensors and the heat mat setup", _shared_sensors)
