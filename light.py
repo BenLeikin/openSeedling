@@ -31,6 +31,53 @@ sweep_state = {
 }  # cancel is a request; running means the
 # worker thread is still holding the light
 sweep_lock = threading.Lock()
+HOLD_SWEEP = "calibration sweep"
+
+
+# ---- who has the light ----
+# The schedule drives the light unless something has taken it for a while: a
+# photo, a focus or calibration sweep, the camera alignment, the lightning
+# effect. One holder at a time, and every hold has a time limit, so a holder
+# that hangs or dies cannot keep the schedule off the light for good.
+_hold_lock = threading.Lock()
+_hold = {"owner": None, "until": 0.0}
+
+
+def _expire(now):
+    """Drop a hold that has outlived its limit. Call with _hold_lock held."""
+    if _hold["owner"] is not None and now >= _hold["until"]:
+        log.error(f"the light was still held for the {_hold['owner']} past its limit; released")
+        _hold.update(owner=None, until=0.0)
+
+
+def claim(owner, max_s):
+    """Take the light for `owner` for at most `max_s` seconds.
+
+    Returns False when something else has it. Claiming again as the same
+    owner extends the hold.
+    """
+    now = time.monotonic()
+    with _hold_lock:
+        _expire(now)
+        if _hold["owner"] not in (None, owner):
+            return False
+        _hold.update(owner=owner, until=now + max_s)
+    return True
+
+
+def release(owner):
+    """Give the light back to the schedule, which takes it up at once."""
+    with _hold_lock:
+        if _hold["owner"] == owner:
+            _hold.update(owner=None, until=0.0)
+    config.wake.set()
+
+
+def holder():
+    """What has the light, or None when the schedule does."""
+    with _hold_lock:
+        _expire(time.monotonic())
+        return _hold["owner"]
 
 
 # ---- light output backends ----
@@ -800,6 +847,7 @@ def brightness_for(cfg, now, on_time, off_time):
 # weather. The 5V panel cannot do it convincingly and the smart plug has no
 # dimming at all.
 LIGHTNING_MAX_S = 90
+HOLD_LIGHTNING = "lightning effect"
 lightning_state = {"running": False, "until": 0.0, "style": ""}
 _lightning_lock = threading.Lock()
 # Set to ask the storm to end. An Event rather than a flag so the gap between
@@ -833,18 +881,18 @@ def _flash(level_pct):
 
 
 def _storm(seconds, style):
-    """Run the effect, then put the light back exactly where it was.
-
-    The control loop is told to stand off while this runs; without that it
-    would overwrite each flash on its next pass and the effect would stutter
-    to a halt.
-    """
+    """Run the effect, holding the light, then put it back where it was."""
     import random
 
+    if not claim(HOLD_LIGHTNING, seconds + 30):
+        log.info(f"lightning not started: the light is in use ({holder()})")
+        with _lightning_lock:
+            lightning_state.update(running=False, until=0.0, style="")
+        return
     end = time.time() + seconds
     with config.state_lock:
         restore = float(config.state.get("brightness") or 0)
-    _dither_stop()  # the storm owns the light for now
+    _dither_stop()
     try:
         while time.time() < end and not _lightning_stop.is_set():
             kind = style
@@ -893,11 +941,10 @@ def _storm(seconds, style):
         with _lightning_lock:
             lightning_state.update(running=False, until=0.0, style="")
         try:
-            set_brightness(restore)  # back where the schedule had it, dithering
-            # included if that is what it needs
+            set_brightness(restore)  # where the schedule had it, dithering included
         except Exception:
             pass
-        config.wake.set()  # and let the loop take over again
+        release(HOLD_LIGHTNING)
         db.log_event("light", "lightning finished")
 
 
@@ -931,13 +978,7 @@ def control_loop():
                 b = max(0, min(100, int(cfg.get("manual_bright", cfg["max_bright"]))))
             elif ov == "off":
                 b = 0
-            if (
-                not camera_mod.capturing
-                and not sweep_state["running"]
-                and not lightning_state["running"]
-            ):
-                # a capture, a sweep or a storm each own the light while running;
-                # writing the scheduled level here would fight them
+            if holder() is None:
                 set_brightness(b)
 
             mode = cfg.get("fan_mode", "auto")
@@ -1007,12 +1048,18 @@ def _curve_lux(pts, raw_pct):
 
 def run_light_sweep(step=5, settle=2.0, linearize=False, target="main"):
     """Step the light 0..100% and record lux at each stop, to chart the
-    fixture's real response. Runs in a thread. The control loop leaves the
-    light alone while sweep_state["running"] is set; whatever happens, the
-    previous brightness is restored and the flag is cleared at the end."""
+    fixture's real response. Runs in a thread and holds the light; whatever
+    happens, the previous brightness is restored and the hold given up."""
     points = []
     before = 0
     key = lux_key_for_light(target) or "lux"
+    # each stop is the settle time plus a sensor read and a write to the outputs
+    if not claim(HOLD_SWEEP, (100 // step + 2) * (settle + 5) + 60):
+        with sweep_lock:
+            sweep_state.update(
+                running=False, cancel=False, error=f"the light is in use ({holder()})"
+            )
+        return
     _dither_stop()  # nothing else may move the light mid-measurement
     try:
         try:
@@ -1062,7 +1109,7 @@ def run_light_sweep(step=5, settle=2.0, linearize=False, target="main"):
             sweep_state["running"] = False
             sweep_state["cancel"] = False
             sweep_state["l2_raw"] = 0.0
-        config.wake.set()  # control loop resumes at once
+        release(HOLD_SWEEP)
 
 
 def _store_sweep(points, step, settle, key, linearize, target):
@@ -1099,5 +1146,4 @@ def _store_sweep(points, step, settle, key, linearize, target):
 
 # imported at the bottom: these modules import this one
 import setups as setups_mod
-import camera as camera_mod
 import status as status_mod

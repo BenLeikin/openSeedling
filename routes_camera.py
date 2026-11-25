@@ -19,6 +19,7 @@ import db
 
 import config
 import camera as camera_mod
+import light as light_mod
 import routes
 
 
@@ -244,6 +245,9 @@ def api_capture():
     with config.settings_lock:
         if not config.settings.get("camera_enabled"):
             return jsonify(ok=False, error="camera features are disabled in settings"), 200
+    busy = light_mod.holder()
+    if busy:
+        return jsonify(ok=False, error=f"The light is in use ({busy}); try again shortly."), 200
     if not camera_mod.capture_lock.acquire(blocking=False):
         return jsonify(ok=False, error="A capture is already in progress."), 200
     try:

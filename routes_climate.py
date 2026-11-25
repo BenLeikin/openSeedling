@@ -42,6 +42,9 @@ def api_lightning():
         if data.get("style") in ("storm", "strike", "sheet", "flicker")
         else "storm"
     )
+    busy = light_mod.holder()
+    if busy:
+        return jsonify(ok=False, error=f"the light is in use ({busy}); try again shortly"), 200
     with light_mod._lightning_lock:
         if light_mod.lightning_state["running"]:
             return jsonify(ok=False, error="already running"), 200
@@ -122,9 +125,12 @@ def api_light_sweep():
         # calibration needs every percent to find them
         step = 1
         settle = max(settle, 1.5)
+    busy = light_mod.holder()
     with light_mod.sweep_lock:
         if light_mod.sweep_state["running"]:
             return jsonify(ok=False, error="a sweep is already running"), 200
+        if busy:
+            return jsonify(ok=False, error=f"the light is in use ({busy}); try again shortly"), 200
         light_mod.sweep_state.update(
             running=True,
             pct=0,

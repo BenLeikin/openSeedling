@@ -1689,9 +1689,14 @@ def _fan_camera_timing():
         and st["seedlings"]["fan"],
         "the status gives each setup its own light window and its fan and camera",
     )
-    calls = {"n": 0}
+    calls = {"n": 0}  # writes the photo makes; the schedule's own are not counted
     real_sb, real_usb = light_mod.set_brightness, camera_mod._usb_capture
-    light_mod.set_brightness = lambda *a, **k: calls.__setitem__("n", calls["n"] + 1)
+
+    def count(*a, **k):
+        if light_mod.holder() == camera_mod.HOLD_PHOTO:
+            calls["n"] += 1
+
+    light_mod.set_brightness = count
     camera_mod._usb_capture = lambda cfg_, out, w, h, warmup=None: (False, "test")
     try:
         with config.settings_lock:
@@ -2397,9 +2402,14 @@ def _oom():
 
 def _photo_light():
     """Photos leave the light alone unless "Set the light for each photo" is on."""
-    set_to = []
+    set_to = []  # what the photo itself sets; the schedule writes again once it lets go
     real_sb, real_usb = light_mod.set_brightness, camera_mod._usb_capture
-    light_mod.set_brightness = lambda p, *a, **k: set_to.append(p)
+
+    def record(p, *a, **k):
+        if light_mod.holder() == camera_mod.HOLD_PHOTO:
+            set_to.append(p)
+
+    light_mod.set_brightness = record
     camera_mod._usb_capture = lambda cfg_, out, w, h, warmup=None: (False, "test")
     with config.settings_lock:
         saved = {
@@ -2442,6 +2452,110 @@ def _photo_light():
         and "if light_for_photo(cfg):" in fs.group(0)
         and "camera_mod.light_for_photo(cfg)" in (APP / "monitor.py").read_text(),
         "the focus sweep and the AI report's photo-light line follow the same switch",
+    )
+
+
+def _light_holder():
+    """One thing at a time has the light; the schedule has it otherwise."""
+    lm = light_mod
+    lm.release(lm.holder())
+    first = lm.claim("photo", 5)
+    second = lm.claim(lm.HOLD_SWEEP, 5)
+    again = lm.claim("photo", 5)
+    who = lm.holder()
+    lm.release(lm.HOLD_SWEEP)  # not the holder: changes nothing
+    still = lm.holder()
+    lm.release("photo")
+    check(
+        first
+        and not second
+        and again
+        and who == "photo"
+        and still == "photo"
+        and lm.holder() is None,
+        "the light has one holder at a time, and only the holder can give it back",
+    )
+
+    # the schedule stands off while the light is held, and resumes after
+    lm.claim("test", 5)
+    time.sleep(0.3)  # let a pass that had already started finish
+    n0 = len(PWM_WRITES)
+    time.sleep(0.5)
+    held_writes = len(PWM_WRITES) - n0
+    lm.release("test")
+    time.sleep(0.5)
+    check(
+        held_writes == 0 and len(PWM_WRITES) > n0,
+        f"the control loop leaves a held light alone and takes it up again on release "
+        f"({held_writes} writes while held)",
+    )
+
+    # a holder that never lets go loses the light when its time is up
+    lm.claim("test", 0.05)
+    time.sleep(0.15)
+    check(
+        lm.holder() is None and lm.claim("photo", 5),
+        "a hold ends at its time limit even if it is never released",
+    )
+    lm.release("photo")
+
+    # a photo and a calibration sweep keep out of each other's way
+    set_to = []
+    real_set, real_raw = lm.set_brightness, lm.set_brightness_raw
+    lm.set_brightness = lambda v, *a, **k: set_to.append(("set", v))
+    lm.set_brightness_raw = lambda v: set_to.append(("raw", v))
+    with config.settings_lock:
+        cfg = dict(config.settings, camera_backend="usb", capture_set_light=True)
+    now = datetime.now(ZoneInfo(cfg["timezone"]))
+    try:
+        lm.claim(lm.HOLD_SWEEP, 5)
+        time.sleep(0.3)
+        set_to.clear()
+        photo = camera_mod.take_photo(cfg, now)
+        during_sweep = list(set_to)
+        lm.release(lm.HOLD_SWEEP)
+
+        lm.claim(camera_mod.HOLD_PHOTO, 5)
+        time.sleep(0.3)  # a schedule pass that began before the claim has finished
+        set_to.clear()
+        lm.sweep_state.update(running=True, cancel=False, error="", target="main")
+        lm.run_light_sweep(step=50, settle=0.0)
+        sweep_err = lm.sweep_state["error"]
+        during_photo = list(set_to)
+        lm.release(camera_mod.HOLD_PHOTO)
+    finally:
+        lm.set_brightness, lm.set_brightness_raw = real_set, real_raw
+        lm.sweep_state["error"] = ""
+    check(
+        photo is None and during_sweep == [],
+        "a photo does not take the light from a calibration sweep",
+    )
+    check(
+        "in use (photo)" in sweep_err and lm.sweep_state["running"] is False and during_photo == [],
+        f"a sweep does not start while a photo has the light ({sweep_err})",
+    )
+
+    # the photo gives the light back before it is rotated and thumbnailed
+    at_thumb = []
+    real = camera_mod._usb_capture_view, camera_mod.make_thumb
+    camera_mod._usb_capture_view = lambda cfg_, out, w, h, warmup=None: (
+        at_thumb.append(("capture", lm.holder())),
+        Path(out).write_bytes(b"\xff\xd8\xff\xd9"),
+        (True, None),
+    )[2]
+    camera_mod.make_thumb = lambda path, cfg_=None, **k: at_thumb.append(("thumb", lm.holder()))
+    real_sleep = camera_mod.time.sleep
+    camera_mod.time.sleep = lambda s_: None
+    try:
+        shot = camera_mod.take_photo(dict(cfg, capture_set_light=False), now)
+    finally:
+        camera_mod._usb_capture_view, camera_mod.make_thumb = real
+        camera_mod.time.sleep = real_sleep
+        if shot:
+            shot.unlink(missing_ok=True)
+    check(
+        at_thumb == [("capture", "photo"), ("thumb", None)] and lm.holder() is None,
+        f"a photo holds the light only until the frame is on disk ({at_thumb})",
     )
 
 
@@ -4976,6 +5090,7 @@ run("Clean start", _clean_start)
 run("Unsaved settings", _unsaved_settings)
 run("Out of memory", _oom)
 run("Photo light", _photo_light)
+run("Who has the light", _light_holder)
 run("Focus sweep", _focus_sweep)
 run("Canopy staleness", _canopy_stale)
 run("Alert delivery", _alert_delivery)

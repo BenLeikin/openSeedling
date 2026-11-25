@@ -29,6 +29,9 @@ the 4-17 baseline. The installer commits each one with the heading below.
 - Settings in a hand-edited `config.json` are checked at start-up; an invalid one falls back to its default with an error in the log. NaN and infinity are refused wherever a number is expected.
 - `setup.sh` runs without a terminal where sudo needs no password, and a change to `requirements-dev.txt` no longer triggers it on the Pi.
 
+### Changed
+- One thing at a time has the light: the schedule, a photo, a focus sweep, the camera alignment, a calibration sweep or the lightning effect. A scheduled photo now waits for a sweep or the lightning effect to finish instead of changing the light under it, a sweep or effect will not start during a photo, and a holder that hangs loses the light when its time limit runs out. A photo gives the light back as soon as the frame is on disk, before it is rotated and thumbnailed.
+
 ### Security
 - Request bodies over 1 MB are refused.
 - Light-plan advice is escaped before it is shown (it can contain a setup's name).

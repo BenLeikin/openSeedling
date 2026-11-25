@@ -54,7 +54,9 @@ def _camera_fail(err):
         camera["last_err_ts"] = time.time()
 
 
-capturing = False  # capture thread holds the light; control loop defers
+capturing = False  # a capture, focus sweep or alignment is using the camera
+HOLD_PHOTO, HOLD_FOCUS, HOLD_ALIGN = "photo", "focus sweep", "camera alignment"
+PHOTO_HOLD_S = 300  # two USB cameras at their timeouts, with room to spare
 capture_lock = threading.Lock()  # serialize camera access (manual vs scheduled)
 render = {
     "state": "idle",
@@ -582,6 +584,10 @@ def align_cameras():
     global capturing
     if not capture_lock.acquire(timeout=120):
         return {"ok": False, "error": "the camera is busy; try again in a minute"}
+    # the light is not changed, only kept steady while the two frames are taken
+    if not light_mod.claim(HOLD_ALIGN, 600):
+        capture_lock.release()
+        return {"ok": False, "error": f"the light is in use ({light_mod.holder()}); try again"}
     try:
         capturing = True
         turns = cam_turns(cfg)
@@ -636,7 +642,7 @@ def align_cameras():
         # judged by eye
         capturing = False
         capture_lock.release()
-        config.wake.set()
+        light_mod.release(HOLD_ALIGN)
 
 
 def unstitch(settings):
@@ -688,69 +694,76 @@ def light_for_photo(cfg):
     return cam is None or cam.get("light") == "main"
 
 
-def take_photo(cfg, now, manual=False):
-    """Capture one frame. `manual` tags the filename with an _m suffix so the
-    daily AI report can prefer scheduled frames: a manual shot at midnight is
-    a dark off-schedule photo that would otherwise become the report's input."""
-    global capturing
-    capturing = True
-    saved = None
-    try:
-        # The light is left as it is unless "Set the light for each photo" is
-        # on. The capture brightness is a main-light setting: only apply it
-        # when the camera watches the main light's setup, or it would change
-        # the wrong area and leave the photographed one as it was.
-        if light_for_photo(cfg):
-            light_mod.set_brightness(cfg["capture_brightness"])
-        time.sleep(2)  # let light and auto-exposure settle
-        suffix = "_m" if manual else ""
-        fname = TIMELAPSE_DIR / f"{now:%Y%m%d_%H%M%S}{suffix}.jpg"
-        cw = int(cfg.get("cam_width", 4608))
-        ch = int(cfg.get("cam_height", 2592))
-        if cfg.get("camera_backend", "rpicam") == "usb":
-            ok, err = _usb_capture_view(
-                cfg, fname, int(cfg.get("usb_width", 2048)), int(cfg.get("usb_height", 1536))
-            )
-            if ok:  # already the right way up
-                make_thumb(fname, cfg)
-                saved = fname
-                _camera_ok()
-            else:
-                log.warning(f"capture failed: {err}")
-                _camera_fail(err)
-            return saved
+def _rpicam_capture(cfg, out_path):
+    """One full frame from the Pi camera. Returns an error message, or None.
 
-        # Full frame always: the view crop is applied when photos are shown,
-        # so it can be changed or cleared later without losing any image.
-        cmd = [
-            "rpicam-still",
-            "-n",
-            "-o",
-            str(fname),
-            "-t",
-            "2000",
-            "--width",
-            str(cw),
-            "--height",
-            str(ch),
-        ]
-        r = subprocess.run(oom_first(cmd), capture_output=True, timeout=90)
-        if r.returncode != 0:
-            err = killed_msg(r, "rpicam-still") or r.stderr.decode(errors="replace")[-300:]
+    Always the full frame: the view crop is applied when photos are shown, so
+    it can be changed or cleared later without losing any image."""
+    cmd = [
+        "rpicam-still",
+        "-n",
+        "-o",
+        str(out_path),
+        "-t",
+        "2000",
+        "--width",
+        str(int(cfg.get("cam_width", 4608))),
+        "--height",
+        str(int(cfg.get("cam_height", 2592))),
+    ]
+    r = subprocess.run(oom_first(cmd), capture_output=True, timeout=90)
+    if r.returncode == 0:
+        return None
+    err = killed_msg(r, "rpicam-still") or r.stderr.decode(errors="replace")[-300:]
+    return err.strip() or "capture failed"
+
+
+def take_photo(cfg, now, manual=False):
+    """Capture one frame; returns its path, or None.
+
+    The light is held only until the frame is on disk, then goes back to the
+    schedule while the photo is rotated and thumbnailed. `manual` tags the
+    filename with an _m suffix so the daily AI report can prefer scheduled
+    frames: a manual shot at midnight is a dark off-schedule photo."""
+    global capturing
+    if not light_mod.claim(HOLD_PHOTO, PHOTO_HOLD_S):
+        log.info(f"photo skipped: the light is in use ({light_mod.holder()})")
+        return None
+    capturing = True
+    usb = cfg.get("camera_backend", "rpicam") == "usb"
+    fname = TIMELAPSE_DIR / f"{now:%Y%m%d_%H%M%S}{'_m' if manual else ''}.jpg"
+    try:
+        try:
+            # The capture brightness is a main-light setting: it applies only
+            # when "Set the light for each photo" is on and the camera watches
+            # the main light's setup.
+            if light_for_photo(cfg):
+                light_mod.set_brightness(cfg["capture_brightness"])
+            time.sleep(2)  # let light and auto-exposure settle
+            if usb:  # comes back the right way up
+                ok, err = _usb_capture_view(
+                    cfg, fname, int(cfg.get("usb_width", 2048)), int(cfg.get("usb_height", 1536))
+                )
+                err = None if ok else (err or "capture failed")
+            else:
+                err = _rpicam_capture(cfg, fname)
+        finally:
+            light_mod.release(HOLD_PHOTO)
+        if err:
             log.error(f"capture failed: {err}")
-            _camera_fail(err.strip().splitlines()[-1] if err.strip() else "capture failed")
-        else:
+            _camera_fail(err.splitlines()[-1])
+            return None
+        if not usb:
             _postprocess_file(fname, cfg)
-            make_thumb(fname, cfg)
-            saved = fname
-            _camera_ok()
+        make_thumb(fname, cfg)
+        _camera_ok()
+        return fname
     except Exception as e:
         log.error(f"capture error: {e}")
         _camera_fail(str(e))
+        return None
     finally:
         capturing = False
-        config.wake.set()  # control loop restores scheduled brightness now
-    return saved
 
 
 def record_growth(path, cfg, now):
@@ -915,7 +928,9 @@ def _capture_tick(last_shot):
                     f"photo skipped: only {disk_free_gb():.1f} GB free "
                     f"(photos stop below {MIN_FREE_GB} GB)"
                 )
-        elif in_day and due:
+        elif in_day and due and light_mod.holder() is None:
+            # with the light in use (a sweep, the lightning effect) the photo
+            # waits for the next tick instead of being skipped
             last_shot = now
             with capture_lock:
                 path = take_photo(cfg, now)
@@ -1319,7 +1334,9 @@ def run_focus_sweep():
     global capturing
     try:
         with capture_lock:
-            capturing = True  # control loop leaves the light alone
+            if not light_mod.claim(HOLD_FOCUS, 600):
+                raise RuntimeError(f"the light is in use ({light_mod.holder()})")
+            capturing = True
             if light_for_photo(cfg):
                 light_mod.set_brightness(cfg.get("capture_brightness", 100))
             # manual focus must be active or focus_absolute writes are rejected
@@ -1394,7 +1411,7 @@ def run_focus_sweep():
         with focus_lock:
             focus_state["running"] = False
             focus_state["cancel"] = False
-        config.wake.set()  # control loop restores the light
+        light_mod.release(HOLD_FOCUS)
 
 
 _rect_cache = {"key": None, "bytes": None}
