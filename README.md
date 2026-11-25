@@ -1071,11 +1071,13 @@ setups.py           grow setups, light windows, DLI integration and curves, Plan
 water.py            fills, reservoir, probe filtering and moisture, auto-water, post-fill checks
 monitor.py          sampling and live readings, validation, sensor health, alerts, AI report loop
 camera.py           capture, crop and flatten, thumbnails, focus sweep, render, canopy
+heat.py             heat mat thermostat on a smart plug
 status.py           status payload, display units, redaction, live event stream
-routes.py           the Flask app, sign-in, every route
 db.py               SQLite logging (WAL) with downsampling
 sensors.py          sensor I/O: probes, floats, reservoir, air, lux, soil temp
 alerts.py           threshold alert state machine (sustain, hysteresis, reminders)
+quality.py          reading checks: implausible, stuck and contradictory sensors
+applog.py           logging setup
 growth.py           per-tray canopy vision (subprocess)
 detect_corners.py   grid corner auto-detect (subprocess)
 hoststats.py        Pi health: CPU temp, load, memory, throttling, wifi
@@ -1091,7 +1093,9 @@ routes_data.py      AI report, backups, readings history, host stats
 templates/index.html, templates/screen.html
 static/js/*.js      the dashboard: ES modules, entered through main.js
 static/{style.css,screen.js,screen.css}
-scripts/{setup.sh,update.sh,set_password.py,test_ramp.py}
+scripts/            setup.sh (install), deploy.sh and update.sh (updates), kiosk.sh
+                    (touchscreen), set_password.py, and bench tools for the light
+tests/              test_suite.py (server, no hardware), test_ui.py (browser)
 deploy/             box config applied by setup.sh (boot, unit, packages, env reference)
 ```
 
