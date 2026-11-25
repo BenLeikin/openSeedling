@@ -150,7 +150,7 @@ def imgtool(args, timeout=120):
 
 def _imgtool_err(r):
     if r.returncode < 0 or r.returncode == 137:
-        return killed_msg(r.returncode)
+        return killed_msg(r, "the image job") or f"killed by signal {-r.returncode}"
     return (r.stderr or b"").decode(errors="replace").strip()[-200:] or f"exit {r.returncode}"
 
 

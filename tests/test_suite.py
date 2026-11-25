@@ -2114,6 +2114,12 @@ def _oom():
         not ok and err and "out of memory" in err and "3264x2448" in err,
         f"a capture killed for memory says so instead of 'no frames' ({err})",
     )
+    killed = camera_mod._imgtool_err(types.SimpleNamespace(returncode=-9, stderr=b""))
+    crashed = camera_mod._imgtool_err(types.SimpleNamespace(returncode=-11, stderr=b""))
+    check(
+        "out of memory" in killed and crashed == "killed by signal 11",
+        f"an image job killed by a signal reports why ({crashed})",
+    )
     cam_src = (APP / "camera.py").read_text()
     sq = squash(cam_src)
     runs = [sq[m.end() : m.end() + 40] for m in re.finditer(r"subprocess\.run\(", sq)]
