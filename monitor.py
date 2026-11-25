@@ -19,6 +19,7 @@ import ai_report
 import discord_alert
 import alerts
 import quality
+import units
 import readings as readings_mod
 
 import config
@@ -26,6 +27,8 @@ import hardware
 import light as light_mod
 import setups as setups_mod
 import water
+import heat as heat_mod
+import camera as camera_mod
 
 AI_REPORT_PATH = Path(__file__).with_name("ai_report.json")
 report_lock = threading.Lock()
@@ -84,11 +87,11 @@ def gather_report_data():
             ) + note
         elif k.startswith("temp:soil"):
             label = "Soil" if k == "temp:soil" else f"Soil {k.split('_')[-1]}"
-            soiltemp[label] = status_mod.temp_out(v)
+            soiltemp[label] = units.temp_out(v)
         elif k == "temp:air":
-            env["air_f"] = status_mod.temp_out(v)
+            env["air_f"] = units.temp_out(v)
         elif k == "pressure":
-            env["pressure"] = status_mod.press_out(v)
+            env["pressure"] = units.press_out(v)
         elif k in ("humidity", "lux"):
             env[k] = round(v, 1)
     fstates = {}
@@ -279,7 +282,7 @@ def gather_report_data():
         },
         "planting": planting,
         "germination": germ_out,
-        "units": {"temp": status_mod.temp_unit(), "press": status_mod.press_unit()},
+        "units": {"temp": units.temp_unit(), "press": units.press_unit()},
         "float": flabel,
         "reservoir": water.reservoir_state(),
         # pump_state is keyed by tray; sum across trays, latest detail wins
@@ -360,13 +363,13 @@ def report_by_setup(cfg, state, snap, now, probe_txt, floats, planting_by_tray):
                 if key == "temp:soil"
                 else f"soil temperature {key.split('_')[-1]}"
             )
-            return label, f"{status_mod.temp_out(v)}{status_mod.temp_unit()}"
+            return label, f"{units.temp_out(v)}{units.temp_unit()}"
         if key == "temp:air":
-            return "air", f"{status_mod.temp_out(v)}{status_mod.temp_unit()}"
+            return "air", f"{units.temp_out(v)}{units.temp_unit()}"
         if key == "humidity":
             return "RH", f"{round(v)}%"
         if key == "pressure":
-            return "pressure", f"{status_mod.press_out(v)} {status_mod.press_unit()}"
+            return "pressure", f"{units.press_out(v)} {units.press_unit()}"
         if key.startswith("lux"):
             return f"light sensor {key}", f"{round(v)} lx"
         return None
@@ -1089,9 +1092,3 @@ def _soil_f_lookup(snap, hours):
         return hist[best][1] * 9 / 5 + 32
 
     return at
-
-
-# imported at the bottom: these modules import this one
-import heat as heat_mod
-import camera as camera_mod
-import status as status_mod

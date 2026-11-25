@@ -25,30 +25,6 @@ import heat as heat_mod
 import camera as camera_mod
 
 
-def _units():
-    with config.settings_lock:
-        return config.settings.get("units", "imperial")
-
-
-def temp_out(c):
-    """Celsius storage -> the configured display unit."""
-    return round(c if _units() == "metric" else c * 9 / 5 + 32, 1)
-
-
-def temp_unit():
-    return "C" if _units() == "metric" else "F"
-
-
-def press_out(hpa):
-    return round(
-        hpa if _units() == "metric" else hpa * 0.0295299830714, 0 if _units() == "metric" else 2
-    )
-
-
-def press_unit():
-    return "hPa" if _units() == "metric" else "inHg"
-
-
 # never sent to the browser: /api/status is readable without login, and the
 # frontend has no use for any of these
 SECRET_SETTINGS = ("password_hash", "discord_webhook", "ntfy_topic", "kasa_user", "kasa_pass")
