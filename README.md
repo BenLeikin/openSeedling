@@ -637,6 +637,25 @@ sudo systemctl restart growlight
 journalctl -u growlight -f
 ```
 
+### Deploy from a development checkout
+
+When the Pi's `~/growlight` is a git checkout of the same remote, deploy from
+your development machine with:
+
+```bash
+bash scripts/deploy.sh            # push main, pull on the Pi, restart, check
+bash scripts/deploy.sh --check    # list what the Pi would get, change nothing
+```
+
+It pushes `main` to `origin`, then on the Pi (`--host`, default
+`$GROWLIGHT_HOST` or `grow-server`) fast-forwards `~/growlight` to
+`origin/main`, compiles every Python file, runs `scripts/setup.sh --defaults` if
+`deploy/` or the requirements changed, restarts the service and waits for
+`/api/status` with no tracebacks from the new process. If the code does not
+compile or the service does not come back clean, the Pi goes back to the commit
+it was on. It refuses to run with uncommitted changes, off `main`, or when the
+Pi has commits that are not on `origin/main`.
+
 ### Deploy updates
 
 Updates arrive as a zip of the changed files (top folder `openSeedling/`, plus a
