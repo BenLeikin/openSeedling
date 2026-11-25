@@ -1794,15 +1794,36 @@ def _per_sensor_controls():
     )
     main_before = config.settings.get("light_curve")
     real_read = sensors.read_all
-    sensors.read_all = lambda: {
-        "lux": 999.0,
-        "lux:2": 100.0 * float(light_mod.sweep_state.get("l2_raw") or 0),
-    }
+
+    def sensors_fake():
+        return {"lux": 999.0, "lux:2": 100.0 * float(light_mod.sweep_state.get("l2_raw") or 0)}
+
+    sensors.read_all = sensors_fake
     light_mod.sweep_state.update(running=True, cancel=False, error="", target="second", l2_raw=0.0)
     try:
         light_mod.run_light_sweep(step=50, settle=0.0, linearize=False, target="second")
     finally:
         sensors.read_all = real_read
+
+    # the same sweep with a disk that cannot be written
+    def no_disk():
+        raise OSError(28, "No space left on device")
+
+    real_save = config.save_config
+    light_mod.sweep_state.update(running=True, cancel=False, error="", target="second", l2_raw=0.0)
+    config.save_config, sensors.read_all = no_disk, sensors_fake
+    try:
+        light_mod.run_light_sweep(step=50, settle=0.0, linearize=False, target="second")
+    finally:
+        config.save_config, sensors.read_all = real_save, real_read
+    check(
+        light_mod.sweep_state["running"] is False
+        and "not saved" in light_mod.sweep_state["error"]
+        and light_mod.sweep_state["l2_raw"] == 0.0,
+        f"a sweep whose result cannot be saved still hands the light back "
+        f"({light_mod.sweep_state['error']})",
+    )
+    light_mod.sweep_state["error"] = ""
     c2 = config.settings.get("light2_curve") or {}
     check(
         c2.get("sensor") == "lux:2"

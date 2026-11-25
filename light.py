@@ -1006,84 +1006,95 @@ def _curve_lux(pts, raw_pct):
 
 
 def run_light_sweep(step=5, settle=2.0, linearize=False, target="main"):
-    """Step the light 0..100% and record lux at each stop, so we can chart the
-    fixture's real response curve. Runs in a thread; the control loop leaves the
-    light alone while sweep_state["running"] is set, and the previous brightness
-    is restored at the end whatever happens."""
+    """Step the light 0..100% and record lux at each stop, to chart the
+    fixture's real response. Runs in a thread. The control loop leaves the
+    light alone while sweep_state["running"] is set; whatever happens, the
+    previous brightness is restored and the flag is cleared at the end."""
     points = []
     before = 0
+    key = lux_key_for_light(target) or "lux"
     _dither_stop()  # nothing else may move the light mid-measurement
     try:
-        with config.state_lock:
-            before = config.state.get("brightness") or 0
-        levels = list(range(0, 101, step))
-        if levels[-1] != 100:
-            levels.append(100)
-        key = lux_key_for_light(target) or "lux"
-        for _i, pct in enumerate(levels):
-            if sweep_state["cancel"]:
-                break
-            if target == "second":
-                # the second fixture alone: the main light is dark meanwhile
-                sweep_state["l2_raw"] = pct
-                set_brightness_raw(0)
-            else:
-                set_brightness_raw(pct)  # raw: measure the real fixture
-            time.sleep(settle)  # let the sensor integrate
-            if sweep_state["cancel"]:  # cancelled while settling
-                break
-            lux = (sensors.read_all() or {}).get(key)
-            if lux is None:
-                sweep_state["error"] = "no lux sensor reading; aborted"
-                break
-            points.append([pct, round(lux, 1)])
-            sweep_state["pct"] = pct
-    except Exception as e:
-        sweep_state["error"] = str(e)
-    finally:
         try:
-            set_brightness(before)  # always hand the light back
+            with config.state_lock:
+                before = config.state.get("brightness") or 0
+            levels = list(range(0, 101, step))
+            if levels[-1] != 100:
+                levels.append(100)
+            for pct in levels:
+                if sweep_state["cancel"]:
+                    break
+                if target == "second":
+                    # the second fixture alone: the main light is dark meanwhile
+                    sweep_state["l2_raw"] = pct
+                    set_brightness_raw(0)
+                else:
+                    set_brightness_raw(pct)  # raw: measure the real fixture
+                time.sleep(settle)  # let the sensor integrate
+                if sweep_state["cancel"]:  # cancelled while settling
+                    break
+                lux = (sensors.read_all() or {}).get(key)
+                if lux is None:
+                    sweep_state["error"] = "no lux sensor reading; aborted"
+                    break
+                points.append([pct, round(lux, 1)])
+                sweep_state["pct"] = pct
         except Exception as e:
-            log.error(
-                f"light not restored after the sweep ({e}); it is left at the sweep's last level"
-            )
-        complete = points and points[-1][0] == 100 and not sweep_state["error"]
-        if complete:
-            lin = None
-            if linearize:
-                try:
-                    table, info = build_linear_table(points)
-                    lin = {"ts": int(time.time()), "table": table, **info}
-                except ValueError as e:
-                    sweep_state["error"] = f"calibration not built: {e}"
-            pre = "light2" if target == "second" else "light"
-            with config.settings_lock:
-                config.settings[f"{pre}_curve"] = {
-                    "ts": int(time.time()),
-                    "step": step,
-                    "settle": settle,
-                    "points": points,
-                    "sensor": key,
-                }
-                if lin:
-                    config.settings[f"{pre}_linear"] = lin
-                    config.settings[f"{pre}_linear_on"] = True
-                config.save_config()
-            if lin:
-                db.log_event(
-                    "light",
-                    f"linear calibration built: light from "
-                    f"{lin['cutoff_raw']}%, full by "
-                    f"{lin['saturation_raw']}% raw",
+            sweep_state["error"] = str(e)
+        finally:
+            try:
+                set_brightness(before)  # always hand the light back
+            except Exception as e:
+                log.error(
+                    f"light not restored after the sweep ({e}); "
+                    "it is left at the sweep's last level"
                 )
-            log.info(f"light sweep: {len(points)} points, peak {max(p[1] for p in points):.0f} lx")
+        if points and points[-1][0] == 100 and not sweep_state["error"]:
+            try:
+                _store_sweep(points, step, settle, key, linearize, target)
+            except Exception as e:
+                sweep_state["error"] = f"the sweep finished but was not saved: {e}"
+                log.exception("light sweep: saving the result failed")
         elif points:
             log.warning(f"light sweep stopped at {points[-1][0]}%; keeping previous curve")
+    finally:
         with sweep_lock:
             sweep_state["running"] = False
             sweep_state["cancel"] = False
             sweep_state["l2_raw"] = 0.0
         config.wake.set()  # control loop resumes at once
+
+
+def _store_sweep(points, step, settle, key, linearize, target):
+    """Save a completed sweep as the light's curve, and its calibration table
+    when asked for one."""
+    lin = None
+    if linearize:
+        try:
+            table, info = build_linear_table(points)
+            lin = {"ts": int(time.time()), "table": table, **info}
+        except ValueError as e:
+            sweep_state["error"] = f"calibration not built: {e}"
+    pre = "light2" if target == "second" else "light"
+    with config.settings_lock:
+        config.settings[f"{pre}_curve"] = {
+            "ts": int(time.time()),
+            "step": step,
+            "settle": settle,
+            "points": points,
+            "sensor": key,
+        }
+        if lin:
+            config.settings[f"{pre}_linear"] = lin
+            config.settings[f"{pre}_linear_on"] = True
+        config.save_config()
+    if lin:
+        db.log_event(
+            "light",
+            f"linear calibration built: light from {lin['cutoff_raw']}%, "
+            f"full by {lin['saturation_raw']}% raw",
+        )
+    log.info(f"light sweep: {len(points)} points, peak {max(p[1] for p in points):.0f} lx")
 
 
 # imported at the bottom: these modules import this one

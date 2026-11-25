@@ -47,10 +47,12 @@ def api_lightning():
             return jsonify(ok=False, error="already running"), 200
         light_mod._lightning_stop.clear()
         light_mod.lightning_state.update(running=True, until=time.time() + seconds, style=style)
-    db.log_event("light", f"lightning: {style} for {seconds}s")
+    # the thread clears "running" when it ends, so nothing that can fail may
+    # sit between setting the flag and starting it
     threading.Thread(
         target=light_mod._storm, args=(seconds, style), daemon=True, name="lightning"
     ).start()
+    db.log_event("light", f"lightning: {style} for {seconds}s")
     return jsonify(ok=True, seconds=seconds, style=style)
 
 
