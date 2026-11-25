@@ -103,6 +103,54 @@ def reservoir_state():
     return "empty"
 
 
+def _start_refusal(tray, force, daily_cap, seconds=None, fl=None):
+    """Why this tray's pump may not start now, or None if it may.
+
+    `seconds` is the length of a timed run; None asks about a fill to the
+    float `fl`. Call with pump_lock held.
+    """
+    if hardware.SHUTTING_DOWN.is_set():
+        return "shutting down"
+    if tray not in hardware._pumps:
+        return f"pump {tray} hardware not available"
+    if any(st["running"] for st in hardware.pump_state.values()):
+        return "a pump is already running"
+    if not force and reservoir_state() == "empty":
+        return "reservoir is empty; refusing to run the pump dry"
+    st = hardware.pump_state[tray]
+    if st["day"] != config._today_str():
+        st["day"] = config._today_str()
+        st["today_seconds"] = 0.0
+    if seconds is None:
+        f0 = sensors.read_float(fl) if fl is not None else None
+        if f0 is None and not force:
+            return f"no float sensor in tray {tray}; refusing to fill blind"
+        if f0 is not None and f0 < 1:
+            return f"tray {tray} already full"
+        if not force and st["today_seconds"] >= daily_cap:
+            return f"tray {tray} daily pump limit reached"
+    elif not force and st["today_seconds"] + seconds > daily_cap:
+        return f"tray {tray} daily pump limit reached"
+    return None
+
+
+def pump_refusal(tray, seconds=None, force=False):
+    """Why a run would be refused right now, or None.
+
+    For callers that answer before the pump's thread starts; the run itself
+    checks again under the lock. `seconds=None` asks about a fill.
+    """
+    tray = str(tray)
+    with config.settings_lock:
+        cap = float(config.settings.get("pump_max_seconds", 20))
+        daily_cap = float(config.settings.get("pump_daily_max_seconds", 180))
+        fl = setups_mod.tray_float(config.settings, tray)
+    if seconds is not None:
+        seconds = max(0.0, min(float(seconds), cap))
+    with hardware.pump_lock:
+        return _start_refusal(tray, force, daily_cap, seconds, fl)
+
+
 def run_pump(tray, seconds, reason="manual", force=False):
     """Run one tray's pump for `seconds`, clamped to the hard cap. Safety:
     refuses if that pump is absent, if any pump is running (one at a time, the
@@ -115,20 +163,10 @@ def run_pump(tray, seconds, reason="manual", force=False):
         daily_cap = float(config.settings.get("pump_daily_max_seconds", 180))
     secs = max(0.0, min(float(seconds), cap))
     with hardware.pump_lock:
-        if hardware.SHUTTING_DOWN.is_set():
-            return False, "shutting down"
-        if tray not in hardware._pumps:
-            return False, f"pump {tray} hardware not available"
-        if any(st["running"] for st in hardware.pump_state.values()):
-            return False, "a pump is already running"
-        if not force and reservoir_state() == "empty":
-            return False, "reservoir is empty; refusing to run the pump dry"
+        why = _start_refusal(tray, force, daily_cap, secs)
+        if why:
+            return False, why
         st = hardware.pump_state[tray]
-        if st["day"] != config._today_str():
-            st["day"] = config._today_str()
-            st["today_seconds"] = 0.0
-        if not force and st["today_seconds"] + secs > daily_cap:
-            return False, f"tray {tray} daily pump limit reached"
         st["running"] = True
     elapsed = 0.0
     try:
@@ -168,31 +206,18 @@ def run_pump_until_full(tray, reason="fill", force=False):
         return sensors.read_float(fl) if fl is not None else None
 
     with hardware.pump_lock:
-        if tray not in hardware._pumps:
-            return False, f"pump {tray} hardware not available"
-        if any(st["running"] for st in hardware.pump_state.values()):
-            return False, "a pump is already running"
-        if not force and reservoir_state() == "empty":
-            return False, "reservoir is empty; refusing to run the pump dry"
+        why = _start_refusal(tray, force, daily_cap, fl=fl)
+        if why:
+            return False, why
         st = hardware.pump_state[tray]
-        if st["day"] != config._today_str():
-            st["day"] = config._today_str()
-            st["today_seconds"] = 0.0
-        if hardware.SHUTTING_DOWN.is_set():
-            return False, "shutting down"
-        f0 = read_fl()
-        if f0 is None and not force:
-            return False, f"no float sensor in tray {tray}; refusing to fill blind"
-        if f0 is not None and f0 < 1:
-            return False, f"tray {tray} already full"
         remaining = daily_cap - st["today_seconds"]
-        if not force and remaining <= 0:
-            return False, f"tray {tray} daily pump limit reached"
         run_cap = cap if force else min(cap, remaining)
         st["running"] = True
     elapsed = 0.0
     tripped = False
-    stop_why = "cap"  # cap | float_lost | reservoir
+    # Running out of today's budget is not a failed fill: the float had less
+    # than a full fill's time to trip, so it says nothing about the plumbing.
+    stop_why = "cap" if run_cap >= cap else "daily_cap"
     confirm = 0  # consecutive "full" reads needed
     CONFIRM_NEEDED = 4  # ~0.4s steady, rejects slosh/bobble
     try:
@@ -236,6 +261,10 @@ def run_pump_until_full(tray, reason="fill", force=False):
                 )
             elif stop_why == "shutdown":
                 detail = f"tray {tray} {reason}: STOPPED at {elapsed:.1f}s, service shutting down"
+            elif stop_why == "daily_cap":
+                detail = (
+                    f"tray {tray} {reason}: STOPPED at {elapsed:.1f}s, daily pump limit reached"
+                )
             else:
                 detail = f"tray {tray} {reason}: STOPPED at {elapsed:.1f}s cap, no float trip"
             st["last_detail"] = detail
@@ -254,6 +283,9 @@ def run_pump_until_full(tray, reason="fill", force=False):
         # the service comes back up the way it went down.
         save_persistent_state()
         return False, f"stopped at {elapsed:.1f}s, service shutting down"
+    if stop_why == "daily_cap":
+        save_persistent_state()
+        return False, f"stopped at {elapsed:.1f}s, daily pump limit reached"
     fill_failure["msg"] = {
         "reservoir": f"Tray {tray} fill stopped at {elapsed:.1f}s: the "
         "reservoir ran empty. Refill it before watering again.",
