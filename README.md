@@ -368,8 +368,13 @@ and sensor smoothing), **Camera**, **Setups**, **Trays**, **Alerts**, and
   embedded in the page) are generated from it. To add a setting: a default in
   `DEFAULTS`, one line in `FORM`, and the field in `index.html`
   (`<input {{ fa('key') }}>` for numbers). The suite checks they agree.
-- `tests/test_suite.py` runs everywhere, the Pi included: the server's
-  behavior through the test client, plus some checks on the page's code.
+- `python -m pytest` runs the server tests (`tests/test_*.py`, one file per
+  area) anywhere, the Pi included: the server's behavior through Flask's test
+  client, plus some checks on the page's code. `tests/harness.py` imports the
+  app from a temp copy with GPIO, PWM and I2C faked, and a fixture in
+  `tests/conftest.py` gives each test the same settings and an empty readings
+  history, so a test passes on its own (`pytest tests/test_heat.py`,
+  `pytest -k overnight`).
 - `tests/test_ui.py` runs on a desktop with Playwright
   (`pip install playwright && playwright install chromium`): the app from a
   throwaway copy with fake GPIO, driven in a headless browser. Every Settings
@@ -1104,7 +1109,7 @@ static/js/*.js      the dashboard: ES modules, entered through main.js
 static/{style.css,screen.js,screen.css}
 scripts/            setup.sh (install), deploy.sh and update.sh (updates), kiosk.sh
                     (touchscreen), set_password.py, and bench tools for the light
-tests/              test_suite.py (server, no hardware), test_ui.py (browser)
+tests/              pytest files for the server (no hardware), test_ui.py (browser)
 deploy/             box config applied by setup.sh (boot, unit, packages, env reference)
 ```
 

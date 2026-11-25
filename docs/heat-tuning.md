@@ -35,5 +35,5 @@ Simulated over a recorded day: about 0.4 °F peak to peak, mean on target; under
 
 The power level is logged each window as `heat:duty`. With a day of `heat:duty`,
 `temp:soil` and `temp:air`, refit the model above and retune in simulation; the
-suite's "fitted rig" check (tests/test_suite.py, Heat mat) is the place to
+suite's "fitted rig" check (tests/test_heat.py) is the place to
 encode a new model so a retune is tested against it.

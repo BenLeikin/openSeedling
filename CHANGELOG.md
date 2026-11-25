@@ -32,9 +32,9 @@ the 4-17 baseline. The installer commits each one with the heading below.
 ### Changed
 - One thing at a time has the light: the schedule, a photo, a focus sweep, the camera alignment, a calibration sweep or the lightning effect. A scheduled photo now waits for a sweep or the lightning effect to finish instead of changing the light under it, a sweep or effect will not start during a photo, and a holder that hangs loses the light when its time limit runs out. A photo gives the light back as soon as the frame is on disk, before it is rotated and thumbnailed.
 - The modules no longer import each other in loops. The control loop has its own module (`control.py`), with `events.py`, `readings.py`, `units.py` and `auth.py` split out of the modules that shared them, and the four route modules are Flask blueprints. The lint rule for import order is back on.
-
 - Alerts remind once a day while a problem lasts, instead of every six hours (Settings, Alerts; an install keeps the interval it has saved). Alert state survives a restart, so restarting the service no longer announces every standing problem again.
 - The touchscreen is signed in because it connects to its own port, 5001 on 127.0.0.1 (`GROWLIGHT_SCREEN_PORT`), not because its requests come from the Pi. After updating, restart the kiosk: `sudo systemctl restart growlight-kiosk`.
+- The server tests run under pytest: the single 5,000-line script is now one file per area with plain asserts, and each test starts from the same settings and an empty history, so any test passes on its own.
 
 ### Security
 - Request bodies over 1 MB are refused.
