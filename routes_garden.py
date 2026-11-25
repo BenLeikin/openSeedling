@@ -1,13 +1,13 @@
 """Tray and water routes: probe calibration, floats, plantings and the tray map, the pumps and auto-watering.
 
-Registered on routes.app when routes.py imports this module.
+A Flask blueprint; growlight.py registers it on the app.
 """
 
 import re
 import threading
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from flask import jsonify, request
+from flask import Blueprint, jsonify, request
 
 import db
 import sensors
@@ -16,10 +16,12 @@ import auth
 import config
 import hardware
 import water
-import routes
 
 
-@routes.app.route("/api/probe_cal", methods=["POST"])
+bp = Blueprint("garden", __name__)
+
+
+@bp.route("/api/probe_cal", methods=["POST"])
 @auth.require_auth
 def probe_cal_set():
     """Capture a tray probe's reading as its wet (100%) or dry (0%) anchor.
@@ -92,12 +94,12 @@ def probe_cal_set():
     )
 
 
-@routes.app.route("/api/float")
+@bp.route("/api/float")
 def api_float():
     return jsonify(floats={t: sensors.read_float(t) for t in sensors.FLOAT_PINS})
 
 
-@routes.app.route("/api/probe_tempcomp", methods=["POST"])
+@bp.route("/api/probe_tempcomp", methods=["POST"])
 @auth.require_auth
 def probe_tempcomp():
     """Estimate (and optionally apply) a tray probe's temperature-drift
@@ -130,7 +132,7 @@ def probe_tempcomp():
     return jsonify(res)
 
 
-@routes.app.route("/api/planting_end", methods=["POST"])
+@bp.route("/api/planting_end", methods=["POST"])
 @auth.require_auth
 def api_planting_end():
     """Finish a planting: record it to history, then clear the cell.
@@ -165,7 +167,7 @@ def api_planting_end():
     return jsonify(ok=True, id=pid, cleared=True)
 
 
-@routes.app.route("/api/plantings")
+@bp.route("/api/plantings")
 def api_plantings():
     """Finished plantings, newest first. Readable without login, like the rest
     of the dashboard."""
@@ -175,7 +177,7 @@ def api_plantings():
         return jsonify(plantings=[], error=str(e)[:120])
 
 
-@routes.app.route("/api/planting_restore", methods=["POST"])
+@bp.route("/api/planting_restore", methods=["POST"])
 @auth.require_auth
 def api_planting_restore():
     """Put a finished planting back in its cell, for a misclick.
@@ -211,7 +213,7 @@ def api_planting_restore():
     return jsonify(ok=True, tray=tray, cell=cell)
 
 
-@routes.app.route("/api/trays", methods=["POST"])
+@bp.route("/api/trays", methods=["POST"])
 @auth.require_auth
 def api_trays():
     """Save what's planted in each cell. Body: {"tray": "1"|"2", "cells":
@@ -284,7 +286,7 @@ def _cell_ids(rows, cols):
     return {f"{chr(65 + c)}{r}" for r in range(1, rows + 1) for c in range(cols)}
 
 
-@routes.app.route("/api/tray_layout", methods=["POST"])
+@bp.route("/api/tray_layout", methods=["POST"])
 @auth.require_auth
 def api_tray_layout():
     """Add, remove, rename or resize a tray.
@@ -359,7 +361,7 @@ def api_tray_layout():
     return jsonify(ok=True, tray=tray, rows=rows, cols=cols, dropped=dropped)
 
 
-@routes.app.route("/api/pump", methods=["POST"])
+@bp.route("/api/pump", methods=["POST"])
 @auth.require_auth
 def pump_test():
     data = request.get_json(silent=True) or {}
@@ -392,7 +394,7 @@ def pump_test():
     return jsonify(ok=True, started=True, mode="timed", tray=tray)
 
 
-@routes.app.route("/api/auto_water", methods=["POST"])
+@bp.route("/api/auto_water", methods=["POST"])
 @auth.require_auth
 def api_auto_water():
     """Arm or disarm autonomous watering.

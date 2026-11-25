@@ -23,6 +23,13 @@ import monitor
 import heat
 import camera as camera_mod
 import routes
+import routes_camera
+import routes_climate
+import routes_data
+import routes_garden
+
+for _area in (routes_camera, routes_garden, routes_climate, routes_data):
+    routes.app.register_blueprint(_area.bp)
 
 signal.signal(signal.SIGINT, hardware.cleanup)
 signal.signal(signal.SIGTERM, hardware.cleanup)

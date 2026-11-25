@@ -1,6 +1,6 @@
 """Camera routes: photos, thumbnails and frames, the grid, capture and preview, the timelapse and its video.
 
-Registered on routes.app when routes.py imports this module.
+A Flask blueprint; growlight.py registers it on the app.
 """
 
 import json
@@ -12,7 +12,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
-from flask import Response, jsonify, request, send_file, send_from_directory
+from flask import Blueprint, Response, jsonify, request, send_file, send_from_directory
 
 from applog import log
 import db
@@ -21,10 +21,12 @@ import auth
 import config
 import camera as camera_mod
 import light as light_mod
-import routes
 
 
-@routes.app.route("/photo/latest")
+bp = Blueprint("camera", __name__)
+
+
+@bp.route("/photo/latest")
 def latest_photo():
     count, latest, _ = camera_mod.photo_inventory()
     if not count:
@@ -34,7 +36,7 @@ def latest_photo():
     return resp
 
 
-@routes.app.route("/api/photos")
+@bp.route("/api/photos")
 def photo_list():
     try:
         v = db.kv_get("thumbs_version") or 0
@@ -43,14 +45,14 @@ def photo_list():
     return jsonify(names=[p.name for p in sorted(camera_mod.THUMB_DIR.glob("*.jpg"))], v=v)
 
 
-@routes.app.route("/thumb/<name>")
+@bp.route("/thumb/<name>")
 def thumb(name):
     resp = send_from_directory(camera_mod.THUMB_DIR, name, mimetype="image/jpeg")
     resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
     return resp
 
 
-@routes.app.route("/frame/<name>")
+@bp.route("/frame/<name>")
 def frame(name):
     """One stored photo at full resolution, framed like its thumbnail: the
     timelapse player shows this once it stops on a frame."""
@@ -80,7 +82,7 @@ def frame(name):
     return resp
 
 
-@routes.app.route("/api/grid", methods=["POST"])
+@bp.route("/api/grid", methods=["POST"])
 @auth.require_auth
 def update_grid():
     data = request.get_json(silent=True) or {}
@@ -142,7 +144,7 @@ def update_grid():
     return jsonify(ok=True)
 
 
-@routes.app.route("/api/detect_grid", methods=["POST"])
+@bp.route("/api/detect_grid", methods=["POST"])
 @auth.require_auth
 def detect_grid():
     count, latest, _ = camera_mod.photo_inventory()
@@ -165,7 +167,7 @@ def detect_grid():
         return jsonify(ok=False, error=f"Detector error: {e}"), 200
 
 
-@routes.app.route("/api/reset_timelapse", methods=["POST"])
+@bp.route("/api/reset_timelapse", methods=["POST"])
 @auth.require_auth
 def api_reset_timelapse():
     """Archive the current timelapse and start a fresh one.
@@ -215,7 +217,7 @@ def api_reset_timelapse():
     return jsonify(ok=True, archived=moved, cleared=cleared, path=str(dest))
 
 
-@routes.app.route("/api/rebuild_thumbs", methods=["POST"])
+@bp.route("/api/rebuild_thumbs", methods=["POST"])
 @auth.require_auth
 def api_rebuild_thumbs():
     """Regenerate every thumbnail from its source photo.
@@ -228,7 +230,7 @@ def api_rebuild_thumbs():
     return jsonify(ok=True, started=True)
 
 
-@routes.app.route("/api/render", methods=["POST"])
+@bp.route("/api/render", methods=["POST"])
 @auth.require_auth
 def api_render():
     count, _, _ = camera_mod.photo_inventory()
@@ -238,7 +240,7 @@ def api_render():
     return jsonify(ok=True)
 
 
-@routes.app.route("/api/capture", methods=["POST"])
+@bp.route("/api/capture", methods=["POST"])
 @auth.require_auth
 def api_capture():
     """Take a photo right now, using the same light-hold and exposure as the
@@ -272,7 +274,7 @@ def api_capture():
     return jsonify(ok=True, photo=path.name)
 
 
-@routes.app.route("/api/preview", methods=["POST"])
+@bp.route("/api/preview", methods=["POST"])
 @auth.require_auth
 def api_preview():
     """Grab a quick full-frame still for camera alignment. Not saved to the
@@ -346,7 +348,7 @@ def api_preview():
     )
 
 
-@routes.app.route("/api/camera_modes")
+@bp.route("/api/camera_modes")
 @auth.require_auth
 def api_camera_modes():
     """The USB camera's MJPEG capture sizes, largest first. The largest is
@@ -367,7 +369,7 @@ def api_camera_modes():
     )
 
 
-@routes.app.route("/api/cameras")
+@bp.route("/api/cameras")
 @auth.require_auth
 def api_cameras():
     """USB cameras by the port they are plugged into, for picking camera 1
@@ -412,7 +414,7 @@ def _run_align():
         align_job.update(running=False, result=res)
 
 
-@routes.app.route("/api/align_cameras", methods=["GET", "POST"])
+@bp.route("/api/align_cameras", methods=["GET", "POST"])
 @auth.require_auth
 def api_align_cameras():
     """POST starts fitting camera 2 onto camera 1 from a fresh frame of each;
@@ -434,7 +436,7 @@ def api_align_cameras():
         return jsonify(ok=True, **align_job)
 
 
-@routes.app.route("/align_frame/<name>.jpg")
+@bp.route("/align_frame/<name>.jpg")
 @auth.require_auth
 def align_frame(name):
     """From the last Align cameras: camera 1's or camera 2's frame, or the two
@@ -451,7 +453,7 @@ def align_frame(name):
     return r
 
 
-@routes.app.route("/api/display")
+@bp.route("/api/display")
 @auth.require_auth
 def api_display():
     """The touchscreen as the kiosk last reported it (display_watch.py writes
@@ -478,7 +480,7 @@ def api_display():
 _tap_log = []  # times of recent tap reports, to bound how many reach the journal
 
 
-@routes.app.route("/api/screen_event", methods=["POST"])
+@bp.route("/api/screen_event", methods=["POST"])
 def api_screen_event():
     """A tap on the Pi's own touchscreen, reported by screen_touch.js: where it
     landed and whether the browser made a click of it. Journal only; accepted
@@ -507,14 +509,14 @@ def api_screen_event():
     return jsonify(ok=True, logged=True)
 
 
-@routes.app.route("/preview.jpg")
+@bp.route("/preview.jpg")
 def preview_img():
     if not camera_mod.PREVIEW_PATH.exists():
         return "no preview yet", 404
     return send_file(camera_mod.PREVIEW_PATH, mimetype="image/jpeg")
 
 
-@routes.app.route("/video")
+@bp.route("/video")
 def video():
     if not camera_mod.VIDEO_PATH.exists():
         return "no video rendered yet", 404
@@ -526,7 +528,7 @@ def video():
     )
 
 
-@routes.app.route("/api/focus_sweep", methods=["POST"])
+@bp.route("/api/focus_sweep", methods=["POST"])
 @auth.require_auth
 def api_focus_sweep():
     """Start (or cancel) a focus sweep on the USB camera."""
@@ -553,7 +555,7 @@ def api_focus_sweep():
     return jsonify(ok=True, started=True, estimate_seconds=90)
 
 
-@routes.app.route("/api/frame_context")
+@bp.route("/api/frame_context")
 def frame_context():
     """Sensor readings nearest a timelapse frame's timestamp, so scrubbing the
     player shows what conditions were when the frame was taken. Storage units
@@ -580,7 +582,7 @@ def frame_context():
     return jsonify(ts=ts, readings=out)
 
 
-@routes.app.route("/photo/cropped.jpg")
+@bp.route("/photo/cropped.jpg")
 def cropped_image():
     """The latest photo cut to the view crop, cached per (photo, crop)."""
     _, latest, _ = camera_mod.photo_inventory()
@@ -609,7 +611,7 @@ def cropped_image():
         return (f"crop failed: {e}", 500)
 
 
-@routes.app.route("/rectified.jpg")
+@bp.route("/rectified.jpg")
 def rectified_image():
     """The latest photo flattened through the grid corners. This is what the
     per-cell analysis actually sees, so it is the honest way to check corner

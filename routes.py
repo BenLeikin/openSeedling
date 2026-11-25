@@ -1,7 +1,7 @@
 """The Flask app, sign-in, the pages, the live status and settings.
 
-The other routes live in routes_camera, routes_garden, routes_climate and
-routes_data, imported at the bottom.
+The other routes are blueprints in routes_camera, routes_garden,
+routes_climate and routes_data, which growlight.py registers.
 """
 
 import json
@@ -432,11 +432,3 @@ def update_settings():
     return jsonify(
         ok=not errors, saved=sorted(new), errors=errors, crop_reset=bool(new) and crop_reset
     )
-
-
-# The routes for each area live in their own modules; importing them
-# registers their routes on app. Last, because they import this module.
-import routes_camera  # noqa: E402,F401
-import routes_garden  # noqa: E402,F401
-import routes_climate  # noqa: E402,F401
-import routes_data  # noqa: E402,F401

@@ -1,12 +1,12 @@
 """Light and climate routes: the light, its schedule and sweeps, the smart plug, the fan and the heat mat.
 
-Registered on routes.app when routes.py imports this module.
+A Flask blueprint; growlight.py registers it on the app.
 """
 
 import re
 import threading
 import time
-from flask import jsonify, request
+from flask import Blueprint, jsonify, request
 
 from applog import log
 import db
@@ -17,10 +17,12 @@ import config
 import light as light_mod
 import setups as setups_mod
 import heat as heat_mod
-import routes
 
 
-@routes.app.route("/api/lightning", methods=["POST"])
+bp = Blueprint("climate", __name__)
+
+
+@bp.route("/api/lightning", methods=["POST"])
 @auth.require_auth
 def api_lightning():
     """Run a short lightning effect on the grow light. Entirely for fun."""
@@ -60,7 +62,7 @@ def api_lightning():
     return jsonify(ok=True, seconds=seconds, style=style)
 
 
-@routes.app.route("/api/light", methods=["POST"])
+@bp.route("/api/light", methods=["POST"])
 @auth.require_auth
 def api_light():
     """Manual light hold. 'on' forces manual_bright, 'off' forces dark, 'auto'
@@ -92,7 +94,7 @@ def api_light():
     return jsonify(ok=True, mode=cur_mode, brightness=cur_bright)
 
 
-@routes.app.route("/api/light_sweep", methods=["POST"])
+@bp.route("/api/light_sweep", methods=["POST"])
 @auth.require_auth
 def api_light_sweep():
     """Start (or cancel) a light response sweep."""
@@ -150,7 +152,7 @@ def api_light_sweep():
     return jsonify(ok=True, started=True, estimate_seconds=est)
 
 
-@routes.app.route("/api/plug_discover", methods=["POST"])
+@bp.route("/api/plug_discover", methods=["POST"])
 @auth.require_auth
 def api_plug_discover():
     """Find TP-Link plugs on the local network.
@@ -207,7 +209,7 @@ def api_plug_discover():
     return jsonify(ok=True, devices=devices)
 
 
-@routes.app.route("/api/plug_test", methods=["POST"])
+@bp.route("/api/plug_test", methods=["POST"])
 @auth.require_auth
 def api_plug_test():
     """Connect to a plug and report what it is, without saving anything.
@@ -252,7 +254,7 @@ def api_plug_test():
     return jsonify(ok=True, **info)
 
 
-@routes.app.route("/api/fan", methods=["POST"])
+@bp.route("/api/fan", methods=["POST"])
 @auth.require_auth
 def api_fan():
     """Set the fan mode: auto (schedule + humidity), on, or off."""
@@ -279,7 +281,7 @@ def api_fan():
     return jsonify(ok=True, mode=mode)
 
 
-@routes.app.route("/api/heat", methods=["POST"])
+@bp.route("/api/heat", methods=["POST"])
 @auth.require_auth
 def api_heat():
     """Set the heat mat mode: auto (thermostat), on, or off."""
@@ -299,7 +301,7 @@ def api_heat():
     return jsonify(ok=True, mode=mode)
 
 
-@routes.app.route("/api/schedule", methods=["POST"])
+@bp.route("/api/schedule", methods=["POST"])
 @auth.require_auth
 def api_schedule():
     """Update just the schedule window. Separate from /api/settings so the

@@ -1,6 +1,6 @@
 """Data routes: the AI report, backups, readings history and the host's own stats.
 
-Registered on routes.app when routes.py imports this module.
+A Flask blueprint; growlight.py registers it on the app.
 """
 
 import json
@@ -8,7 +8,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
-from flask import Response, jsonify, request
+from flask import Blueprint, Response, jsonify, request
 
 from applog import log
 import db
@@ -20,10 +20,12 @@ import config
 import setups as setups_mod
 import water
 import monitor
-import routes
 
 
-@routes.app.route("/api/report")
+bp = Blueprint("data", __name__)
+
+
+@bp.route("/api/report")
 def api_report_get():
     """Latest stored AI report (or nulls if none yet), plus generating flag."""
     try:
@@ -35,7 +37,7 @@ def api_report_get():
     return jsonify(data)
 
 
-@routes.app.route("/api/ai_settings", methods=["POST"])
+@bp.route("/api/ai_settings", methods=["POST"])
 @auth.require_auth
 def update_ai_settings():
     data = request.get_json(silent=True) or {}
@@ -64,7 +66,7 @@ def update_ai_settings():
     return jsonify(ok=True, **out)
 
 
-@routes.app.route("/api/report", methods=["POST"])
+@bp.route("/api/report", methods=["POST"])
 @auth.require_auth
 def api_report_run():
     if not ai_report.have_key():
@@ -134,7 +136,7 @@ def build_backup(include_secrets=False):
     return buf.getvalue(), name
 
 
-@routes.app.route("/api/backup")
+@bp.route("/api/backup")
 @auth.require_auth
 def api_backup():
     """Download a restorable snapshot. Login required: the archive contains the
@@ -156,7 +158,7 @@ def api_backup():
     )
 
 
-@routes.app.route("/api/purge_series", methods=["POST"])
+@bp.route("/api/purge_series", methods=["POST"])
 @auth.require_auth
 def api_purge_series():
     """Delete a sensor's logged history.
@@ -178,7 +180,7 @@ def api_purge_series():
     return jsonify(ok=True, deleted=n, prefix=prefix)
 
 
-@routes.app.route("/api/series")
+@bp.route("/api/series")
 def series():
     sensor = request.args.get("sensor", "")
     try:
@@ -190,7 +192,7 @@ def series():
     return jsonify(sensor=sensor, hours=hours, points=db.series(sensor, hours))
 
 
-@routes.app.route("/api/series_all")
+@bp.route("/api/series_all")
 def series_all():
     """Every logged sensor's history in one request, so the chart grid doesn't
     fire a request per card. Probe voltages are temperature-compensated here,
@@ -234,7 +236,7 @@ def series_all():
     return jsonify(hours=hours, series=out)
 
 
-@routes.app.route("/api/host")
+@bp.route("/api/host")
 def api_host():
     """Pi health. Separate from /api/status so the 15s poll stays cheap:
     vcgencmd shells out, and none of this changes fast."""
