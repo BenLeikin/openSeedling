@@ -2443,6 +2443,23 @@ def _canopy_stale():
         config.wake.set()
 
 
+def _alert_levels():
+    """A warning reaches Discord at a level the embed has a colour for."""
+    import alerts
+    import discord_alert
+
+    fired = [
+        a
+        for a in alerts.check_all({"_stuck": {"lux:9": "24 identical readings"}}, {})
+        if a[1] == "stuck:lux:9"
+    ]
+    check(
+        fired and fired[0][4] in discord_alert.COLORS and fired[0][4] != "info",
+        f"a warning is sent at a level with its own colour ({fired and fired[0][4]})",
+    )
+    alerts.evaluate("stuck:lux:9", False, hold=0)
+
+
 def _heat_mat():
     """The smart plug as a heat mat thermostat on the soil temperature."""
     import alerts
@@ -4614,6 +4631,7 @@ run("Out of memory", _oom)
 run("Photo light", _photo_light)
 run("Focus sweep", _focus_sweep)
 run("Canopy staleness", _canopy_stale)
+run("Alert levels", _alert_levels)
 run("Heat mat", _heat_mat)
 run("Shared sensors and the heat mat setup", _shared_sensors)
 run("Charts", _charts)

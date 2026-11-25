@@ -149,7 +149,7 @@ def check_all(snapshot, cfg, unit_temp="F"):
                         f"{temp_disp((hi - 32) * 5 / 9):.0f}{tu} warning line. "
                         "Sustained heat past this stalls germination and "
                         "stretches seedlings.",
-                        "warn",
+                        "warning",
                     )
                 )
             elif act == "clear":
@@ -175,7 +175,7 @@ def check_all(snapshot, cfg, unit_temp="F"):
                         f"{label} is {temp_disp(val):.1f}{tu}, below "
                         f"{temp_disp((lo - 32) * 5 / 9):.0f}{tu}. Chile seed "
                         "germination slows sharply and seed rot risk rises.",
-                        "warn",
+                        "warning",
                     )
                 )
             elif act == "clear":
@@ -204,7 +204,7 @@ def check_all(snapshot, cfg, unit_temp="F"):
                     f"dry:{tray}",
                     "Tray drying out",
                     f"{tray} moisture is {pct}%, at or below the {dry_at}% alert level.",
-                    "warn",
+                    "warning",
                 )
             )
         elif act == "clear":
@@ -234,7 +234,7 @@ def check_all(snapshot, cfg, unit_temp="F"):
                     f"Air is {rh:.0f}% RH, at or above {rh_hi}%. Combined "
                     "with warm soil this is damping-off weather; increase "
                     "airflow.",
-                    "warn",
+                    "warning",
                 )
             )
         elif act == "clear":
@@ -265,7 +265,7 @@ def check_all(snapshot, cfg, unit_temp="F"):
                         f"{name} finished at {d:.1f} mol/m2, below the {lo_:g} "
                         f"mol alert level; its target is {blo:g}-{bhi:g} "
                         "mol/day.",
-                        "warn",
+                        "warning",
                     )
                 )
             elif act == "clear":
@@ -288,7 +288,7 @@ def check_all(snapshot, cfg, unit_temp="F"):
                         f"dli_high:{sid}",
                         f"{name}: too much light today",
                         f"{name} finished at {d:.1f} mol/m2, above the {hi_:g} mol ceiling.",
-                        "warn",
+                        "warning",
                     )
                 )
             elif act == "clear":
@@ -315,7 +315,7 @@ def check_all(snapshot, cfg, unit_temp="F"):
                     f"{dli_low:g} mol target. The light was off, dimmed, "
                     "or blocked for part of the photoperiod; the seedling "
                     "target is {:g}-{:g} mol/day.".format(*cfg.get("dli_target", (15, 20))),
-                    "warn",
+                    "warning",
                 )
             )
         elif act == "clear":
@@ -344,7 +344,7 @@ def check_all(snapshot, cfg, unit_temp="F"):
                     f"{dli_high:g} mol ceiling. Turn the fixture down or "
                     "raise it; too much light bleaches seedlings and wastes "
                     "power.",
-                    "warn",
+                    "warning",
                 )
             )
         elif act == "clear":
@@ -392,7 +392,7 @@ def check_all(snapshot, cfg, unit_temp="F"):
                     "not, which is physically impossible. A sensor died, "
                     "slipped off the wall, or needs its sensitivity pot "
                     "adjusted.",
-                    "warn",
+                    "warning",
                 )
             )
         elif act == "clear":
@@ -511,7 +511,7 @@ def check_all(snapshot, cfg, unit_temp="F"):
     for key, why in sorted(stuck.items()):
         act = evaluate(f"stuck:{key}", True, now, hold=0)
         if act in ("fire", "remind"):
-            out.append((act, f"stuck:{key}", f"{key} is not changing", why, "warn"))
+            out.append((act, f"stuck:{key}", f"{key} is not changing", why, "warning"))
     for key in [k[6:] for k in list(_state) if k.startswith("stuck:")]:
         if key not in stuck:
             act = evaluate(f"stuck:{key}", False, now, hold=0)
@@ -563,7 +563,7 @@ def check_all(snapshot, cfg, unit_temp="F"):
                 "Camera not responding",
                 f"{cam_fails} consecutive capture failures. "
                 "Timelapse and the daily report are affected.",
-                "warn",
+                "warning",
             )
         )
     elif act == "clear":
@@ -581,7 +581,7 @@ def check_all(snapshot, cfg, unit_temp="F"):
                 "No recent readings from: "
                 + ", ".join(sorted(stale))
                 + ". Check wiring and the service log.",
-                "warn",
+                "warning",
             )
         )
     elif act == "clear":
