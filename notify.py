@@ -49,14 +49,15 @@ def send(title, message, priority="default", tags=""):
     headers = {"Title": title, "Priority": priority}
     if tags:
         headers["Tags"] = tags
-    req = urllib.request.Request(
-        f"{server}/{topic}", data=message.encode("utf-8"), headers=headers, method="POST"
-    )
     try:
+        req = urllib.request.Request(
+            f"{server}/{topic}", data=message.encode("utf-8"), headers=headers, method="POST"
+        )
         with urllib.request.urlopen(req, timeout=10) as r:
             return 200 <= r.status < 300
     except Exception as e:
-        log.warning(f"ntfy send failed: {e}")
+        # the topic is the only secret an ntfy channel has; keep it out of the log
+        log.warning(f"ntfy send failed: {str(e).replace(topic, '<topic>')}")
         return False
 
 

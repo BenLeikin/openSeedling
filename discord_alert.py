@@ -90,22 +90,23 @@ def send(title, message, level="info", username="Grow controller", fields=None):
             for f in fields[:25]
         ]
     payload = {"username": username, "embeds": [embed]}
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode(),
-        headers={
-            "Content-Type": "application/json",
-            # Discord's Cloudflare 403s the default "Python-urllib" agent;
-            # any real User-Agent gets through.
-            "User-Agent": "GrowController/1.0 (+https://github.com/BenLeikin/openSeedling)",
-        },
-        method="POST",
-    )
     try:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode(),
+            headers={
+                "Content-Type": "application/json",
+                # Discord's Cloudflare 403s the default "Python-urllib" agent;
+                # any real User-Agent gets through.
+                "User-Agent": "GrowController/1.0 (+https://github.com/BenLeikin/openSeedling)",
+            },
+            method="POST",
+        )
         with urllib.request.urlopen(req, timeout=10) as r:
             return 200 <= r.status < 300  # Discord returns 204 on success
     except Exception as e:
-        log.warning(f"discord send failed: {e}")
+        # the webhook URL carries its token; keep it out of the log
+        log.warning(f"discord send failed: {str(e).replace(url, '<webhook>')}")
         return False
 
 
