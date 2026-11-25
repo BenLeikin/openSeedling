@@ -377,8 +377,10 @@ and sensor smoothing), **Camera**, **Setups**, **Trays**, **Alerts**, and
   Playwright it skips and exits 0.
 - `ruff check .` lints the Python with the rules in `ruff.toml`; `ruff format`
   formats it. Prettier formats the JavaScript and CSS (`.prettierrc.json`).
+  `pip install -r requirements-dev.txt` and `npm install` bring the tools;
   `pre-commit install` runs all four on every commit
-  (`.pre-commit-config.yaml`).
+  (`.pre-commit-config.yaml`), and `.gitlab-ci.yml` runs them with the test
+  suite on every push.
 - The version is in `pyproject.toml` and heads `CHANGELOG.md`; the installer
   commits each update as "openSeedling <version>: <changelog heading>". A
   `REMOVED` file in an update zip lists files the installer deletes.

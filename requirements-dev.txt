@@ -1,0 +1,4 @@
+# Development only; nothing here is installed on the Pi.
+ruff==0.17.6
+pre-commit
+playwright  # tests/test_ui.py; then: playwright install chromium

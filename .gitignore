@@ -33,4 +33,3 @@ config.json.bak
 
 # development tools (npm install), never deployed
 node_modules/
-package-lock.json
