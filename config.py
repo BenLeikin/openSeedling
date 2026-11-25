@@ -228,12 +228,24 @@ HTTP_PORT = int(
     os.environ.get("GROWLIGHT_HTTP_PORT", "5000")
 )  # tests/test_ui.py runs on a spare port
 
-# Set by scripts/kiosk.sh for the touchscreen on this Pi's own HDMI port:
-# requests from 127.0.0.1 count as signed in, so the screen can change
-# settings without a login. Only a process on the Pi itself can connect from
-# 127.0.0.1 (the app reads the TCP peer, never X-Forwarded-For), so the public
-# site is unaffected. Do not set it if a reverse proxy runs on this Pi.
+# The touchscreen on this Pi's own HDMI port (scripts/kiosk.sh) can change
+# settings without a login. It gets its own listener for that: SCREEN_PORT,
+# bound to 127.0.0.1 and opened only while this is on. A request is the
+# screen's because of the port it arrived on, which nothing in the request can
+# fake, so a reverse proxy pointed at the main port is never trusted, whatever
+# headers it sends or leaves out.
 TRUST_LOCALHOST = os.environ.get("GROWLIGHT_TRUST_LOCALHOST", "") == "1"
+SCREEN_PORT = int(os.environ.get("GROWLIGHT_SCREEN_PORT", "5001"))
+
+
+def listen_on():
+    """The addresses the web server listens on, for waitress's `listen`."""
+    listen = [f"0.0.0.0:{HTTP_PORT}"]
+    if TRUST_LOCALHOST:
+        listen.append(f"127.0.0.1:{SCREEN_PORT}")
+    return " ".join(listen)
+
+
 CONFIG_PATH = Path(__file__).with_name("config.json")
 TIMEZONES = sorted(available_timezones())
 

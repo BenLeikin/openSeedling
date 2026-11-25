@@ -386,6 +386,8 @@ config.state.update(
     override="auto",
 )
 c = routes.app.test_client()
+# a request as the Pi's own touchscreen makes it: to the screen's listener
+ON_SCREEN = {"base_url": f"http://127.0.0.1:{config.SCREEN_PORT}"}
 check(c.get("/api/status").status_code == 200, "app imports and /api/status answers")
 
 # Checks below swap functions and constants for fakes on the module that owns
@@ -3733,7 +3735,8 @@ def _kiosk():
         r.status_code == 200
         and "/static/screen.js" in page
         and 'id="setups"' in page
-        and "KIOSK_URL=http://127.0.0.1:5000/screen" in unit
+        and 'KIOSK_URL="http://127.0.0.1:${port:-5001}/screen"'
+        in (APP / "scripts" / "kiosk-session.sh").read_text()
         and "post('/api/heat', {mode: v})" in sjs
         and "post('/api/light', {mode: v})" in sjs
         and "post('/api/settings', {light2_override: v})" in sjs
@@ -3749,27 +3752,93 @@ def _kiosk():
         had_pw = config.settings.get("password_hash")
         config.settings["password_hash"] = "pbkdf2:sha256:1$x$y"
     was = config.TRUST_LOCALHOST
+    fan = {"json": {"mode": "auto"}}
     try:
         c2 = routes.app.test_client()
         config.TRUST_LOCALHOST = False
-        off = c2.post("/api/fan", json={"mode": "auto"}).status_code
+        off = c2.post("/api/fan", **fan, **ON_SCREEN).status_code
         config.TRUST_LOCALHOST = True
-        local = c2.post("/api/fan", json={"mode": "auto"}).status_code
-        proxied = c2.post(
-            "/api/fan", json={"mode": "auto"}, headers={"X-Forwarded-For": "203.0.113.9"}
-        ).status_code
+        local = c2.post("/api/fan", **fan, **ON_SCREEN).status_code
+        main_port = c2.post("/api/fan", **fan).status_code
         remote = c2.post(
-            "/api/fan", json={"mode": "auto"}, environ_base={"REMOTE_ADDR": "10.0.0.69"}
+            "/api/fan", **fan, **ON_SCREEN, environ_base={"REMOTE_ADDR": "10.0.0.69"}
         ).status_code
     finally:
         config.TRUST_LOCALHOST = was
         with config.settings_lock:
             config.settings["password_hash"] = had_pw
     check(
-        off == 401 and local == 200 and proxied == 401 and remote == 401,
+        off == 401 and local == 200 and main_port == 401 and remote == 401,
         f"with the kiosk on, the Pi's own screen may change things without signing in; "
-        f"anything through a proxy or from another machine still needs the password "
-        f"(off {off}, local {local}, proxied {proxied}, remote {remote})",
+        f"the main port and other machines still need the password "
+        f"(off {off}, screen {local}, main port {main_port}, remote {remote})",
+    )
+    _screen_listener_real()
+
+
+def _screen_listener_real():
+    """The same rule against the real web server: only the screen's own
+    listener is trusted, and nothing sent to the main port changes that."""
+    import urllib.error
+    import urllib.request
+
+    try:
+        from waitress import create_server
+    except ImportError:
+        skip("the screen's listener on the real web server (waitress not installed here)")
+        return
+    server = create_server(routes.app, listen="127.0.0.1:0 127.0.0.1:0")
+    main, screen = (port for _, port in server.effective_listen)
+    threading.Thread(target=server.run, daemon=True).start()
+
+    def post(port, **headers):
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/fan",
+            data=b'{"mode": "auto"}',
+            headers={"Content-Type": "application/json", **headers},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return r.status
+        except urllib.error.HTTPError as e:
+            return e.code
+
+    was = config.TRUST_LOCALHOST, config.SCREEN_PORT
+    with config.settings_lock:
+        had_pw = config.settings.get("password_hash")
+        config.settings["password_hash"] = "pbkdf2:sha256:1$x$y"
+    try:
+        config.TRUST_LOCALHOST, config.SCREEN_PORT = True, screen
+        got = {
+            "screen": post(screen),
+            "main": post(main),
+            "main, forwarded": post(main, **{"X-Forwarded-For": "203.0.113.9"}),
+            "main, claiming the screen's port": post(
+                main, Host=f"127.0.0.1:{screen}", **{"X-Forwarded-Port": str(screen)}
+            ),
+        }
+        config.TRUST_LOCALHOST = False
+        got["screen, kiosk off"] = post(screen)
+    finally:
+        config.TRUST_LOCALHOST, config.SCREEN_PORT = was
+        with config.settings_lock:
+            config.settings["password_hash"] = had_pw
+        server.close()
+    check(
+        got
+        == {
+            "screen": 200,
+            "main": 401,
+            "main, forwarded": 401,
+            "main, claiming the screen's port": 401,
+            "screen, kiosk off": 401,
+        },
+        f"on the real web server only the screen's own listener is signed in ({got})",
+    )
+    check(
+        config.listen_on() == f"0.0.0.0:{config.HTTP_PORT}"
+        or config.listen_on().endswith(f" 127.0.0.1:{config.SCREEN_PORT}"),
+        "the screen's listener is bound to 127.0.0.1 and opened only with the kiosk on",
     )
 
 
@@ -3838,13 +3907,11 @@ def _kiosk_unit():
     try:
         c2 = routes.app.test_client()
         config.TRUST_LOCALHOST = True
-        local = c2.get("/screen").get_data(as_text=True)
-        local_dash = c2.get("/").get_data(as_text=True)
-        proxied = c2.get("/screen", headers={"X-Forwarded-For": "203.0.113.9"}).get_data(
-            as_text=True
-        )
+        local = c2.get("/screen", **ON_SCREEN).get_data(as_text=True)
+        local_dash = c2.get("/", **ON_SCREEN).get_data(as_text=True)
+        proxied = c2.get("/screen").get_data(as_text=True)  # the main port
         config.TRUST_LOCALHOST = False
-        off = c2.get("/screen").get_data(as_text=True)
+        off = c2.get("/screen", **ON_SCREEN).get_data(as_text=True)
     finally:
         config.TRUST_LOCALHOST = was
     css = Code((APP / "static" / "screen.css").read_text())
@@ -4029,17 +4096,16 @@ def _external_display():
     was = config.TRUST_LOCALHOST
     try:
         config.TRUST_LOCALHOST = True
-        local = c.get("/screen").get_data(as_text=True)
-        local_dash = c.get("/").get_data(as_text=True)
+        local = c.get("/screen", **ON_SCREEN).get_data(as_text=True)
+        local_dash = c.get("/", **ON_SCREEN).get_data(as_text=True)
         ok_tap = c.post(
             "/api/screen_event",
             json={"kind": "tap", "x": 5, "y": 7, "w": 600, "h": 1024, "native": False},
+            **ON_SCREEN,
         ).status_code
-        proxied = c.post(
-            "/api/screen_event", json={"kind": "tap"}, headers={"X-Forwarded-For": "203.0.113.9"}
-        ).status_code
+        proxied = c.post("/api/screen_event", json={"kind": "tap"}).status_code  # main port
         config.TRUST_LOCALHOST = False
-        plain = c.get("/screen").get_data(as_text=True)
+        plain = c.get("/screen", **ON_SCREEN).get_data(as_text=True)
     finally:
         config.TRUST_LOCALHOST = was
     check(
@@ -4064,7 +4130,7 @@ def _external_display():
     was = config.TRUST_LOCALHOST
     try:
         config.TRUST_LOCALHOST = True
-        page_cal = c.get("/screen").get_data(as_text=True)
+        page_cal = c.get("/screen", **ON_SCREEN).get_data(as_text=True)
     finally:
         config.TRUST_LOCALHOST = was
         with config.settings_lock:

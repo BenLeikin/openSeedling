@@ -292,9 +292,11 @@ What the Zero 2 W needs, all set by the unit and `deploy/boot-config.txt`:
   `cursor: none` on pages served to the screen, because the touch panel also
   reports itself as a mouse.
 - The browser's output goes to the journal: `journalctl -u growlight-kiosk`. The screen counts as signed in
-(`GROWLIGHT_TRUST_LOCALHOST=1` in `.env`, set by the script): only a process
-on the Pi itself connects from 127.0.0.1; the public site still needs the
-password. On a Zero the touch panel's USB needs a hub on the single port the
+(`GROWLIGHT_TRUST_LOCALHOST=1` in `.env`, set by the script). With that on,
+the controller opens a second port for the screen, 5001 on 127.0.0.1 only
+(`GROWLIGHT_SCREEN_PORT`), and a request is signed in because it arrived
+there. The main port, 5000, always needs the password, so a reverse proxy
+running on the Pi is safe as long as it points at 5000. Never proxy to 5001. On a Zero the touch panel's USB needs a hub on the single port the
 camera uses. Check any hub before relying on it:
 
     bash scripts/usbcheck.sh

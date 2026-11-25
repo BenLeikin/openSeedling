@@ -14,14 +14,19 @@ def auth_enabled():
 
 
 def on_screen():
-    """The request comes from the touchscreen on this Pi: the browser kiosk.sh
-    starts, on 127.0.0.1, with the kiosk's local trust switched on. A request
-    forwarded by a proxy on this machine does not count."""
+    """The request comes from the touchscreen on this Pi: it arrived on the
+    screen's own listener (config.SCREEN_PORT, bound to 127.0.0.1) while the
+    kiosk's local trust is on.
+
+    Which listener took the request is the server's knowledge, not the
+    client's. Nothing sent in the request (a Host or forwarding header, or
+    the lack of one) makes a request to the main port count.
+    """
     return bool(
         config.TRUST_LOCALHOST
         and has_request_context()
+        and request.environ.get("SERVER_PORT") == str(config.SCREEN_PORT)
         and request.remote_addr in ("127.0.0.1", "::1")
-        and not request.headers.get("X-Forwarded-For")
     )
 
 

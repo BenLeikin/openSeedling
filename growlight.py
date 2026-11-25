@@ -44,6 +44,8 @@ if __name__ == "__main__":
     threading.Thread(target=monitor.report_loop, daemon=True).start()
     threading.Thread(target=heat.heat_loop, daemon=True, name="heat").start()
     log.info(f"Dashboard at http://0.0.0.0:{config.HTTP_PORT}")
+    if config.TRUST_LOCALHOST:
+        log.info(f"touchscreen listener at http://127.0.0.1:{config.SCREEN_PORT}")
     # One process only: the loops above own the PWM, the pumps and the I2C bus,
     # and a second worker would be a second controller on the same hardware.
     try:
@@ -51,8 +53,7 @@ if __name__ == "__main__":
 
         serve(
             routes.app,
-            host="0.0.0.0",
-            port=config.HTTP_PORT,
+            listen=config.listen_on(),
             threads=16,
             channel_timeout=120,
             max_request_body_size=routes.MAX_BODY_BYTES,
@@ -60,4 +61,6 @@ if __name__ == "__main__":
         )
     except ImportError:
         log.info("waitress not installed; falling back to the Flask dev server")
+        if config.TRUST_LOCALHOST:
+            log.warning("the dev server has one port: the touchscreen will not be signed in")
         routes.app.run(host="0.0.0.0", port=config.HTTP_PORT, threaded=True)

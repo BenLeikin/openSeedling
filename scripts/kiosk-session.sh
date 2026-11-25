@@ -9,6 +9,12 @@ fi
 # the display's modes, with the one in use marked "current", for the journal
 wlr-randr 2>&1 | sed 's/^/display: /' || true
 
+# The screen has its own port on the controller, open only to this Pi, and
+# requests arriving there are signed in (GROWLIGHT_SCREEN_PORT in .env).
+port="$(sed -n 's/^GROWLIGHT_SCREEN_PORT=//p' "$(dirname "$0")/../.env" 2>/dev/null | tail -1 | tr -d "\"' ")"
+KIOSK_URL="http://127.0.0.1:${port:-5001}/screen"
+export KIOSK_URL
+
 # Settings, External display: rotation and display mode follow the settings
 # while the kiosk runs (it ends with the browser below)
 python3 "$(dirname "$0")/display_watch.py" &

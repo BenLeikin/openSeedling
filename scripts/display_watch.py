@@ -123,7 +123,7 @@ def fetch_status():
     import urllib.parse
     import urllib.request
 
-    base = os.environ.get("KIOSK_URL") or "http://127.0.0.1:5000/screen"
+    base = os.environ.get("KIOSK_URL") or "http://127.0.0.1:5001/screen"
     url = urllib.parse.urljoin(base, "/api/status?lite=1")
     try:
         with urllib.request.urlopen(url, timeout=4) as r:

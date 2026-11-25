@@ -28,7 +28,6 @@ UtmpIdentifier=tty1
 UtmpMode=user
 Environment=XDG_SESSION_TYPE=wayland
 Environment=KIOSK_ROTATE=@ROTATE@
-Environment=KIOSK_URL=http://127.0.0.1:5000/screen
 # An invisible cursor theme (scripts/blank_cursor.py, written by kiosk.sh): the
 # touchscreen also reports itself as a mouse, which parks an arrow on screen.
 Environment=XCURSOR_PATH=@CURSOR_DIR@
