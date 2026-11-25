@@ -36,14 +36,15 @@ import { startWalker } from './buddy.js';
 export function hostTile(label, value, sub, cls) {
   // numeric tiles are short and keep the large size; text values (hostname, IP)
   // can be long, so step the size down by length rather than breaking mid-word
-  const plain = String(value).replace(/<[^>]*>/g, '');
+  const plain = String(value);
   if (!/^[\d.,:%\s-]+$/.test(plain)) {
     cls = (cls ? cls + ' ' : '') + (plain.length > 10 ? 'long' : 'text');
   }
+  // the hostname and the Wi-Fi interface come from the machine, not from this code
   return (
-    `<div class="htile"><div class="hlabel">${label}</div>` +
-    `<div class="hvalue${cls ? ' ' + cls : ''}" title="${esc(plain)}">${value}</div>` +
-    `<div class="hsub">${sub || '&nbsp;'}</div></div>`
+    `<div class="htile"><div class="hlabel">${esc(label)}</div>` +
+    `<div class="hvalue${cls ? ' ' + cls : ''}" title="${esc(plain)}">${esc(plain)}</div>` +
+    `<div class="hsub">${sub ? esc(sub) : '&nbsp;'}</div></div>`
   );
 }
 export function upStr(sec) {

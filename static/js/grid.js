@@ -445,7 +445,7 @@ export function renderReport(j) {
   if (r.summary) h += `<p class="rsummary">${esc(r.summary)}</p>`;
   const f = [];
   if (r.germination && r.germination.sprouted != null && r.germination.total_cells != null)
-    f.push(`Germinated ${r.germination.sprouted}/${r.germination.total_cells}`);
+    f.push(`Germinated ${esc(r.germination.sprouted)}/${esc(r.germination.total_cells)}`);
   if (r.growth_stage) f.push('Stage: ' + esc(r.growth_stage));
   if (r.light && r.light.assessment) f.push('Light: ' + esc(r.light.assessment));
   if (r.water && r.water.assessment) f.push('Water: ' + esc(r.water.assessment));
