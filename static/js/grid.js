@@ -295,6 +295,11 @@ export async function refresh() {
     document.getElementById('phase').textContent = 'Controller unreachable';
     return;
   }
+  if (!j || j.error) {
+    // answering, but with no status yet (the first seconds after a restart)
+    document.getElementById('phase').textContent = 'Controller starting\u2026';
+    return;
+  }
   applyStatus(j);
 }
 
