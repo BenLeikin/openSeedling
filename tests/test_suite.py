@@ -781,6 +781,36 @@ def _light_schedule():
         polar = False
     check(polar, "fixed schedule works at a polar latitude in midsummer")
 
+    # windows that cross midnight
+    tz_ = ZoneInfo("America/Denver")
+
+    def lit(cfg_, hour, minute=0):
+        now_ = datetime(2026, 3, 10, hour, minute, tzinfo=tz_)
+        _, _, on_, off_ = light_mod.window_at(cfg_, now_)
+        return light_mod.brightness_for(cfg_, now_, on_, off_) > 0
+
+    base = dict(config.settings, timezone="America/Denver", ramp_min=10, max_bright=80)
+    night = dict(base, schedule_mode="fixed", fixed_on="20:00", fixed_off="06:00")
+    check(
+        [lit(night, h) for h in (19, 21, 23)] == [False, True, True]
+        and [lit(night, 0, 30), lit(night, 5), lit(night, 7)] == [True, True, False],
+        "a fixed 20:00 to 06:00 schedule stays on through midnight until 06:00",
+    )
+    late = dict(base, schedule_mode="duration", duration_end="02:00", duration_hours=14)
+    check(
+        [lit(late, h) for h in (11, 13, 23)] == [False, True, True]
+        and [lit(late, 1), lit(late, 3)] == [True, False],
+        "14 hours ending at 02:00 run from noon, across midnight, to 02:00",
+    )
+    day = dict(base, schedule_mode="fixed", fixed_on="07:00", fixed_off="19:00")
+    at_23 = datetime(2026, 3, 10, 23, tzinfo=tz_)
+    _, _, on23, off23 = light_mod.window_at(day, at_23)
+    check(
+        [lit(day, h) for h in (6, 12, 20)] == [False, True, False]
+        and (on23.date(), on23.hour, off23.hour) == (at_23.date(), 7, 19),
+        "a daytime schedule is unchanged, and after lights-off the window shown is still today's",
+    )
+
     # Last: this starts the real control loop thread, which keeps running.
     calls = {"n": 0}
     real_sw = light_mod.sun_window

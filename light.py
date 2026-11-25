@@ -726,6 +726,27 @@ def sun_window(cfg, day, tz):
     return s["sunrise"], s["sunset"], on_time, off_time
 
 
+def window_at(cfg, now):
+    """The light window to follow at `now`: (sunrise, sunset, on, off).
+
+    sun_window ties a window to a calendar day, but a window can cross
+    midnight: one that started last night is still running in the small
+    hours, and in duration mode the window that ends tomorrow morning starts
+    today. Yesterday's, today's and tomorrow's are all candidates. The one
+    that contains `now` is followed; when none does the light is off and
+    today's is reported. Sunrise and sunset are always today's.
+    """
+    tz, today = now.tzinfo, now.date()
+    sunrise, sunset, on_time, off_time = sun_window(cfg, today, tz)
+    if not on_time < now < off_time:
+        for day in (today - timedelta(days=1), today + timedelta(days=1)):
+            _, _, on_d, off_d = sun_window(cfg, day, tz)
+            if on_d < now < off_d:
+                on_time, off_time = on_d, off_d
+                break
+    return sunrise, sunset, on_time, off_time
+
+
 def ramp_floor(cfg=None):
     """The dimmest setting that actually changes the light.
 
@@ -771,22 +792,6 @@ def brightness_for(cfg, now, on_time, off_time):
     if now > full_end:
         return at((off_time - now) / ramp)
     return mx
-
-
-# the only settings that move the light window; anything else (a planting-map
-# edit, a saved light curve) must not trigger a recompute or a log line
-SCHED_KEYS = (
-    "latitude",
-    "longitude",
-    "timezone",
-    "schedule_mode",
-    "fixed_on",
-    "fixed_off",
-    "duration_hours",
-    "duration_end",
-    "sunrise_offset_min",
-    "sunset_offset_min",
-)
 
 
 # ---- lightning (an easter egg) -------------------------------------------
@@ -897,21 +902,19 @@ def _storm(seconds, style):
 
 
 def control_loop():
-    seen = None
+    logged = None
     last_err = None
-    sunrise = sunset = on_time = off_time = None
     while True:
         try:
             with config.settings_lock:
                 cfg = dict(config.settings)
             tz = ZoneInfo(cfg["timezone"])
             now = datetime.now(tz)
-            key = (now.date(), tuple(cfg.get(k) for k in SCHED_KEYS))
-            if key != seen:
-                sunrise, sunset, on_time, off_time = sun_window(cfg, now.date(), tz)
-                seen = key  # only once it worked, so a failure retries
+            sunrise, sunset, on_time, off_time = window_at(cfg, now)
+            if (on_time, off_time) != logged:
+                logged = (on_time, off_time)
                 log.info(
-                    f"{now.date()}: on {on_time:%H:%M}, off {off_time:%H:%M} "
+                    f"light window: on {on_time:%a %H:%M}, off {off_time:%a %H:%M} "
                     f"({cfg['latitude']}, {cfg['longitude']}, {cfg['timezone']})"
                 )
             # the second light first, so the write below carries its new level
