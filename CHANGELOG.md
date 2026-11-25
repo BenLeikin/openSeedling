@@ -45,6 +45,7 @@ the 4-17 baseline. The installer commits each one with the heading below.
 
 ### Security
 - Wrong passwords back off per client address (1 s doubling to 60 s) and a client that has to wait is refused with 429 instead of being queued. Before, one delay was shared by everyone and held a server thread, so a client guessing passwords could keep the owner from signing in and stall the dashboard.
+- A session is tied to the password it signed in with: changing the password signs every browser out. Every browser has to sign in once after this update.
 - Request bodies over 1 MB are refused.
 - Light-plan advice is escaped before it is shown (it can contain a setup's name).
 - The Discord webhook URL and ntfy topic are kept out of the log when a send fails.

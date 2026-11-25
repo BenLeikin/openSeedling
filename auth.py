@@ -1,6 +1,7 @@
 """Who may do what: the dashboard password, the touchscreen's local trust, and
 the check every route that changes something goes through."""
 
+import hmac
 import ipaddress
 import threading
 import time
@@ -40,7 +41,33 @@ def is_authed():
     Pi's own screen counts as signed in until the file is readable again."""
     if config.config_broken:
         return on_screen()
-    return not auth_enabled() or bool(session.get("authed")) or on_screen()
+    return not auth_enabled() or signed_in() or on_screen()
+
+
+def _password_mark():
+    """What a session carries to show which password it signed in with.
+
+    Keyed with the session secret: the cookie is signed, not encrypted, and
+    must not give away anything about the stored hash."""
+    with config.settings_lock:
+        stored = config.settings.get("password_hash", "")
+    key = current_app.secret_key
+    if isinstance(key, str):
+        key = key.encode()
+    return hmac.new(key, stored.encode(), "sha256").hexdigest()[:32]
+
+
+def sign_in():
+    session.clear()
+    session["pw"] = _password_mark()
+    session.permanent = True
+
+
+def signed_in():
+    """The session signed in with the password that is set now. Changing the
+    password signs every browser out."""
+    mark = session.get("pw")
+    return isinstance(mark, str) and hmac.compare_digest(mark, _password_mark())
 
 
 class LoginThrottle:

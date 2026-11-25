@@ -130,8 +130,7 @@ def login():
         _hash_lock.release()
     fails = auth.logins.end(who, ok)
     if ok:
-        session["authed"] = True
-        session.permanent = True
+        auth.sign_in()
         return jsonify(ok=True, authed=True)
     if fails in (5, 20, 100):
         log.warning(f"{fails} failed logins in a row from {who}")

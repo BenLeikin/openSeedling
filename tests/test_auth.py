@@ -4,8 +4,9 @@ import threading
 import time
 
 import pytest
+from werkzeug.security import generate_password_hash
 
-from harness import auth, routes, set_password
+from harness import auth, config, routes, set_password
 
 
 class Clock:
@@ -136,4 +137,34 @@ def test_password_checks_run_one_at_a_time():
         assert r.status_code == 200, "and that refusal is not held against the client"
     finally:
         routes.check_password_hash, routes.HASH_WAIT_S = real_check, real_wait
+        set_password(False)
+
+
+def test_changing_the_password_signs_everyone_out():
+    set_password(True)
+    try:
+        browser = routes.app.test_client()
+        assert browser.post("/api/login", json={"password": "pw"}).status_code == 200
+        assert browser.get("/api/status").get_json()["authed"]
+        assert browser.get("/api/cameras").status_code != 401
+
+        with browser.session_transaction() as s:
+            assert "authed" not in s and config.settings["password_hash"] not in str(dict(s)), (
+                "the cookie does not carry the hash"
+            )
+
+        with config.settings_lock:
+            config.settings["password_hash"] = generate_password_hash(
+                "another", method="pbkdf2:sha256:1000"
+            )
+        assert not browser.get("/api/status").get_json()["authed"], "the old session is void"
+        assert browser.get("/api/cameras").status_code == 401
+
+        old_style = routes.app.test_client()
+        with old_style.session_transaction() as s:
+            s["authed"] = True
+        assert old_style.get("/api/cameras").status_code == 401, (
+            "a cookie that only says 'signed in' is not enough"
+        )
+    finally:
         set_password(False)
