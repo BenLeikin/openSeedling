@@ -2576,6 +2576,72 @@ def _canopy_stale():
         config.wake.set()
 
 
+def _alert_delivery():
+    """Alerts go to Discord and ntfy, and one that could not be sent is sent later."""
+    sent = []
+    up = {"discord": True, "ntfy": True}
+
+    def channel(name):
+        def send(title, message, level):
+            if up[name]:
+                sent.append((name, title, level))
+            return up[name]
+
+        return (lambda: True), send
+
+    real = dict(monitor.CHANNELS)
+    monitor.CHANNELS.update(discord=channel("discord"), ntfy=channel("ntfy"))
+    monitor._undelivered.clear()
+    try:
+        monitor.deliver([("Soil too warm", "92F", "warning")])
+        both = list(sent)
+        sent.clear()
+        up["discord"] = False
+        monitor.deliver([("Reservoir empty", "refill", "error"), ("Fan fault", "x", "warning")])
+        while_down = list(sent)
+        waiting = [(n, t) for n, t, _, _ in monitor._undelivered]
+        sent.clear()
+        up["discord"] = True
+        monitor.deliver([])
+        after = list(sent)
+    finally:
+        monitor.CHANNELS.update(real)
+        monitor._undelivered.clear()
+    check(
+        both == [("discord", "Soil too warm", "warning"), ("ntfy", "Soil too warm", "warning")],
+        "an alert goes to every configured channel",
+    )
+    check(
+        [n for n, _, _ in while_down] == ["ntfy", "ntfy"]
+        and waiting == [("discord", "Reservoir empty"), ("discord", "Fan fault")]
+        and after == [("discord", "Reservoir empty", "error"), ("discord", "Fan fault", "warning")]
+        and not monitor._undelivered,
+        "what one channel could not take is kept and sent on the next pass, in order, "
+        "without repeating it on the channel that worked",
+    )
+
+
+def _stuck_in_the_dark():
+    """A light sensor at zero overnight is dark, not stuck."""
+    real_recent = db.recent_values
+    seen_before = dict(monitor._seen_sensors)
+    monitor._seen_sensors.update({"lux": time.time(), "lux:2": time.time(), "humidity": 1.0})
+    db.recent_values = lambda key, n=9, max_age=7200: (
+        [0.0] * 24 if key == "lux" else [431.0] * 24 if key == "lux:2" else [55.0, 54.0] * 12
+    )
+    try:
+        stuck = monitor.stuck_sensors(300)
+    finally:
+        db.recent_values = real_recent
+        monitor._seen_sensors.clear()
+        monitor._seen_sensors.update(seen_before)
+    check(
+        "lux" not in stuck and "lux:2" in stuck and "humidity" not in stuck,
+        f"a light sensor reading zero in the dark is not reported as stuck; one frozen at "
+        f"a lit value is ({sorted(stuck)})",
+    )
+
+
 def _report_once():
     """The daily report runs once at its time, also when it fails."""
     runs = []
@@ -4873,6 +4939,8 @@ run("Out of memory", _oom)
 run("Photo light", _photo_light)
 run("Focus sweep", _focus_sweep)
 run("Canopy staleness", _canopy_stale)
+run("Alert delivery", _alert_delivery)
+run("Stuck sensors", _stuck_in_the_dark)
 run("Daily report", _report_once)
 run("Alert levels", _alert_levels)
 run("Heat mat", _heat_mat)

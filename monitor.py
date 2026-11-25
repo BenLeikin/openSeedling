@@ -1,6 +1,7 @@
 """Sampling and live readings, the reading filter, validation, sensor
 health, threshold alerts, and the daily AI report."""
 
+import collections
 import json
 import os
 import threading
@@ -1017,16 +1018,61 @@ def run_alerts(readings):
         # reporting on time but not measuring: invisible to the stale check
         snap["_stuck"] = stuck_sensors(max(1, int(cfg.get("sample_interval_min", 5))) * 60)
 
+        notices = []
         for action, key, title, message, level in alerts.check_all(
             snap, acfg, "C" if cfg.get("units") == "metric" else "F"
         ):
             prefix = {"fire": "", "remind": "Still: ", "clear": "Resolved: "}[action]
-            discord_alert.send(
-                prefix + title, message, level="good" if action == "clear" else level
-            )
+            notices.append((prefix + title, message, "good" if action == "clear" else level))
             log.info(f"alert {action}: {key}")
-    except Exception as e:
-        log.error(f"alert check error: {e}")
+        deliver(notices)
+    except Exception:
+        log.exception("alert check failed")
+
+
+NTFY_LOOK = {  # level -> (priority, tag)
+    "error": ("high", "rotating_light"),
+    "warning": ("default", "warning"),
+    "good": ("low", "white_check_mark"),
+}
+
+
+def _to_ntfy(title, message, level):
+    priority, tag = NTFY_LOOK.get(level, ("default", ""))
+    return notify.send(title, message, priority=priority, tags=tag)
+
+
+def _to_discord(title, message, level):
+    return discord_alert.send(title, message, level=level)
+
+
+# name -> (is it configured, send); a send returns True when it was accepted
+CHANNELS = {
+    "discord": (lambda: discord_alert.enabled(), _to_discord),
+    "ntfy": (lambda: notify.enabled(), _to_ntfy),
+}
+# (channel, title, message, level) a channel did not accept, oldest first
+_undelivered = collections.deque(maxlen=50)
+
+
+def deliver(notices):
+    """Send (title, message, level) notices to every configured channel.
+
+    What a channel does not accept is kept and sent first on the next call,
+    so a notice raised while the network is down arrives when it is back.
+    A channel that fails is not tried again in the same call: each attempt
+    can take its whole timeout, and this runs in the sampling loop.
+    """
+    queue = list(_undelivered) + [(name, *n) for n in notices for name in CHANNELS]
+    _undelivered.clear()
+    down = set()
+    for name, title, message, level in queue:
+        configured, send = CHANNELS[name]
+        if not configured():
+            continue
+        if name in down or not send(title, message, level):
+            down.add(name)
+            _undelivered.append((name, title, message, level))
 
 
 # ---- live sensor refresh ----------------------------------------------------
