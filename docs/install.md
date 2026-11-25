@@ -153,6 +153,13 @@ location / {
 }
 ```
 
+The address that counts is the last one in `X-Forwarded-For`: the one the
+proxy itself adds. Anything a browser put in the header comes before it and
+is ignored. If the proxy sits behind a CDN such as Cloudflare, `$remote_addr`
+is the CDN's address until nginx is told to take the visitor's from the CDN's
+header (`set_real_ip_from` for the CDN's ranges and `real_ip_header
+CF-Connecting-IP`).
+
 Tell the dashboard which address the proxy calls from, in `.env` on the Pi,
 and restart the service:
 
