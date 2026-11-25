@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """SQLite logging layer for the grow dashboard.
 
-One Pi, one writer: SQLite in WAL mode is plenty and needs no daemon.
+One Pi and one process: SQLite in WAL mode, with no daemon.
 
-Schema (long / time-series format so new sensors never require migrations):
+Schema (long format, so a new sensor needs no migration):
   readings(ts, sensor, value)          raw samples, kept ~30 days
   readings_hourly(ts, sensor, value)   hourly averages, kept long-term
   events(ts, type, detail)             discrete happenings
+  kv(key, value, ts)                   small JSON state kept across restarts
+  plantings(...)                       finished plantings, one row per cell
 
 Sensor keys are namespaced strings, e.g. "probe:1", "temp:soil", "humidity",
 "lux". All timestamps are Unix epoch seconds, UTC.
@@ -52,8 +54,8 @@ def _locked(fn):
 
 
 def _c():
-    """Module-level connection, opened lazily. check_same_thread=False because
-    Flask serves from multiple threads; WAL keeps readers and the writer happy."""
+    """The module's one connection, opened on first use. check_same_thread=False
+    because Flask serves from several threads; _lock serializes them."""
     global _conn
     if _conn is None:
         _conn = sqlite3.connect(str(DB_PATH), check_same_thread=False, timeout=10)
@@ -140,13 +142,9 @@ def log_reading(sensor, value, ts=None):
 
 @_locked
 def kv_set(key, obj):
-    """Store a small piece of runtime state that must survive a restart.
-
-    For state that lives in memory while the app runs but that a restart must
-    not forget: the pump's daily total and last run time are what enforce the
-    daily cap and the auto-water cooldown, so losing them on a restart would
-    quietly loosen both.
-    """
+    """Store a small JSON-serializable piece of state that must survive a
+    restart, such as the pump's daily total and last run time, which enforce
+    the daily limit and the auto-water cooldown."""
     c = _c()
     with c:
         c.execute(
@@ -187,9 +185,8 @@ def log_event(etype, detail="", ts=None):
 
 @_locked
 def series(sensor, hours=168):
-    """Return [(ts, value), ...] for a sensor over the last `hours`.
-    Pulls hourly rollups for the old part and raw for the recent part,
-    so a long window stays light."""
+    """[(ts, value), ...] for a sensor over the last `hours`: hourly averages
+    for the part older than the raw retention, raw samples for the rest."""
     since = int(time.time()) - hours * 3600
     c = _c()
     raw = c.execute(
@@ -206,12 +203,10 @@ def series(sensor, hours=168):
 
 @_locked
 def latest(sensors=None, max_age_days=7):
-    """Most recent value per sensor -> {sensor: (ts, value)}.
+    """Most recent value per sensor, as {sensor: (ts, value)}.
 
     Bounded to the last `max_age_days`: this query runs on every status poll,
-    and an unbounded GROUP BY walks the whole 30-day raw table each time. A
-    sensor silent for over a week has no useful "latest" anyway (the stale
-    alert covers telling you it died)."""
+    and an unbounded GROUP BY walks the whole 30-day raw table each time."""
     since = int(time.time()) - max_age_days * 86400
     c = _c()
     rows = c.execute(
@@ -306,8 +301,7 @@ def recent_events(limit=50):
 @_locked
 def recent_values(sensor, n=9, max_age=7200):
     """The last `n` raw values for `sensor`, newest first, ignoring anything
-    older than `max_age` seconds. For filtering a live reading: a median over
-    these rejects a single transient without waiting for a long window."""
+    older than `max_age` seconds."""
     since = int(time.time()) - max_age
     return [
         r[0]
@@ -320,8 +314,8 @@ def recent_values(sensor, n=9, max_age=7200):
 
 @_locked
 def reading_near(sensor, ts, window=3600):
-    """Value for a sensor closest to time `ts` (for timelapse-frame labels).
-    Returns None if nothing within `window` seconds."""
+    """A sensor's raw value closest to time `ts`, or None if there is none
+    within `window` seconds."""
     c = _c()
     # BETWEEN, not ABS(ts-?)<=?, so the (sensor, ts) index bounds the scan
     row = c.execute(
@@ -342,8 +336,8 @@ def delete_series_prefix(prefix):
     """Remove every reading (raw and hourly) whose sensor starts with `prefix`.
     Returns the number of raw rows deleted."""
     c = _c()
-    # % and _ are LIKE wildcards; escape them instead of stripping them, or a
-    # prefix like "growth_px:" becomes "growthpx:%" and matches nothing
+    # % and _ are LIKE wildcards, so they are escaped: the underscore in
+    # "growth_px:" has to match literally
     esc = (prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")) + "%"
     n = c.execute("DELETE FROM readings WHERE sensor LIKE ? ESCAPE '\\'", (esc,)).rowcount
     c.execute("DELETE FROM readings_hourly WHERE sensor LIKE ? ESCAPE '\\'", (esc,))

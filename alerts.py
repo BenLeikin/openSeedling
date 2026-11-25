@@ -51,23 +51,20 @@ def evaluate(
     hold: float | None = None,
     clear_hold: float = 0.0,
 ) -> str | None:
-    """Feed a rule its current truth value; get back what to do about it.
+    """Feed a rule its current truth value; returns what to do about it.
 
-    Returns "fire" the first time a condition has held for long enough,
-    "remind" when it is still true after the cooldown, "clear" on the
-    transition back to normal, or None when there is nothing to say.
+    Returns "fire" once the condition has held for the sustain period,
+    "remind" when it is still true after the cooldown, "clear" when it ends,
+    or None when there is nothing to say.
 
     `release`: the condition for clearing while active. Defaults to
-    `not condition`, but analog rules should pass a hysteresis margin
-    (clear a 90F alarm at 88F, not 89.9F) so noise at the threshold cannot
-    flap the rule.
-    `hold`: seconds the condition must persist before firing; defaults to the
-    configured sustain. Pass 0 for discrete events (a fill failure is a fact
-    the moment it happens, not a level that needs to settle).
+    `not condition`; an analog rule passes a hysteresis margin (clear a 90F
+    alarm at 88F) so noise at the threshold cannot toggle it.
+    `hold`: seconds the condition must persist before firing. Defaults to the
+    configured sustain; 0 for a discrete event such as a fill failure.
     `clear_hold`: seconds the release condition must persist before clearing.
-    0 keeps the old immediate-clear behavior for event rules; analog rules
-    should pass the sustain so one spurious in-range reading cannot emit a
-    Resolved notice and re-arm the alarm.
+    0 clears at once, for event rules; an analog rule passes the sustain so
+    one in-range reading cannot send a Resolved notice and re-arm the alarm.
     """
     now = now if now is not None else time.time()
     st = _rule(key)

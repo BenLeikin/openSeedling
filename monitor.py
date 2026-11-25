@@ -48,7 +48,7 @@ def gather_report_data():
     pcal = cfg.get("probe_cal") or {}
     pnames = cfg.get("probe_names") or {}
     canopy, probes, soiltemp, env = {}, {}, {}, {}
-    probe_txt = {}  # tray id -> moisture text, for the per-setup view
+    probe_txt = {}  # probe channel -> moisture text, for the per-setup view
     trays_cfg = cfg.get("trays") or {}
     snap = db.latest()
     stf = water.latest_soil_temp_f(snap)
@@ -56,7 +56,7 @@ def gather_report_data():
         if k.startswith("canopy:"):
             tid = k[7:]
             if tid not in setups_mod.camera_trays(cfg):
-                continue  # an old reading from a tray it no longer sees
+                continue  # a stored reading from a tray the camera does not see
             label = (trays_cfg.get(tid) or {}).get("label") or f"Tray {tid}"
             canopy[label] = round(v, 1)
         elif k.startswith("probe:"):
@@ -145,10 +145,10 @@ def gather_report_data():
             planting[t.get("label", f"Tray {tid}")] = rows
             planting_by_tray[str(tid)] = rows
 
-    # Per-variety germination, from live cells AND finished plantings. A cell
-    # that was transplanted still germinated; one that died before sprouting is
-    # a real failure. Counting only what is currently in the trays would make
-    # the rate drift upward every time a success was potted on.
+    # Per-variety germination, from live cells and finished plantings: a
+    # transplanted cell still germinated, and one that died before sprouting
+    # still failed. Counting only the cells in the trays would shift the rate
+    # each time a planting left them.
     germ = {}
     hist = []
     try:
@@ -217,8 +217,8 @@ def gather_report_data():
             line += f", avg {sum(g['days']) / len(g['days']):.1f}d to sprout"
         if g["sources"]:
             line += f", seed from {', '.join(sorted(g['sources']))}"
-        # losses are the signal the report needs to tell a variety that
-        # germinates badly from one that germinates and then damps off
+        # losses tell a variety that germinates badly from one that
+        # germinates and then damps off
         if g.get("died"):
             line += f", {g['died']} lost"
         if g.get("moved"):
@@ -298,8 +298,7 @@ def gather_report_data():
             "none",
         ),
         "notes": cfg.get("ai_notes", ""),
-        # every reading under the setup it is in; worked out from the setups
-        # as they are now, so a new assignment is in the next report
+        # every reading under the setup it is in, from the setups as saved
         "by_setup": by_setup,
         "heat": heat_mod.status(cfg),
     }
@@ -474,8 +473,9 @@ def report_by_setup(cfg, state, snap, now, probe_txt, floats, planting_by_tray):
 
 
 def run_report(reason="daily"):
-    """Generate one AI report: gather data + latest photo, call the API, store
-    the result, and push the summary. Serialized via report_lock."""
+    """Generate one AI report: gather the data and the latest photo, call the
+    API, store the result and push the summary. Returns the result dict. One
+    report runs at a time; a call made during another is refused."""
     with config.settings_lock:
         if not config.settings.get("camera_enabled"):
             return {"ok": False, "error": "camera features are disabled in settings"}
@@ -595,14 +595,15 @@ def _kernel_clock_synced():
 
 
 def clock_synced():
-    """True once the system clock is trustworthy. The Pi Zero 2 W has no RTC, so
-    at boot the time is wrong until NTP corrects it. Priming the report schedule
-    on that wrong time, then having the clock jump forward past the target, is
-    what fires a report on every reboot.
+    """True once the system clock can be trusted.
+
+    The Pi Zero 2 W has no RTC, so at boot the time is wrong until NTP
+    corrects it. A report schedule primed on that time fires a report when
+    the clock jumps forward past the target.
 
     systemd-timesyncd creates the flag file below; chrony does not, so the
-    kernel's sync status is the general check. The year test is only a last
-    resort: at boot the clock already reads a recent year, so it proves little."""
+    kernel's sync status is the general check. The year test is a last
+    resort: at boot the clock already reads a recent year."""
     if os.path.exists("/run/systemd/timesync/synchronized"):
         return True
     synced = _kernel_clock_synced()
@@ -656,10 +657,10 @@ KIOSK_CGROUP = Path("/sys/fs/cgroup/system.slice/growlight-kiosk.service/memory.
 
 
 def memory_readings():
-    """Memory every sample interval, in MB: what the kernel still has to give
-    (MemAvailable), swap in use, the controller's own resident size, and the
-    touchscreen's whole session if it runs, so an out-of-memory kill leaves
-    the trend that led to it."""
+    """Memory figures in MB: what the kernel still has to give (MemAvailable),
+    swap in use, the controller's own resident size, and the touchscreen's
+    whole session if it runs. Logged with every sample, so an out-of-memory
+    kill leaves the trend that led to it."""
     out = {}
     try:
         mi = {}
@@ -687,9 +688,9 @@ def memory_readings():
 
 
 def sample_loop():
-    """Read all sensors on an interval, log them in one transaction, and run
-    daily downsampling. Tolerant: a read failure logs nothing and tries again
-    next tick rather than killing the thread."""
+    """Every sample interval: read all sensors, log the readings, run the
+    alerts and the post-fill checks. Once a day, downsample and prune. A pass
+    that fails is logged and the loop carries on."""
     db.init()
     last_prune = 0.0
     while True:
@@ -719,7 +720,7 @@ def sample_loop():
         time.sleep(interval * 60)
 
 
-# cached health payload; recomputing per status poll would hammer sqlite
+# the last sensor_health result and when it was computed
 _health_cache = {"ts": 0.0, "data": {}}
 
 
@@ -728,14 +729,14 @@ _seen_sensors = {}
 SEEN_TTL = 3 * 86400  # a sensor silent this long is treated as removed
 
 
-# binary sensors are legitimately constant for days; a flatline there means
-# nothing and accusing them would train you to ignore the rule
+# Series that can sit constant for days (switches, canopy, heat, device
+# stats): a flatline there means nothing.
 NON_STUCK_PREFIXES = ("float:", "reservoir:", "canopy:", "heat:", "sys:")
 LUX_DARK = 2.0  # lx; the BH1750's smallest step is about 1.9
 
 
 def stuck_sensors(cadence_s):
-    """Sensors reporting on time but reporting the same number forever."""
+    """Sensors that report on time but repeat one value, as key -> reason."""
     out = {}
     for key in sorted(_seen_sensors):
         if key.startswith(NON_STUCK_PREFIXES):
@@ -753,8 +754,9 @@ def stuck_sensors(cadence_s):
 
 
 def sensor_health(cfg, snap=None, max_age=60):
-    """Per-sensor health for the dashboard, cached: recomputing this on every
-    15-second status poll would mean a dozen queries per client per poll."""
+    """Per-sensor health for the dashboard, cached for max_age seconds:
+    computing it on every 15-second status poll would mean a dozen queries
+    per client per poll."""
     now = time.time()
     if now - _health_cache["ts"] < max_age and _health_cache["data"]:
         return _health_cache["data"]
@@ -778,7 +780,7 @@ def sensor_health(cfg, snap=None, max_age=60):
             water._probe_verdict.get(key[6:], "steady") if key.startswith("probe:") else "steady"
         )
         if key.startswith(NON_STUCK_PREFIXES):
-            vals = vals[:1]  # binary sensors are meant to sit still
+            vals = vals[:1]  # these may sit still: no stuck or noise check
         score, grade, why = quality.health(
             vals,
             age_s=age,
@@ -817,10 +819,10 @@ def run_alerts(readings):
             {"id": st.get("id"), "name": st.get("name"), "band": setups_mod.setup_band(st)}
             for st in setups_mod.setups(cfg)
         ]
-        # The rules judge filtered values: a lone bad reading should not fire a
-        # soil-temperature or humidity alert, and the sustain window cannot help
-        # when the excursion lasts longer than one sample. Charts and the DLI
-        # code keep using the raw series.
+        # The rules judge filtered values: a lone bad reading must not fire a
+        # soil-temperature or humidity alert, and the sustain window cannot
+        # help when the excursion lasts longer than one sample. Charts and the
+        # DLI code use the raw series.
         snap = dict(readings)
         for key in list(snap):
             if readings_mod.sensor_jump(key) is None or key.startswith("probe:"):
@@ -829,9 +831,9 @@ def run_alerts(readings):
             if fv is not None:
                 snap[key] = fv
 
-        # the day's light total, judged once the day is over: only within a
-        # window after lights-off is _dli present, so the rule fires at most
-        # once per evening and a mid-morning low total can't false-alarm
+        # The day's light total is judged once the day is over: _dli is
+        # present only in the 45 minutes after lights-off, so the rule fires
+        # at most once per evening and a low total mid-morning raises nothing.
         with config.state_lock:
             off_t = config.state.get("off")
         if off_t is not None and (cfg.get("alert_dli_low") or cfg.get("alert_dli_high")):
@@ -872,11 +874,8 @@ def run_alerts(readings):
 
         snap["_fill_failed"] = dict(water.fill_failures)
         snap["_reservoir"] = water.reservoir_state()
-        # a plug that stops responding means the light is stuck wherever it
-        # was; the sustain window absorbs a wifi blip, repeated failures do not
-        # the plug is worth alerting on whether it is the main light or the
-        # third fixture: either way a dead plug means a light stuck on or off
-        # the slower of the cameras: either one at USB 1.1 speed spoils the photos
+        # the slower of the cameras: either one below 480 Mbit/s (a USB 1.1
+        # link) spoils the photos
         spds = (
             [
                 sp
@@ -895,6 +894,8 @@ def run_alerts(readings):
             if free < camera_mod.LOW_FREE_GB
             else ""
         )
+        # A plug that stops responding leaves the light it switches stuck on
+        # or off. One failure can be a wifi blip, so it takes two in a row.
         snap["_plug_failed"] = (
             light_mod.kasa_state["error"]
             if (
@@ -915,10 +916,9 @@ def run_alerts(readings):
             elif hs["fault"]:
                 snap["_heat_fault"] = hs["fault"]
 
-        # sensors that have gone quiet: keys seen recently but missing from
-        # this read. Tracked in memory only (persisting it once made a removed
-        # sensor alert forever), and aged out after SEEN_TTL so unwiring a
-        # device stops the reminders after a few days instead of never.
+        # Sensors that have gone quiet: keys seen recently but missing from
+        # this read. Kept in memory only and aged out after SEEN_TTL, so an
+        # unwired device stops raising reminders after a few days.
         now_ts = time.time()
         for k in readings:
             _seen_sensors[k] = now_ts
@@ -998,12 +998,10 @@ def deliver(notices):
             _undelivered.append((name, title, message, level))
 
 
-# ---- live sensor refresh ----------------------------------------------------
-# The sample interval is how often a reading is WRITTEN to the database, and
-# it is deliberately slow: every sample is a row, and this runs on an SD card.
-# How often the dashboard is refreshed need not be tied to that. This loop
-# reads the quick sensors every few seconds and pushes them to open pages
-# without storing anything, so the page is live while the record stays sparse.
+# Live sensor refresh. The sample interval sets how often a reading is written
+# to the database, and is slow because every sample is a row on an SD card.
+# The live loop reads air and light every live_interval_s seconds and pushes
+# them to open pages without storing anything.
 live_readings = {"ts": 0.0, "values": {}}
 LIVE_KEYS = ("lux", "lux:2", "temp:air", "humidity", "pressure")
 
@@ -1035,10 +1033,10 @@ def live_loop():
 
 
 def pressure_tendency():
-    """Barometric trend, the way a barometer's 3-hour tendency works. Returns
-    the change over 3h and 24h in hPa plus a plain-language reading. Falling
-    pressure precedes unsettled weather; rising precedes clearing. Thresholds
-    follow the conventional 3-hour bands used in surface observation."""
+    """Barometric trend as a 3-hour tendency: the change over 3 h and 24 h in
+    hPa, with a plain-language reading and an arrow. None with too little
+    history. Falling pressure precedes unsettled weather; rising precedes
+    clearing."""
     pts = db.series("pressure", hours=26)
     if len(pts) < 4:
         return None
@@ -1067,7 +1065,7 @@ def pressure_tendency():
         "change_3h": d3,
         "change_24h": round(now_v - p24, 1) if p24 is not None else None,
     }
-    # conventional 3-hour tendency bands
+    # the conventional 3-hour tendency bands of surface observation
     if d3 <= -6:
         words, arrow = "falling rapidly - expect a change", "down"
     elif d3 <= -2:
@@ -1087,9 +1085,9 @@ def pressure_tendency():
 
 
 def _soil_f_lookup(snap, hours):
-    """ts -> soil temperature in F nearest that time (within an hour), from
-    the logged history. A probe point from last Tuesday is corrected for
-    last Tuesday's soil, not today's."""
+    """Returns at(ts, default): the logged soil temperature in F nearest ts,
+    or default when none is within an hour. A past probe reading is then
+    compensated with the soil temperature of its own time."""
     import bisect
 
     key = next((k for k in snap if k.startswith("temp:soil")), None)

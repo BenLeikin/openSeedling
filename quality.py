@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
 """Sensor data quality: validation, filtering, and health scoring.
 
-Everything here is a pure function over readings. No I/O, no globals that
-outlive a call, so each rule can be tested against real logged data rather
-than reasoned about.
+Everything here is a pure function over readings, with no I/O and no state
+kept between calls, so each rule can be tested against logged data.
 
-The guiding principle is that no algorithm recovers information a bad sensor
-never provided. These rules exist to say WHEN a reading should be distrusted,
-not to invent a better number. A rule that silently "corrects" a value is
-worse than one that flags it, because it hides the fault that needs fixing.
+The rules say when a reading should be distrusted. Each rejection comes with
+a verdict or a reason, so the fault behind it stays visible.
 """
 
 import statistics
@@ -16,10 +13,10 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 # ---------------------------------------------------------------- bounds ----
-# Physically possible ranges. A value outside these is a wiring or driver
-# fault, not a measurement: a probe reading the ADC supply rail means the
-# signal is gone, not that the soil is dry. Keyed by sensor prefix, checked
-# longest-prefix first so "temp:soil" can differ from "temp:air".
+# Physically possible ranges. A value outside them is a wiring or driver
+# fault: a probe reading the ADC supply rail means the signal is gone. Keyed
+# by sensor prefix; the longest matching prefix wins, so "temp:soil" can
+# differ from "temp:air".
 BOUNDS: dict[str, tuple[float, float]] = {
     "probe:": (0.05, 3.25),  # volts on a 3.3V rail; rail or 0 = fault
     "temp:soil": (-5.0, 70.0),  # Celsius
@@ -65,25 +62,22 @@ def check_bounds(sensor: str, value: Any) -> str | None:
 def spike_or_step(
     values: Sequence[float], jump: float = 0.08, confirm: int = 3, window: int = 9
 ) -> tuple[float | None, str]:
-    """Discriminate a transient from a genuine level change.
+    """Tell a transient from a real level change.
 
-    `values` newest-first. Returns (accepted_value, verdict) where verdict is
-    "steady", "spike" (rejected, baseline returned), "step" (a confirmed new
-    level, accepted) or "trend" (steadily moving in one direction, accepted).
+    `values` is newest-first. Returns (accepted_value, verdict), where verdict
+    is "steady", "spike" (rejected, the baseline is returned), "step" (a
+    confirmed new level) or "trend" (moving steadily in one direction).
+    Returns (None, "no data") when no value is usable.
 
-    A plain rolling median rejects a spike but also smothers a real step for
-    half its window, and if the disturbance outlasts the window it passes
-    through anyway. This instead compares the newest reading to a baseline of
-    older samples, and accepts a departure only once `confirm` consecutive
-    readings agree on the new level. So a one-sample excursion is rejected
-    outright, while a real change is adopted after `confirm` samples rather
-    than being averaged away.
+    The newest reading is compared to a baseline: the median of up to
+    `window` samples older than the newest `confirm`. A departure of more
+    than `jump` is accepted only once `confirm` consecutive readings agree on
+    the new level. A rolling median would hold a real step back for half its
+    window.
     """
     # A reading can arrive as None (a failed read logged as a gap) or as
-    # something non-numeric from an older schema. Comparing those against a
-    # float raises, and because the live stream rebuilds the status on every
-    # push, one bad row took the whole stream down repeatedly. Drop what
-    # cannot be compared rather than trusting the caller.
+    # something non-numeric. Comparing those against a float raises, so they
+    # are dropped here.
     clean = []
     for v in values or []:
         try:
@@ -112,11 +106,10 @@ def spike_or_step(
         if tight and all(abs(v - baseline) > jump for v in recent):
             return statistics.median(recent), "step"
         # A steadily moving sensor (a tray drying over hours, humidity climbing)
-        # is not noise. Requiring the FULL jump on every recent sample missed
-        # gradual movement and held the value at a lagging baseline, which would
-        # delay an alert exactly while the reading climbs toward it. Monotonic
-        # movement is the signal; half the threshold is enough to separate it
-        # from a spike decaying back to baseline.
+        # must not be held at a lagging baseline: that delays an alert while
+        # the reading climbs toward it. Monotonic movement, with every recent
+        # sample more than half the jump from the baseline, separates it from
+        # a spike decaying back.
         up = newest > baseline
         ordered = all((recent[i] - recent[i + 1] > 0) == up for i in range(len(recent) - 1))
         if ordered and all(abs(v - baseline) > jump / 2 for v in recent):
@@ -128,10 +121,8 @@ def spike_or_step(
 def stuck_run(values: Sequence[float], epsilon: float = 1e-4) -> int:
     """How many of the newest readings are identical (within epsilon).
 
-    A sensor reporting the same number forever is broken in a way the
-    stale-reading check cannot see: it is reporting on time, just not
-    measuring. A frozen I2C device and a disconnected probe pinned to a rail
-    both look like this.
+    A frozen I2C device and a disconnected probe pinned to a rail both report
+    on time without measuring, which the stale-reading check cannot see.
     """
     if not values:
         return 0
@@ -149,8 +140,8 @@ def check_stuck(
 ) -> str | None:
     """None, or a reason string when a sensor has flatlined.
 
-    Requires BOTH a run of identical values and enough elapsed time, so a
-    slow-changing sensor sampled quickly is not accused.
+    Needs both a run of identical values and enough elapsed time, so a
+    slow-changing sensor sampled quickly is not flagged.
     """
     run = stuck_run(values)
     if run < min_run:
@@ -166,11 +157,11 @@ def check_stuck(
 def contradictions(
     snap: Mapping[str, Any], cfg: Mapping[str, Any] | None = None, pumped_recently: bool = False
 ) -> list[tuple[str, str]]:
-    """Advisory cross-sensor sanity checks -> list of (subject, message).
+    """Cross-sensor sanity checks; returns a list of (subject, message).
 
-    These catch faults no single-sensor test can, but they can also accuse the
-    wrong sensor, so they are advisory: surfaced on the dashboard, never wired
-    to an alert or to a watering decision.
+    These catch faults no single-sensor test can, but they can blame the
+    wrong sensor, so they are advisory: shown on the dashboard, and not used
+    by any alert or watering decision.
     """
     cfg = cfg or {}
     out = []
@@ -190,8 +181,7 @@ def contradictions(
                 )
             )
 
-    # a float reporting full while its probe reads bone dry is a contradiction
-    # that one of the two is wrong about
+    # a float reporting full while its probe reads dry: one of the two is wrong
     for t, v in probes.items():
         f = snap.get(f"float:{t}")
         cal = (cfg.get("probe_cal") or {}).get(t) or {}
@@ -205,7 +195,7 @@ def contradictions(
                 )
             )
 
-    # soil far from air with no heat source explains itself only if a mat is on
+    # soil more than 15 C from air is expected only with a heat mat on
     st, at = snap.get("temp:soil"), snap.get("temp:air")
     if st is not None and at is not None and abs(st - at) > 15:
         out.append(
@@ -233,11 +223,11 @@ def contradictions(
 def postfill_verdict(
     volts: float | None, cal: Mapping[str, Any], tolerance: float = 0.15
 ) -> tuple[bool | None, str]:
-    """After a fill the probe should return near its wet anchor.
+    """Judge a post-fill probe reading against its wet anchor; (ok, message).
 
-    Drift here is the early warning for a probe degrading or a calibration
-    going stale, which is exactly the failure that hid two pegged probes for a
-    week. Returns (ok, message).
+    Within `tolerance` volts of the anchor is healthy. Drift beyond it is the
+    early warning for a degrading probe or a stale calibration. ok is None
+    when there is no anchor or no reading.
     """
     wet = (cal or {}).get("wet")
     if wet is None or volts is None:
@@ -268,10 +258,9 @@ def health(
     verdict: str = "steady",
     noise_ref: float | None = None,
 ) -> tuple[int, str, list[str]]:
-    """Per-sensor health -> (score 0-100, grade, reasons).
+    """Per-sensor health; returns (score 0-100, grade, reasons).
 
-    Deliberately simple and explainable: each fault subtracts a fixed amount
-    and names itself. A score nobody can explain is a score nobody trusts.
+    Each fault subtracts points and adds its reason.
     """
     score, why = 100, []
     if not values:

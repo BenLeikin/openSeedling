@@ -1,15 +1,14 @@
 """Raspberry Pi host telemetry for the dashboard.
 
 Everything is read from /proc, /sys and vcgencmd, so there are no extra
-dependencies and nothing here can block: each reader is individually guarded
-and returns None when its source is unavailable, which keeps the module usable
-off-Pi (and in tests) without special-casing.
+dependencies. Each reader returns None when its source is unavailable, which
+keeps the module usable off the Pi and in tests. The /proc and /sys reads
+return at once; each vcgencmd call is a subprocess that can take up to its
+3 s timeout, and all_stats() makes two or three of them.
 
-The one non-obvious reading is the throttle word from `vcgencmd get_throttled`.
-It is a bitmask where the low bits mean "happening now" and the high bits mean
-"has happened since boot". Undervoltage is the single most common cause of
-mysterious Pi misbehaviour, so it is worth surfacing plainly rather than
-leaving it to be discovered in dmesg.
+The throttle word from `vcgencmd get_throttled` is a bitmask: bits 0-3 mean
+"happening now" and the same bits 16 higher mean "has happened since boot".
+Undervoltage is the most common cause of unexplained Pi misbehaviour.
 """
 
 import os
@@ -19,7 +18,7 @@ import socket
 import subprocess
 import time
 
-# bit -> (now_label, since_boot_label)
+# bit -> condition. Bit n means it holds now; bit n + 16, that it has since boot.
 THROTTLE_BITS = {
     0: "undervoltage",
     1: "arm frequency capped",
@@ -186,7 +185,8 @@ def host():
 
 
 def ip_address():
-    """The address actually used for outbound traffic, without shelling out."""
+    """The address used for outbound traffic. Connecting a UDP socket sends
+    nothing: it only makes the kernel choose the source address."""
     s = None
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

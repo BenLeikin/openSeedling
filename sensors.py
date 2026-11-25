@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Sensor I/O for the grow dashboard.
 
-The one job of this module: talk to hardware, hand back a flat dict of clean
-readings. Nothing here knows about brightness, schedules, or the web app.
+Talks to the hardware and hands back a flat dict of readings. Nothing here
+knows about brightness, schedules, or the web app.
 
     import sensors
     sensors.read_all()
@@ -10,22 +10,20 @@ readings. Nothing here knows about brightness, schedules, or the web app.
     #     "temp:air": 22.4, "humidity": 58.0, "pressure": 1013.2,
     #     "lux": 1840.0, "temp:soil": 21.7, ...}
 
-read_all() returns only the sensors actually present. Every device is probed
-once at first use and disabled gracefully if absent, so a bare Pi (or a test
-box) runs the whole app without them and the dashboard shows "-" for the
-missing readings rather than failing.
+read_all() returns only the sensors present. A device that is absent is
+disabled at first use, so a bare Pi or a test box runs the whole app without
+them and the dashboard shows "-" for the missing readings.
 
 Wired hardware (I2C on pins 3=SDA / 5=SCL, 1-Wire on GPIO4 / pin 7):
   - 2x capacitive soil probes -> ADS1115 ADC @ 0x48, channels A0 and A1
-  - BME280 air temp / humidity / pressure -> 0x76 (BMP280 at 0x77 also
-    detected; it has no humidity and that reading is simply absent)
-  - BH1750 ambient lux -> 0x23
+  - BME280 air temp / humidity / pressure -> 0x76 or 0x77 (a BMP280 is
+    also detected; it has no humidity, so that reading is absent)
+  - BH1750 ambient lux -> 0x23 (a second one at 0x5C)
   - DS18B20 soil temp -> 1-Wire, auto-discovered from /sys/bus/w1/devices/28-*
   - 2x float switches (GPIO23, GPIO22): open = tray full, the fail-safe sense
   - 2x XKC-Y23A reservoir level sensors (GPIO27 low, GPIO17 high)
 
-All pin assignments are overridable by environment variable, so moving a
-signal off a bad pin is an .env change rather than a code edit.
+The float and reservoir pins can be overridden by environment variable.
 """
 
 import glob
@@ -36,12 +34,12 @@ import time
 
 from applog import log
 
-# One lock for every I2C read. The sample loop, the calibration endpoints, and
-# the light sweep all touch these devices from different threads. Blinka only
-# locks per bus transaction, but an ADS1115 read is write-config-then-read:
-# two threads interleaving can attribute tray 2's voltage to tray 1, which
-# would silently corrupt a calibration anchor. Held per read, never across
-# sleeps, so the worst-case wait is one conversion.
+# One lock for every I2C read. The sample loop, the calibration endpoints and
+# the light sweep touch these devices from different threads. Blinka locks per
+# bus transaction, but an ADS1115 read is write-config-then-read: two threads
+# interleaving can attribute tray 2's voltage to tray 1 and corrupt a
+# calibration anchor. Held per read, never across sleeps, so the worst-case
+# wait is one conversion.
 _io_lock = threading.Lock()
 
 # Per-type master switches. All wired; set one False to stop reading that
@@ -53,15 +51,15 @@ ENABLED = {
 }
 
 # --- float switches (one per tray) ---
-# Other leg to GND, internal pull-up. Mounted so that rising water OPENS the
+# Other leg to GND, internal pull-up. Mounted so that rising water opens the
 # switch: open reads as "full" and refuses to pump, which is also the
 # broken-wire state, so a cut lead fails safe.
-# Override via GROWLIGHT_FLOAT_PINS="1:23,2:22" to move one off a bad pin
-# without editing code.
+# Override with GROWLIGHT_FLOAT_PINS="1:23,2:22"; an empty string means no
+# floats.
 FLOAT_PINS = {"1": 23, "2": 22}  # tray -> BCM pin (physical 16, 15)
 _fp = os.environ.get("GROWLIGHT_FLOAT_PINS")
 if _fp is not None and not _fp.strip():
-    FLOAT_PINS = {}  # explicitly configured as "no floats"
+    FLOAT_PINS = {}  # set but empty: no floats
     log.info("float pins: none configured")
 elif (_fp or "").strip():
     _fp = _fp.strip()
@@ -75,13 +73,13 @@ _float_devs = {}
 _float_init = False
 
 # --- reservoir level (XKC-Y23A NPN non-contact, through the bucket wall) ---
-# Two sensors on the SOURCE reservoir: "low" mounted at the minimum-safe
-# height, "high" near the top rim. NPN output pulls LOW on water detect, so
-# with the internal pull-up is_pressed means water at that height. Some units
-# ship inverted; set GROWLIGHT_RESERVOIR_INVERT=1 if the bench test reads
-# backwards rather than reswapping wires.
-# Pins overridable via GROWLIGHT_RESERVOIR_PINS="low:27,high:17"; empty
-# string = no reservoir sensors.
+# Two sensors on the source reservoir: "low" mounted at the minimum-safe
+# height, "high" near the top rim. The NPN output pulls low on water detect,
+# so with the internal pull-up is_pressed means water at that height. Some
+# units ship inverted: set GROWLIGHT_RESERVOIR_INVERT=1 if the bench test
+# reads backwards.
+# Override with GROWLIGHT_RESERVOIR_PINS="low:27,high:17"; an empty string
+# means no reservoir sensors.
 RESERVOIR_PINS = {"low": 27, "high": 17}  # BCM (physical 13, 11), as built
 _rp = os.environ.get("GROWLIGHT_RESERVOIR_PINS")
 if _rp is not None and not _rp.strip():
@@ -100,11 +98,10 @@ RESERVOIR_INVERT = bool((os.environ.get("GROWLIGHT_RESERVOIR_INVERT") or "").str
 _res_devs = {}
 _res_init = False
 
-# ---- change notification ----------------------------------------------------
-# The float and reservoir switches are binary and matter the moment they flip:
-# a tray reading full should reach the dashboard in well under a second, not
-# at the next five-minute sample. gpiozero calls these from its own thread on
-# each debounced edge, so no polling is involved.
+# --- change notification ---
+# A float or reservoir switch that flips reaches the dashboard in well under a
+# second, without waiting for the next five-minute sample. gpiozero calls the
+# listeners from its own thread on each debounced edge.
 _listeners = []
 
 
@@ -122,15 +119,15 @@ def _fire(key):
 
 
 def _edge(key):
-    # A zero-argument callable on purpose: gpiozero passes the device to any
-    # callback that accepts an argument, which would silently replace a
-    # default-argument key with the Button object.
+    # A zero-argument callable: gpiozero passes the device to any callback
+    # that accepts an argument, which would replace a default-argument key
+    # with the Button object.
     return lambda: _fire(key)
 
 
 def arm_watchers():
-    """Open the switches now so their edge callbacks are live from startup,
-    instead of from whenever something first happens to read them."""
+    """Open the switches so their edge callbacks are live from startup.
+    Otherwise each opens on its first read."""
     _floats()
     _reservoirs()
 
@@ -207,7 +204,7 @@ def _floats():
 
 def read_float(tray="1"):
     """One tray's float contact: 1.0 closed (not full), 0.0 open (full),
-    None if that switch isn't available. Open=full is the fail-safe sense:
+    None if that switch isn't available. Open = full is the fail-safe sense:
     a broken wire reads full and refuses to pump."""
     dev = _floats().get(str(tray))
     if dev is None:
@@ -238,16 +235,13 @@ _probe_init = False
 
 
 def _probes():
-    """ADS1115 channels per tray, initialized once. Uses ExtendedI2C on bus 1:
-    the plain Blinka bus probe has missed devices that i2cdetect sees, and the
-    extended path talks to the kernel device directly. Gain 1 covers the
-    probes' 0-3.3 V output. Returns {} if the ADC or libraries are absent, so
-    a bare Pi (or the sandbox) runs without probes rather than crashing."""
+    """ADS1115 channels per tray, initialized once. Gain 1 covers the probes'
+    0-3.3 V output. Returns {} if the ADC or its libraries are absent."""
     global _probe_chans, _probe_init
     if _probe_init:
         return _probe_chans or {}
     with _io_lock:
-        if _probe_init:  # another thread initialized while we waited
+        if _probe_init:  # another thread initialized it during the wait
             return _probe_chans or {}
         _probe_init = True
         return _probes_init_locked()
@@ -261,9 +255,8 @@ def _probes_init_locked():
 
         ads = ADS.ADS1115(_i2c(), address=PROBE_ADDR)
         ads.gain = 1
-        # AnalogIn takes a plain channel number. Some driver versions also
-        # export P0..P3 constants, but they're just ints 0-3 and not all
-        # versions have them, so pass the integer directly.
+        # AnalogIn takes a plain channel number. The P0..P3 constants are the
+        # ints 0-3, and not every driver version exports them.
         _probe_chans = {tray: AnalogIn(ads, idx) for tray, idx in PROBE_CHANNELS.items()}
     except Exception as e:
         log.warning(f"ADS1115 unavailable ({e}); moisture probes disabled")
@@ -273,10 +266,9 @@ def _probes_init_locked():
 
 def read_probes(samples=8):
     """Median probe voltage per tray, e.g. {'probe:1': 1.883, 'probe:2': 1.844}.
-    Capacitive probes read low in wet soil, high in dry. A median of several
-    samples rejects switching noise from the light supply; a single read
-    catches whatever is on the line at that instant. Absent if the ADC is not
-    present. Conversion to a percentage happens in the app."""
+    Capacitive probes read low in wet soil, high in dry. The median of several
+    samples rejects switching noise from the light supply. Empty if the ADC is
+    absent. water.probe_moisture converts volts to a percentage."""
     chans = _probes()
     if not chans:
         return {}
@@ -292,13 +284,12 @@ def read_probes(samples=8):
 
 
 def probe_settle(tray, seconds=15.0, delay=0.5):
-    """Watch one probe for `seconds` and report whether it has settled.
+    """Watch one probe for `seconds`; returns (median, spread, drift) in volts.
 
-    A two-second burst tells you about electrical noise; it cannot tell you the
-    soil is still absorbing water, which is the thing that ruins a wet anchor.
-    Returns (median, spread, drift) where drift is the change from the first
-    third of the window to the last: still falling means water is still working
-    its way in and the reading has not finished moving.
+    Drift is the change from the first third of the window to the last. Still
+    falling means the soil is still absorbing water, which a short burst
+    (probe_spread) cannot show. Returns three Nones without the probe or with
+    fewer than six good samples.
     """
     chans = _probes()
     if not chans or tray not in chans:
@@ -326,9 +317,8 @@ def probe_settle(tray, seconds=15.0, delay=0.5):
 
 
 def probe_spread(tray, samples=10, delay=0.2):
-    """Sample one probe repeatedly and return (median, spread). Used by
-    calibration: a wide spread means noise on the analog run, and an anchor
-    captured from it will be junk."""
+    """Sample one probe repeatedly; returns (median, spread) in volts, or
+    (None, None). A wide spread means noise on the analog run."""
     chans = _probes()
     if not chans or tray not in chans:
         return None, None
@@ -336,7 +326,7 @@ def probe_spread(tray, samples=10, delay=0.2):
     vals = []
     for _ in range(max(2, samples)):
         try:
-            with _io_lock:  # per sample, so sampling isn't starved
+            with _io_lock:  # held per sample, so other readers are not starved
                 vals.append(ch.voltage)
         except Exception:
             pass
@@ -346,14 +336,16 @@ def probe_spread(tray, samples=10, delay=0.2):
     return round(statistics.median(vals), 4), round(max(vals) - min(vals), 4)
 
 
-# ----------------------------- air (BME280) -------------------------------
+# --- I2C bus and air (BME280) ---
 
 _i2c_bus = None
 
 
 def _i2c():
-    """One shared I2C handle for the BME/BMP280 and BH1750. Prefers the
-    extended-bus path (same reliability reasoning as the ADS1115)."""
+    """One shared I2C handle for the ADS1115, BME/BMP280 and BH1750.
+
+    Prefers ExtendedI2C, which talks to the kernel device directly: the plain
+    Blinka bus probe can miss devices that i2cdetect sees."""
     global _i2c_bus
     if _i2c_bus is not None:
         return _i2c_bus
@@ -361,8 +353,8 @@ def _i2c():
         from adafruit_extended_bus import ExtendedI2C
 
         # frequency=None: the bus speed is the kernel's (dtparam in
-        # config.txt). The library's default 400000 is ignored anyway and
-        # only produced a RuntimeWarning at every start.
+        # config.txt). The library's default of 400000 is ignored and raises
+        # a RuntimeWarning at every start.
         _i2c_bus = ExtendedI2C(PROBE_BUS, frequency=None)
     except ImportError:
         import board
@@ -432,7 +424,7 @@ def _read_air():
         return {}
 
 
-# ------------------------------ lux (BH1750) ------------------------------
+# --- lux (BH1750) ---
 # Up to two BH1750s share the bus: ADDR low answers at 0x23 and logs as "lux",
 # ADDR high answers at 0x5C and logs as "lux:2". The keys follow the address,
 # never the order found, so adding a second sensor never renames the first.
@@ -440,26 +432,25 @@ def _read_air():
 LUX_ADDRS = {0x23: "lux", 0x5C: "lux:2"}
 
 # A BH1750 that loses power, even for a moment through a poor contact, wakes up
-# powered down and needs its measurement mode set again. The driver only does
-# that when it is created, so after a glitch the old handle can keep failing
-# until the service restarts. After a few failures in a row the handle is
+# powered down and needs its measurement mode set again, which the driver only
+# does when it is created. After this many failed reads in a row the handle is
 # dropped and the chip is found and configured afresh on the next read, so a
 # reseated sensor comes back on its own. Errors are logged on the first
-# failure and then sparingly, not once per read.
+# failure and every 50th after it.
 LUX_REINIT_AFTER = 3
 # The driver's default (0.5 lx steps at the chip's default measurement time)
-# tops out at 27,306 lx, which a 250 W fixture passes at a fifth of its power:
-# the light response sweep then saw "full output" at 19% and the calibration
-# capped the dashboard's 100% there. The 1 lx mode with the shortest
-# measurement time reads up to 121,557 lx, in 1.9 lx steps.
+# tops out at 27,306 lx, which a 250 W fixture passes at about a fifth of its
+# power. The 1 lx mode with the shortest measurement time reads up to
+# 121,557 lx, in 1.9 lx steps.
 LUX_MTREG = 31  # measurement time register: 31..254, the chip's default is 69
 LUX_SCALE = 69.0 / LUX_MTREG
-# the reading at which the chip is at its maximum, in each of those setups
+# The reading at which the chip saturates: in 0.5 lx mode, in 1 lx mode, and
+# in 1 lx mode with LUX_MTREG.
 LUX_CEILINGS = (27306.0, 54612.0, 121557.0)
 _lux = {a: {"dev": None, "init": False, "fail": 0, "seen": False, "scale": 1.0} for a in LUX_ADDRS}
-# The sample and live loops both read the lux sensors. Without this, one could
-# find a sensor still being opened by the other, count none found and log
-# "not found; disabled" moments before the other logged it found.
+# The sample and live loops both read the lux sensors. Without this lock one
+# can find a sensor still being opened by the other and log "not found;
+# disabled".
 _lux_lock = threading.Lock()
 
 
@@ -551,16 +542,15 @@ def _lux_failed(addr, err):
             log.warning(f"lux sensor {hex(addr)}: re-initializing after repeated read errors")
 
 
-# -------------------------- soil temp (DS18B20) ---------------------------
+# --- soil temp (DS18B20) ---
 
 
 def _read_soil_temps():
-    """Every DS18B20 on the 1-Wire bus, in Celsius (the dashboard converts to F,
-    matching the other temp: keys). Probes appear in sysfs
-    as /sys/bus/w1/devices/28-*; each w1_slave read carries a CRC line, and a
-    failed CRC (usually a wiring or pull-up problem) is dropped rather than
-    logged as a bogus temperature. Keys are stable per probe serial, so adding
-    a second probe later won't renumber the first."""
+    """Every DS18B20 on the 1-Wire bus, in Celsius like the other temp: keys.
+
+    Probes appear in sysfs as /sys/bus/w1/devices/28-*. Each w1_slave read
+    carries a CRC line; a read that fails it (usually a wiring or pull-up
+    problem) is dropped."""
     if not ENABLED["soil_temp"]:
         return {}
     out = {}
@@ -589,14 +579,14 @@ def _read_soil_temps():
     return out
 
 
-# --------------------------------- public ---------------------------------
+# --- public ---
 
-# Everything except the 1-Wire soil probes, which need a 750ms conversion
-# each and change far too slowly to be worth that every few seconds.
+# Everything except the 1-Wire soil probes, which need a 750 ms conversion
+# each and change too slowly to be worth that every few seconds.
 FAST_READS = (read_probes, read_floats, read_reservoirs, _read_air, _read_lux)
 ALL_READS = FAST_READS + (_read_soil_temps,)
-# What the dashboard's live refresh actually shows. Kept separate so the
-# every-few-seconds loop does not also run 16 ADS1115 conversions it discards.
+# What the dashboard's live refresh shows. Separate from FAST_READS so the
+# every-few-seconds loop does not run 16 ADS1115 conversions it discards.
 LIVE_READS = (_read_air, _read_lux)
 
 
@@ -612,7 +602,7 @@ def _read_set(fns):
 
 
 def read_all():
-    """Every wired sensor. Failures and unwired types are simply absent."""
+    """Every wired sensor. Failures and unwired types are absent."""
     return _read_set(ALL_READS)
 
 

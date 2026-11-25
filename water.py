@@ -52,7 +52,7 @@ def restore_persistent_state():
     for tray, saved in data.items() if isinstance(data, dict) else []:
         st = hardware.pump_state.get(str(tray))
         if st is None or not isinstance(saved, dict):
-            continue  # a tray that is no longer wired
+            continue  # a saved tray with no pump wired
         try:
             st["last_run"] = max(0.0, float(saved.get("last_run") or 0))
             st["today_seconds"] = max(0.0, float(saved.get("today_seconds") or 0))
@@ -80,15 +80,15 @@ def restore_persistent_state():
         if isinstance(ff.get("trays"), dict):
             fill_failures.update({str(t): str(m) for t, m in ff["trays"].items() if m})
         elif ff.get("msg"):
-            # saved before failures were kept per tray; the message names its tray
+            # the single-message format: the message names its tray
             named = re.match(r"Tray (\w+) ", str(ff["msg"]))
             fill_failures[named.group(1) if named else "1"] = str(ff["msg"])
     restored = {t: round(st["today_seconds"], 1) for t, st in hardware.pump_state.items()}
     log.info(f"restored pump state: today {restored}s")
 
 
-# Migration: older configs have one auto-watering switch for every tray. With it
-# on, every tray with a pump is armed, once, so upgrading changes nothing.
+# Migration: a config with one auto-watering switch for every tray and no
+# per-tray list. With the switch on, every tray with a pump is armed, once.
 if config.settings.get("auto_water") and "auto_water_trays" not in config._file_keys:
     config.settings["auto_water_trays"] = sorted(hardware.PUMP_PINS)
     try:
@@ -385,17 +385,17 @@ def run_pump_until_full(tray, reason="fill", force=False):
     return outcome == FULL, told
 
 
-PROBE_DEFAULT_CAL = {"wet": 1.25, "dry": 2.95}  # typical HW-390 on 3.3V; used
-# until a tray is calibrated
+# Typical HW-390 on 3.3 V; used until a tray is calibrated.
+PROBE_DEFAULT_CAL = {"wet": 1.25, "dry": 2.95}
 
 
 TEMP_COMP_REF_F = 70.0  # compensation is zero at this soil temp
 
 
 def compensated_volts(volts, cal, soil_temp_f):
-    """Capacitive probes read wetter (lower voltage) as the soil warms. Undo
-    that drift so moisture is comparable across a temperature swing, which
-    matters most on a heat mat. No coefficient configured = unchanged."""
+    """A probe's voltage with its soil-temperature drift removed. Capacitive
+    probes read wetter (lower voltage) as the soil warms. Unchanged when no
+    coefficient is configured or the soil temperature is unknown."""
     tc = (cal or {}).get("temp_comp") or {}
     coeff = tc.get("coeff")
     if not coeff or soil_temp_f is None:
@@ -406,25 +406,20 @@ def compensated_volts(volts, cal, soil_temp_f):
 
 PROBE_JUMP_V = 0.08  # volts; a departure larger than this is judged
 PROBE_CONFIRM = readings_mod.PROBE_CONFIRM
-_probe_verdict = {}  # tray -> "steady" | "spike" | "step", for display
+_probe_verdict = {}  # probe -> "steady" | "spike" | "step" | "trend", for display
 
 
 def probe_volts_filtered(tray, snap=None):
-    """A probe's voltage with single-sample transients rejected.
+    """A probe's voltage with single-sample transients rejected, as
+    (volts, ts) or (None, None).
 
-    The probes sit steady to a couple of millivolts and then take occasional
-    excursions of 100-350mV, which is interference rather than sensor noise
-    (a switching load near unshielded leads into a high-impedance ADC input).
-    The per-read median in sensors.py samples milliseconds apart, so it cannot
-    see a transient that lasts longer than that; this takes a median across the
-    last few LOGGED readings instead, which rejects one bad sample outright
-    while still tracking soil that dries over hours.
-
-    Charts keep showing raw values on purpose: the excursions are diagnostic
-    and hiding them would have hidden the problem. Only the decisions
-    (moisture %, dry alert, auto-watering) read the filtered value.
-
-    Returns (volts, ts) or (None, None).
+    The probes sit steady to a couple of millivolts and take occasional
+    excursions of 100-350 mV: interference from a switching load near
+    unshielded leads into a high-impedance ADC input. The per-read median in
+    sensors.py samples milliseconds apart and misses a transient that lasts
+    longer, so the newest logged reading is judged against the ones before it
+    (quality.spike_or_step). Only the decisions (moisture %, dry alert,
+    auto-watering) read this value; charts show the raw one.
     """
     key = f"probe:{tray}"
     if snap is None:
@@ -445,7 +440,7 @@ def probe_volts_filtered(tray, snap=None):
         return raw, ts
     vals = [v for v in vals if isinstance(v, (int, float))]
     if len(vals) < 3:
-        return raw, ts  # not enough history to filter meaningfully
+        return raw, ts  # too little history to filter
     val, verdict = quality.spike_or_step(vals, jump=PROBE_JUMP_V, confirm=PROBE_CONFIRM)
     _probe_verdict[str(tray)] = verdict
     return (val if val is not None else raw), ts
@@ -466,8 +461,8 @@ def probe_moisture(volts, cal, soil_temp_f=None):
 
 
 def probe_moisture_any(volts, cal, soil_temp_f=None):
-    """(percent, approximate) - falls back to typical probe endpoints when the
-    tray hasn't been calibrated, so there's always a number to look at."""
+    """Moisture as (percent, approximate). An uncalibrated tray is read
+    against the typical probe endpoints and marked approximate."""
     pct = probe_moisture(volts, cal, soil_temp_f)
     if pct is not None:
         return pct, False
@@ -478,10 +473,9 @@ PROBE_CAL_SLOP = 0.02  # volts past an anchor before the calibration is flagged
 
 
 def probe_cal_flag(volts, cal):
-    """'below_wet' / 'above_dry' when a live reading sits outside the tray's
+    """'below_wet' or 'above_dry' when a live reading sits outside the tray's
     calibration anchors, else None. A reading below the wet anchor clamps to
-    100% and silently kills the dry alert (this exact failure hid two pegged
-    probes for a week), so it is surfaced instead of absorbed."""
+    100%, so the dry alert can never fire on it."""
     if not cal:
         return None
     wet, dry = cal.get("wet"), cal.get("dry")
@@ -541,18 +535,17 @@ def estimate_temp_comp(tray, hours=48):
 
 
 def armed_trays(cfg):
-    """Trays armed for auto-watering (see the startup migration for configs
-    from before arming was per tray)."""
+    """Trays armed for auto-watering that have a pump pin."""
     got = [str(t) for t in (cfg.get("auto_water_trays") or [])]
     return [t for t in got if t in hardware.PUMP_PINS]
 
 
 def auto_water_blockers(cfg=None):
-    """Reasons auto-watering must not run, per tray -> [reasons].
+    """Why auto-watering must not run, as tray -> [reasons].
 
-    Auto-watering decides to pump based on a probe reading, so an untrustworthy
-    probe is not a degraded feature, it is a flood or a drought. A tray with any
-    blocker is skipped by the loop and cannot be armed from the UI.
+    Auto-watering pumps on a probe reading, so a tray whose probe cannot be
+    trusted would be flooded or left dry. A tray with any blocker is skipped
+    by the loop and cannot be armed from the UI.
     """
     if cfg is None:
         with config.settings_lock:
@@ -593,20 +586,16 @@ POSTFILL_DELAY_S = 20 * 60  # let water wick to the probe before judging
 
 
 def schedule_postfill(tray, tripped=True):
-    """After a successful fill, judge the probe against its wet anchor later.
-
-    Water takes time to wick from the tray to the probe, so the check is
-    deferred rather than taken immediately. Drift here is the early warning
-    for a degrading probe or a stale calibration.
-    """
+    """Queue a check of the tray's probe against its wet anchor. It runs
+    POSTFILL_DELAY_S after the fill, because water takes time to wick from
+    the tray to the probe."""
     with config.settings_lock:
         pr = setups_mod.tray_probe(config.settings, tray)
         cal = ((config.settings.get("probe_cal") or {}).get(pr) or {}).copy() if pr else {}
     if pr is None:
         return  # no probe in this tray: nothing to judge or recalibrate
-    # Scheduled even with no wet anchor yet: there is no verdict to give in
-    # that case, but it is exactly when an automatic first capture is most
-    # useful, and skipping it here would silently rule that out.
+    # Scheduled even with no wet anchor: there is no verdict to give, but the
+    # automatic capture that follows the check can create the first anchor.
     _postfill_due[str(tray)] = {
         "due": time.time() + POSTFILL_DELAY_S,
         "cal": cal,
@@ -625,8 +614,8 @@ def check_postfill(readings=None):
         _postfill_due.pop(tray, None)
         volts, _ = probe_volts_filtered(pending.get("probe", tray))
         ok, msg = quality.postfill_verdict(volts, pending["cal"])
-        # ok is None when there is no anchor to judge against; that is not a
-        # reason to skip the recapture below, which is what would create one
+        # ok is None when there is no anchor to judge against. The recapture
+        # below still runs: it is what creates one.
         postfill_result[tray] = {
             "ok": None if ok is None else bool(ok),
             "msg": msg,
@@ -644,22 +633,17 @@ def check_postfill(readings=None):
 
 
 def auto_wet_calibrate(tray, pending):
-    """Re-capture the wet anchor after a fill, when the fill deserves it.
+    """Re-capture the wet anchor from the settled reading after a fill.
 
-    Fill-to-float saturates the medium, so the settled reading afterwards is a
-    legitimate wet reference. The risk is not the soil, it is everything else:
-    a fill that tripped the float early, a probe that has shifted in its hole,
-    a partial fill. A stale anchor announces itself (pegged readings, the recal
-    badge, this very check); an anchor silently rewritten to a wrong value
-    looks perfectly healthy, which is why this refuses more than it accepts:
+    A fill to the float saturates the medium, so the settled reading is a
+    valid wet reference. An anchor rewritten to a wrong value (the float
+    tripped early, the probe shifted in its hole) looks healthy, so the
+    capture needs a fill that tripped the float, a reading that passes every
+    check a manual capture must pass, and a move of less than
+    auto_wet_cal_max_move volts.
 
-      - only after a fill that actually tripped the float, never one that ran
-        to the time cap
-      - only if the reading passes every check a manual capture must pass
-      - only if it moves the anchor less than auto_wet_cal_max_move; a larger
-        jump is real news and wants a human to look at it
-
-    Returns a short note for the dashboard, or None when it did nothing.
+    Returns a short note for the dashboard, or None when auto_wet_cal is off
+    or the probe gives no reading.
     """
     with config.settings_lock:
         cfg = dict(config.settings)
@@ -698,18 +682,14 @@ def auto_wet_calibrate(tray, pending):
     return msg
 
 
-# How far a fresh reading may sit above the threshold and still count as
-# agreeing with the decision to water. Enough to absorb noise between the
-# logged sample and the fresh one, nowhere near enough to water a wet tray.
+# How far, in percentage points, a fresh reading may sit above the threshold
+# and still agree with the decision to water. Enough to absorb noise between
+# the logged sample and the fresh one.
 AUTO_WATER_AGREE_PCT = 10
 
 
 def auto_water_pass():
-    """One auto-watering decision: water at most one tray, or none.
-
-    Split out of the loop so it can be exercised directly, and so every exit
-    is an explicit return rather than a continue inside a thread.
-    """
+    """One auto-watering decision: fill at most one tray."""
     with config.settings_lock:
         cfg = dict(config.settings)
     armed = set(armed_trays(cfg))
@@ -747,12 +727,9 @@ def auto_water_pass():
             log.debug(f"auto-water tray {tray} skipped: {why}")
             continue  # this tray's daily limit must not hold up the next one
 
-        # Confirm before pumping. The decision above came from the
-        # logged history; take a fresh reading now and require it to
-        # agree. A tray that reads wet right now is not watered, however
-        # the history got there. This exists because tray 2 was once
-        # filled at "0%" while every logged input said 97%, and nothing
-        # recorded what the loop had actually seen.
+        # Confirm before pumping: the decision above came from the logged
+        # history, and a fresh reading must agree with it. Every input is
+        # logged either way, so a run or a skip can be explained afterwards.
         cal_t = cal.get(pr) or {}
         fresh_v, spread = sensors.probe_spread(pr)
         fresh_pct = probe_moisture(fresh_v, cal_t, stf) if fresh_v is not None else None
@@ -784,16 +761,13 @@ def auto_water_pass():
 
 
 def watering_loop():
-    """Autonomous watering: when a calibrated probe reads dry and the tray's
-    float says it is not full, fill to the float.
+    """Auto-watering: once a minute, when a calibrated probe reads dry and the
+    tray's float says it is not full, fill to the float.
 
-    Every guard is deliberate. The trigger is the probe, so a tray whose probe
-    is uncalibrated or reading outside its anchors is skipped entirely rather
-    than watered on a guess. The fill itself is float-gated with a time cap,
-    refuses on an empty reservoir, honours the daily cap, and a fill that caps
-    out without the float tripping switches auto_water off (in
-    run_pump_until_full). Cooldown exists because soil wicks slowly: probes
-    read dry for minutes after a fill has already reached the roots.
+    A tray whose probe is uncalibrated or reads outside its anchors is
+    skipped, and a fill that ends in a fault disarms its tray (_after_fill).
+    The cooldown is there because soil wicks slowly: a probe reads dry for
+    minutes after a fill has reached the roots.
     """
     while True:
         time.sleep(60)
@@ -803,7 +777,7 @@ def watering_loop():
             log.exception(f"watering_loop error: {e}")
 
 
-# tray -> pending post-fill probe check: {"due": ts, "cal": {...}}
+# tray -> pending post-fill probe check: {"due": ts, "cal": {...}, "tripped", "probe"}
 _postfill_due = {}
 # tray -> last post-fill verdict for display
 postfill_result = {}
@@ -816,13 +790,11 @@ PROBE_SPAN_MIN = 0.15  # volts between wet and dry for a usable scale
 
 
 def probe_cal_check(tray, point, volts, drift, spread):
-    """Decide whether a proposed anchor is believable -> (problems, notes).
+    """Judge a proposed anchor; returns (problems, notes).
 
-    Anchors used to be stored whatever they looked like, with noise only
-    mentioned afterwards. That is how two wet anchors captured on
-    not-quite-saturated soil pegged both trays at 100% for a week and silently
-    disabled the dry alert. A suspect capture is now refused, with the reason
-    and what to do instead.
+    Each problem is a reason to refuse the capture and says what to do
+    instead; notes are for display. A wet anchor captured on soil that is not
+    yet saturated pegs the tray at 100% and stops the dry alert firing.
     """
     problems, notes = [], []
     with config.settings_lock:
@@ -851,7 +823,7 @@ def probe_cal_check(tray, point, volts, drift, spread):
         else:
             notes.append(f"moved {drift:+.3f}V during the sample")
 
-    # a wet anchor has to be at least as wet as the tray actually gets, or every
+    # a wet anchor has to be at least as wet as the tray gets, or every
     # ordinary reading sits below it and clamps to 100%
     try:
         recent = db.recent_values(f"probe:{tray}", n=400, max_age=14 * 86400)

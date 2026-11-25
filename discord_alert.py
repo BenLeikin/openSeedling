@@ -1,22 +1,19 @@
 #!/usr/bin/env python3
 """Discord alert transport via an incoming webhook.
 
-Posts alerts to a Discord channel as a rich embed with a colour-coded side bar
-keyed to severity. Mirrors notify.py so it's a drop-in second channel: callers
-say send(title, message, level=...) and don't care how it's delivered.
+Posts alerts to a Discord channel as an embed with a side bar coloured by
+severity. Same shape as notify.py: callers say send(title, message, level=...).
 
-The webhook URL is a secret (anyone holding it can post to your channel), so it
-is read at runtime from config or a gitignored file -- never hardcoded:
+The webhook URL is a secret (anyone holding it can post to the channel), so it
+is read at run time from the first of these that is set:
   1. "discord_webhook" in config.json
   2. a .discord_webhook file next to this module
 
-Set one of those and you're done:
     import discord_alert
     discord_alert.send("Garden report", "9 of 12 up, healthy.", level="good")
 
-Levels map to the embed colour: good (green), watch (yellow), problem/error
-(red), info/blurple (default). Returns True on success, False otherwise, and
-silently no-ops (False) when no webhook is configured, so callers never guard.
+Levels map to the embed colour: good/success (green), watch/warning (yellow),
+problem/error (red), info (blurple, and the default for an unknown level).
 """
 
 import json
@@ -69,7 +66,8 @@ def enabled():
 
 def send(title, message, level="info", username="Grow controller", fields=None):
     """Post an embed to the configured Discord webhook. `fields` is an optional
-    list of {"name","value","inline"} dicts for structured detail."""
+    list of {"name","value","inline"} dicts for structured detail. Returns
+    True when Discord accepted it, False on any failure or with no webhook."""
     url = webhook_url()
     if not url:
         return False

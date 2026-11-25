@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """Push-notification transport for the grow dashboard.
 
-Pure transport: it takes a title and a message and gets it to your phone. It
-knows nothing about sensors, thresholds, or grows; that decision logic lives
-in alerts.py. Kept dumb on purpose so it's reusable and testable.
+Takes a title and a message and delivers them through ntfy. It knows nothing
+about sensors or thresholds; alerts.py decides what is worth sending.
 
 Uses ntfy (https://ntfy.sh): install the ntfy app, subscribe to a topic, and
-put that topic in config.json as "ntfy_topic". No account or API key needed.
-Pick an unguessable topic name -- anyone who knows it can read your alerts.
+put that topic in config.json as "ntfy_topic". No account or API key is
+needed. Pick an unguessable topic name: anyone who knows it can read the
+alerts.
 
     import notify
     notify.send("Reservoir low", "Tank under 10%", priority="high", tags="warning")
 
-Config (read lazily from config.json so changes don't need a restart):
+Config (read from config.json on every call, so a change needs no restart):
     "ntfy_topic": "grow-7f3k9q2x"          # required to enable
     "ntfy_server": "https://ntfy.sh"       # optional, for self-hosted
 """
@@ -38,9 +38,8 @@ def enabled():
 
 
 def send(title, message, priority="default", tags=""):
-    """Send a notification. Returns True on success, False otherwise.
-    Silently no-ops (returning False) if no topic is configured, so callers
-    never have to guard for it."""
+    """Send a notification. Returns True when the server accepted it, False
+    on any failure or when no topic is configured."""
     cfg = _cfg()
     topic = cfg.get("ntfy_topic")
     if not topic:
