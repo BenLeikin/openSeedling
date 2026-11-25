@@ -17,6 +17,7 @@ from flask import Response, jsonify, request, send_file, send_from_directory
 from applog import log
 import db
 
+import auth
 import config
 import camera as camera_mod
 import light as light_mod
@@ -80,7 +81,7 @@ def frame(name):
 
 
 @routes.app.route("/api/grid", methods=["POST"])
-@routes.require_auth
+@auth.require_auth
 def update_grid():
     data = request.get_json(silent=True) or {}
     try:
@@ -142,7 +143,7 @@ def update_grid():
 
 
 @routes.app.route("/api/detect_grid", methods=["POST"])
-@routes.require_auth
+@auth.require_auth
 def detect_grid():
     count, latest, _ = camera_mod.photo_inventory()
     if not count or latest is None:
@@ -165,7 +166,7 @@ def detect_grid():
 
 
 @routes.app.route("/api/reset_timelapse", methods=["POST"])
-@routes.require_auth
+@auth.require_auth
 def api_reset_timelapse():
     """Archive the current timelapse and start a fresh one.
 
@@ -215,7 +216,7 @@ def api_reset_timelapse():
 
 
 @routes.app.route("/api/rebuild_thumbs", methods=["POST"])
-@routes.require_auth
+@auth.require_auth
 def api_rebuild_thumbs():
     """Regenerate every thumbnail from its source photo.
 
@@ -228,7 +229,7 @@ def api_rebuild_thumbs():
 
 
 @routes.app.route("/api/render", methods=["POST"])
-@routes.require_auth
+@auth.require_auth
 def api_render():
     count, _, _ = camera_mod.photo_inventory()
     if count < 2:
@@ -238,7 +239,7 @@ def api_render():
 
 
 @routes.app.route("/api/capture", methods=["POST"])
-@routes.require_auth
+@auth.require_auth
 def api_capture():
     """Take a photo right now, using the same light-hold and exposure as the
     timelapse so it lines up with the grid and growth analysis."""
@@ -272,7 +273,7 @@ def api_capture():
 
 
 @routes.app.route("/api/preview", methods=["POST"])
-@routes.require_auth
+@auth.require_auth
 def api_preview():
     """Grab a quick full-frame still for camera alignment. Not saved to the
     timelapse, not logged, and the light is left as-is, so the dashboard can
@@ -346,7 +347,7 @@ def api_preview():
 
 
 @routes.app.route("/api/camera_modes")
-@routes.require_auth
+@auth.require_auth
 def api_camera_modes():
     """The USB camera's MJPEG capture sizes, largest first. The largest is
     normally the whole sensor: the widest view to crop down from."""
@@ -367,7 +368,7 @@ def api_camera_modes():
 
 
 @routes.app.route("/api/cameras")
-@routes.require_auth
+@auth.require_auth
 def api_cameras():
     """USB cameras by the port they are plugged into, for picking camera 1
     and camera 2. One entry per camera (its capture node)."""
@@ -412,7 +413,7 @@ def _run_align():
 
 
 @routes.app.route("/api/align_cameras", methods=["GET", "POST"])
-@routes.require_auth
+@auth.require_auth
 def api_align_cameras():
     """POST starts fitting camera 2 onto camera 1 from a fresh frame of each;
     GET reports whether that is still running and how it ended."""
@@ -434,7 +435,7 @@ def api_align_cameras():
 
 
 @routes.app.route("/align_frame/<name>.jpg")
-@routes.require_auth
+@auth.require_auth
 def align_frame(name):
     """From the last Align cameras: camera 1's or camera 2's frame, or the two
     side by side with what matched between them ("matches")."""
@@ -451,7 +452,7 @@ def align_frame(name):
 
 
 @routes.app.route("/api/display")
-@routes.require_auth
+@auth.require_auth
 def api_display():
     """The touchscreen as the kiosk last reported it (display_watch.py writes
     it every few seconds while the kiosk runs), and whether the kiosk runs."""
@@ -484,7 +485,7 @@ def api_screen_event():
     only from that screen, and at most 20 a minute."""
     if not request.is_json:
         return jsonify(ok=False, error="JSON body required"), 415
-    if not routes.on_screen():
+    if not auth.on_screen():
         return jsonify(ok=False), 403
     now = time.time()
     _tap_log[:] = [t for t in _tap_log if now - t < 60]
@@ -526,7 +527,7 @@ def video():
 
 
 @routes.app.route("/api/focus_sweep", methods=["POST"])
-@routes.require_auth
+@auth.require_auth
 def api_focus_sweep():
     """Start (or cancel) a focus sweep on the USB camera."""
     data = request.get_json(silent=True) or {}

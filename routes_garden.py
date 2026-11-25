@@ -12,6 +12,7 @@ from flask import jsonify, request
 import db
 import sensors
 
+import auth
 import config
 import hardware
 import water
@@ -19,7 +20,7 @@ import routes
 
 
 @routes.app.route("/api/probe_cal", methods=["POST"])
-@routes.require_auth
+@auth.require_auth
 def probe_cal_set():
     """Capture a tray probe's reading as its wet (100%) or dry (0%) anchor.
 
@@ -97,7 +98,7 @@ def api_float():
 
 
 @routes.app.route("/api/probe_tempcomp", methods=["POST"])
-@routes.require_auth
+@auth.require_auth
 def probe_tempcomp():
     """Estimate (and optionally apply) a tray probe's temperature-drift
     coefficient from logged data. Run it over a warm, no-watering window."""
@@ -130,7 +131,7 @@ def probe_tempcomp():
 
 
 @routes.app.route("/api/planting_end", methods=["POST"])
-@routes.require_auth
+@auth.require_auth
 def api_planting_end():
     """Finish a planting: record it to history, then clear the cell.
 
@@ -175,7 +176,7 @@ def api_plantings():
 
 
 @routes.app.route("/api/planting_restore", methods=["POST"])
-@routes.require_auth
+@auth.require_auth
 def api_planting_restore():
     """Put a finished planting back in its cell, for a misclick.
 
@@ -211,7 +212,7 @@ def api_planting_restore():
 
 
 @routes.app.route("/api/trays", methods=["POST"])
-@routes.require_auth
+@auth.require_auth
 def api_trays():
     """Save what's planted in each cell. Body: {"tray": "1"|"2", "cells":
     {"A1": {"seed": str, "equipment": str, "planted": "YYYY-MM-DD",
@@ -284,7 +285,7 @@ def _cell_ids(rows, cols):
 
 
 @routes.app.route("/api/tray_layout", methods=["POST"])
-@routes.require_auth
+@auth.require_auth
 def api_tray_layout():
     """Add, remove, rename or resize a tray.
 
@@ -359,7 +360,7 @@ def api_tray_layout():
 
 
 @routes.app.route("/api/pump", methods=["POST"])
-@routes.require_auth
+@auth.require_auth
 def pump_test():
     data = request.get_json(silent=True) or {}
     tray = str(data.get("tray", "1"))
@@ -392,7 +393,7 @@ def pump_test():
 
 
 @routes.app.route("/api/auto_water", methods=["POST"])
-@routes.require_auth
+@auth.require_auth
 def api_auto_water():
     """Arm or disarm autonomous watering.
 

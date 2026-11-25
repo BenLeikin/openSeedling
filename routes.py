@@ -10,7 +10,6 @@ import queue
 import threading
 import time
 from datetime import timedelta
-from functools import wraps
 from pathlib import Path
 from markupsafe import Markup
 from flask import (
@@ -27,6 +26,7 @@ from flask.sessions import SecureCookieSessionInterface
 from werkzeug.security import check_password_hash
 
 from applog import log
+import auth
 import db
 import events
 
@@ -104,59 +104,6 @@ class _SessionInterface(SecureCookieSessionInterface):
 app.session_interface = _SessionInterface()
 
 
-def auth_enabled():
-    with config.settings_lock:
-        return bool(config.settings.get("password_hash"))
-
-
-def is_authed():
-    # If no password is configured, the dashboard is open (legacy behaviour).
-    if not auth_enabled() or session.get("authed"):
-        return True
-    # The touchscreen on this Pi (scripts/kiosk.sh) connects from 127.0.0.1.
-    return bool(
-        config.TRUST_LOCALHOST
-        and has_request_context()
-        and request.remote_addr in ("127.0.0.1", "::1")
-        and not request.headers.get("X-Forwarded-For")
-    )
-
-
-def on_screen():
-    """The request comes from the touchscreen on this Pi: the browser kiosk.sh
-    starts, on 127.0.0.1, with the kiosk's local trust switched on. Pages
-    rendered for it hide the mouse pointer."""
-    return bool(
-        config.TRUST_LOCALHOST
-        and has_request_context()
-        and request.remote_addr in ("127.0.0.1", "::1")
-        and not request.headers.get("X-Forwarded-For")
-    )
-
-
-def require_auth(fn):
-    """Gate a route on the login, and gate every non-GET route on a JSON body.
-
-    The JSON rule is the CSRF defense. Another site can make a browser send a
-    form or text/plain POST here without asking, but not an application/json
-    one: that needs a CORS preflight this app never answers. SameSite=Lax alone
-    does not cover it, because it lets a sibling subdomain through, and with no
-    password set there is no cookie to protect at all."""
-
-    @wraps(fn)
-    def wrapper(*a, **k):
-        if request.method != "GET" and not request.is_json:
-            return jsonify(error="Content-Type must be application/json"), 415
-        if request.method != "GET" and config.config_broken:
-            # running on defaults: no password, and nothing it saves would stick
-            return jsonify(error=config.config_broken), 503
-        if not is_authed():
-            return jsonify(error="login required"), 401
-        return fn(*a, **k)
-
-    return wrapper
-
-
 # One password check at a time. Werkzeug's scrypt hash needs about 32 MB per
 # check; with waitress's 16 threads, a burst of parallel logins against the
 # public URL could ask for 512 MB on a 512 MB board. Serializing also makes
@@ -226,7 +173,7 @@ def index():
         v=_asset_ver(),
         fa=form_attrs,
         form_spec=config.form_spec(),
-        onscreen=on_screen(),
+        onscreen=auth.on_screen(),
         touch_cal=_touch_cal(),
     )
 
@@ -263,7 +210,7 @@ def _changed(resp):
 def screen():
     """The touchscreen's one-page summary (scripts/kiosk.sh shows it)."""
     return render_template(
-        "screen.html", v=_asset_ver(), onscreen=on_screen(), touch_cal=_touch_cal()
+        "screen.html", v=_asset_ver(), onscreen=auth.on_screen(), touch_cal=_touch_cal()
     )
 
 
@@ -313,7 +260,7 @@ def api_stream():
     slow poll running regardless, so a stream that dies quietly degrades to the
     old behaviour instead of freezing the page.
     """
-    authed = is_authed()  # read while the request context still exists
+    authed = auth.is_authed()  # read while the request context still exists
     with status_mod._subs_lock:
         if len(status_mod._subs) >= status_mod.STREAM_MAX:
             return jsonify(error="too many live connections"), 503
@@ -365,7 +312,7 @@ def api_stream():
 
 @app.route("/api/status")
 def status():
-    payload = status_mod.shared_payload(is_authed())
+    payload = status_mod.shared_payload(auth.is_authed())
     if payload.get("error") == "warming up":
         return jsonify(payload), 503
     if request.args.get("lite"):
@@ -374,7 +321,7 @@ def status():
 
 
 @app.route("/api/settings", methods=["POST"])
-@require_auth
+@auth.require_auth
 def update_settings():
     """Validate and apply every recognized field in the body.
 

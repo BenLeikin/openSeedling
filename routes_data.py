@@ -15,6 +15,7 @@ import db
 import ai_report
 import hoststats
 
+import auth
 import config
 import setups as setups_mod
 import water
@@ -35,7 +36,7 @@ def api_report_get():
 
 
 @routes.app.route("/api/ai_settings", methods=["POST"])
-@routes.require_auth
+@auth.require_auth
 def update_ai_settings():
     data = request.get_json(silent=True) or {}
     with config.settings_lock:
@@ -64,7 +65,7 @@ def update_ai_settings():
 
 
 @routes.app.route("/api/report", methods=["POST"])
-@routes.require_auth
+@auth.require_auth
 def api_report_run():
     if not ai_report.have_key():
         return jsonify(ok=False, error="no API key set on the controller"), 200
@@ -134,7 +135,7 @@ def build_backup(include_secrets=False):
 
 
 @routes.app.route("/api/backup")
-@routes.require_auth
+@auth.require_auth
 def api_backup():
     """Download a restorable snapshot. Login required: the archive contains the
     password hash and, optionally, the secrets from .env."""
@@ -156,7 +157,7 @@ def api_backup():
 
 
 @routes.app.route("/api/purge_series", methods=["POST"])
-@routes.require_auth
+@auth.require_auth
 def api_purge_series():
     """Delete a sensor's logged history.
 

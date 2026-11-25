@@ -12,6 +12,7 @@ from applog import log
 import db
 import sensors
 
+import auth
 import config
 import light as light_mod
 import setups as setups_mod
@@ -20,7 +21,7 @@ import routes
 
 
 @routes.app.route("/api/lightning", methods=["POST"])
-@routes.require_auth
+@auth.require_auth
 def api_lightning():
     """Run a short lightning effect on the grow light. Entirely for fun."""
     data = request.get_json(silent=True) or {}
@@ -60,7 +61,7 @@ def api_lightning():
 
 
 @routes.app.route("/api/light", methods=["POST"])
-@routes.require_auth
+@auth.require_auth
 def api_light():
     """Manual light hold. 'on' forces manual_bright, 'off' forces dark, 'auto'
     hands control back to the sun schedule. An optional 'brightness' (0-100)
@@ -92,7 +93,7 @@ def api_light():
 
 
 @routes.app.route("/api/light_sweep", methods=["POST"])
-@routes.require_auth
+@auth.require_auth
 def api_light_sweep():
     """Start (or cancel) a light response sweep."""
     data = request.get_json(silent=True) or {}
@@ -150,7 +151,7 @@ def api_light_sweep():
 
 
 @routes.app.route("/api/plug_discover", methods=["POST"])
-@routes.require_auth
+@auth.require_auth
 def api_plug_discover():
     """Find TP-Link plugs on the local network.
 
@@ -207,7 +208,7 @@ def api_plug_discover():
 
 
 @routes.app.route("/api/plug_test", methods=["POST"])
-@routes.require_auth
+@auth.require_auth
 def api_plug_test():
     """Connect to a plug and report what it is, without saving anything.
 
@@ -252,7 +253,7 @@ def api_plug_test():
 
 
 @routes.app.route("/api/fan", methods=["POST"])
-@routes.require_auth
+@auth.require_auth
 def api_fan():
     """Set the fan mode: auto (schedule + humidity), on, or off."""
     data = request.get_json(silent=True) or {}
@@ -279,7 +280,7 @@ def api_fan():
 
 
 @routes.app.route("/api/heat", methods=["POST"])
-@routes.require_auth
+@auth.require_auth
 def api_heat():
     """Set the heat mat mode: auto (thermostat), on, or off."""
     data = request.get_json(silent=True) or {}
@@ -299,7 +300,7 @@ def api_heat():
 
 
 @routes.app.route("/api/schedule", methods=["POST"])
-@routes.require_auth
+@auth.require_auth
 def api_schedule():
     """Update just the schedule window. Separate from /api/settings so the
     chart's drag handles can commit a change without resubmitting every

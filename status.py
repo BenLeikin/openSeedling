@@ -14,6 +14,7 @@ import sensors
 import quality
 import readings as readings_mod
 
+import auth
 import config
 import hardware
 import control
@@ -325,9 +326,7 @@ def status_payload(authed=None):
         }
         if light_mod.light_backend(cfg) == "kasa"
         else None,
-        settings=public_settings(
-            cfg, authed=routes.is_authed() if authed is None else bool(authed)
-        ),
+        settings=public_settings(cfg, authed=auth.is_authed() if authed is None else bool(authed)),
         probe_default_cal=water.PROBE_DEFAULT_CAL,
         probe_cal_flags={
             t: f
@@ -428,8 +427,8 @@ def status_payload(authed=None):
                 else None
             )
         )((snap.get("lux") or (None, None))[1]),
-        authed=routes.is_authed() if authed is None else bool(authed),
-        auth_enabled=routes.auth_enabled(),
+        authed=auth.is_authed() if authed is None else bool(authed),
+        auth_enabled=auth.auth_enabled(),
         # which sensors sit in which tray, and the reverse (Settings, Setups)
         tray_map=setups_mod.tray_map(cfg)[0],
         sensor_trays=setups_mod.tray_map(cfg)[1],
@@ -461,7 +460,3 @@ def status_payload(authed=None):
             },
         },
     )
-
-
-# imported at the bottom: these modules import this one
-import routes
