@@ -452,7 +452,7 @@ def main(argv):
         dest, listfile, corners, cols, rows = pos
         dest = Path(dest)
         corners = json.loads(corners)
-        frames = [l for l in Path(listfile).read_text().splitlines() if l.strip()]
+        frames = [ln for ln in Path(listfile).read_text().splitlines() if ln.strip()]
         for i, src in enumerate(frames):
             out = dest / f"{i:06d}.jpg"
             try:

@@ -427,7 +427,7 @@ def _v_int(lo, hi, clamp=True):
         try:
             n = int(float(v if v not in (None, "") else 0))
         except (TypeError, ValueError):
-            raise ValueError("must be a number")
+            raise ValueError("must be a number") from None
         if clamp:
             return max(lo, min(hi, n))
         if not lo <= n <= hi:
@@ -442,7 +442,7 @@ def _v_float(lo, hi, clamp=True):
         try:
             n = float(v if v not in (None, "") else 0)
         except (TypeError, ValueError):
-            raise ValueError("must be a number")
+            raise ValueError("must be a number") from None
         if clamp:
             return max(lo, min(hi, n))
         if not lo <= n <= hi:
@@ -473,7 +473,7 @@ def _v_timezone(v):
     try:
         ZoneInfo(v)
     except Exception:
-        raise ValueError("unknown timezone; use an IANA name like America/Los_Angeles")
+        raise ValueError("unknown timezone; use an IANA name like America/Los_Angeles") from None
     return v
 
 
@@ -482,7 +482,7 @@ def _v_roi(v):
     try:
         camera_mod.parse_roi(v)
     except ValueError:
-        raise ValueError("must be 'x,y,w,h' as fractions 0-1, or blank")
+        raise ValueError("must be 'x,y,w,h' as fractions 0-1, or blank") from None
     return v
 
 
@@ -568,7 +568,7 @@ def _v_setups(v):
             try:
                 k = float(k)
             except (TypeError, ValueError):
-                raise ValueError(f"{name}: the lux-to-PPFD factor must be a number")
+                raise ValueError(f"{name}: the lux-to-PPFD factor must be a number") from None
             if not 10 <= k <= 200:
                 raise ValueError(f"{name}: the lux-to-PPFD factor must be 10 to 200")
         sens = x.get("sensors") or []
@@ -596,7 +596,7 @@ def _v_setups(v):
         try:
             lo, hi = float(x.get("dli_low")), float(x.get("dli_high"))
         except (TypeError, ValueError):
-            raise ValueError(f"{name}: the DLI band needs a low and a high")
+            raise ValueError(f"{name}: the DLI band needs a low and a high") from None
         if not (0.5 <= lo < hi <= 65):
             raise ValueError(f"{name}: the DLI band low must be below the high (0.5 to 65)")
         # A tray's probe, canopy and float come with the tray, the light sensor

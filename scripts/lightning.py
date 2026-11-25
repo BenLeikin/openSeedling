@@ -187,13 +187,15 @@ def main():
     try:
         from rpi_hardware_pwm import HardwarePWM
     except ImportError:
-        raise SystemExit("run this with ~/growlight/venv/bin/python")
+        raise SystemExit("run this with ~/growlight/venv/bin/python") from None
 
     ch = channel_for(args.pin)
     try:
         pwm = HardwarePWM(pwm_channel=ch, hz=args.hz, chip=0)
     except Exception as e:
-        raise SystemExit(f"could not open PWM channel {ch}: {e}\nIs the growlight service stopped?")
+        raise SystemExit(
+            f"could not open PWM channel {ch}: {e}\nIs the growlight service stopped?"
+        ) from None
     pwm.start(DARK)
     try:
         if args.calibrate:

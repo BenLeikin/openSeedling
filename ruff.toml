@@ -1,20 +1,14 @@
-# Lint rules for openSeedling. Run: ruff check .
-# Errors (E, F), warnings (W) and likely bugs (B). The ignores are deliberate:
-#   E402  late imports break circular dependencies between modules
-#   E501  long lines are fine where they keep a statement readable
-#   E701/E702  short one-line statements are used on purpose in places
-#   E731  small named lambdas
-#   E741  l/O names in short numeric code
-#   B904  "raise ... from" inside validators adds noise without value here
-#   B905  zip() without strict= (all zips are over equal-length lists)
+# Run: ruff check . && ruff format --check .
+#   E402  some modules import each other and finish their imports at the bottom
+#   E501  the formatter wraps code; long strings and comments are left alone
+#   B905  zip() without strict=: every zip here is over equal-length lists
 target-version = "py311"
 line-length = 100
 exclude = ["venv", "timelapse", "timelapse_archive"]
 
 [lint]
 select = ["E", "F", "W", "B"]
-ignore = ["E402", "E501", "E701", "E702", "E731", "E741", "B904", "B905"]
+ignore = ["E402", "E501", "B905"]
 
 [format]
-# ruff format: one style for every Python file (line length set above)
 quote-style = "double"

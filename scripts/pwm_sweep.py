@@ -59,7 +59,7 @@ def main():
         raise SystemExit(
             "rpi-hardware-pwm is not installed in this interpreter; "
             "run it with ~/growlight/venv/bin/python"
-        )
+        ) from None
 
     ch = channel_for(args.pin)
     try:
@@ -70,7 +70,7 @@ def main():
             "Check that the overlay is enabled in /boot/firmware/config.txt:\n"
             "  dtoverlay=pwm-2chan,pin=18,func=2,pin2=19,func2=2\n"
             "and that the growlight service is stopped."
-        )
+        ) from None
 
     print(f"GPIO{args.pin} (physical {'12' if ch == 0 else '35'}), PWM channel {ch} at {args.hz}Hz")
     print("Measure VOUT against the converter's GND.\n")

@@ -527,11 +527,11 @@ def build_linear_table(points):
     Returns (table, info) where table[i] is the raw percent for i% of full
     output, pinned to the lowest lit level below the driver's minimum.
     """
-    pts = sorted((float(p), float(l)) for p, l in points)
+    pts = sorted((float(p), float(lux)) for p, lux in points)
     if len(pts) < 5:
         raise ValueError("need at least 5 sweep points")
     lo = pts[0][1]
-    hi = max(l for _, l in pts)
+    hi = max(lux for _, lux in pts)
     if hi - lo < 50:
         raise ValueError(
             "the light barely changed across the sweep; is the "
@@ -549,8 +549,8 @@ def build_linear_table(points):
         )
     # normalise and force monotonic
     norm, run = [], 0.0
-    for p, l in pts:
-        f = max(0.0, (l - lo) / (hi - lo))
+    for p, lux in pts:
+        f = max(0.0, (lux - lo) / (hi - lo))
         run = max(run, f)
         norm.append((p, run))
 
