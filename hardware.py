@@ -92,7 +92,14 @@ PUMP_HW = bool(_pumps)
 
 
 def _blank_pump():
-    return {"running": False, "last_run": 0.0, "today_seconds": 0.0, "day": "", "last_detail": ""}
+    return {
+        "running": False,
+        "last_run": 0.0,
+        "today_seconds": 0.0,
+        "reserved": 0.0,  # seconds a run in progress may still use
+        "day": "",
+        "last_detail": "",
+    }
 
 
 pump_state = {t: _blank_pump() for t in PUMP_PINS}

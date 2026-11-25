@@ -17,11 +17,11 @@ import setups as setups_mod
 # and is cleared by the next successful fill
 fill_failure = {"msg": ""}
 
-# What a restart must not forget. last_run drives the auto-water cooldown and
-# today_seconds the daily pump cap; kept only in memory, a service that
-# restarted repeatedly could water past the cap. "running" is deliberately not
-# kept: after a restart no pump is on.
-PERSIST_PUMP_KEYS = ("last_run", "today_seconds", "day", "last_detail")
+# What a restart must not forget: last_run drives the auto-water cooldown,
+# today_seconds the daily pump limit, and reserved is the time a run that was
+# in progress could still have used. "running" is not kept: after a restart
+# no pump is on.
+PERSIST_PUMP_KEYS = ("last_run", "today_seconds", "reserved", "day", "last_detail")
 
 
 def save_persistent_state():
@@ -52,8 +52,17 @@ def restore_persistent_state():
         try:
             st["last_run"] = max(0.0, float(saved.get("last_run") or 0))
             st["today_seconds"] = max(0.0, float(saved.get("today_seconds") or 0))
+            cut_off = max(0.0, float(saved.get("reserved") or 0))
         except (TypeError, ValueError):
             continue
+        if cut_off:
+            # the process ended with this pump running; how long it ran is
+            # unknown, so the whole reservation counts
+            st["today_seconds"] += cut_off
+            log.warning(
+                f"tray {tray}: a pump run was cut off by a restart; counting "
+                f"{cut_off:.0f}s against today's limit"
+            )
         st["day"] = str(saved.get("day") or "")
         st["last_detail"] = str(saved.get("last_detail") or "")
         # a new day since it was saved: the daily total starts over, but the
@@ -151,6 +160,18 @@ def pump_refusal(tray, seconds=None, force=False):
         return _start_refusal(tray, force, daily_cap, seconds, fl)
 
 
+def _claim(st, budget):
+    """Mark a tray's pump as starting. Call with pump_lock held, then save.
+
+    The cooldown starts and the run's longest possible time is reserved before
+    the pump turns on, so a process killed part way through a run comes back
+    knowing it happened.
+    """
+    st["running"] = True
+    st["last_run"] = time.time()
+    st["reserved"] = float(budget)
+
+
 def run_pump(tray, seconds, reason="manual", force=False):
     """Run one tray's pump for `seconds`, clamped to the hard cap. Safety:
     refuses if that pump is absent, if any pump is running (one at a time, the
@@ -167,7 +188,8 @@ def run_pump(tray, seconds, reason="manual", force=False):
         if why:
             return False, why
         st = hardware.pump_state[tray]
-        st["running"] = True
+        _claim(st, secs)
+    save_persistent_state()
     elapsed = 0.0
     try:
         hardware._pumps[tray].on()
@@ -178,6 +200,7 @@ def run_pump(tray, seconds, reason="manual", force=False):
         hardware._pumps[tray].off()
         with hardware.pump_lock:
             st["running"] = False
+            st["reserved"] = 0.0
             st["last_run"] = time.time()
             st["today_seconds"] += elapsed
             st["last_detail"] = f"{reason} {elapsed:.1f}s"
@@ -212,7 +235,8 @@ def run_pump_until_full(tray, reason="fill", force=False):
         st = hardware.pump_state[tray]
         remaining = daily_cap - st["today_seconds"]
         run_cap = cap if force else min(cap, remaining)
-        st["running"] = True
+        _claim(st, run_cap)
+    save_persistent_state()
     elapsed = 0.0
     tripped = False
     # Running out of today's budget is not a failed fill: the float had less
@@ -248,6 +272,7 @@ def run_pump_until_full(tray, reason="fill", force=False):
         hardware._pumps[tray].off()
         with hardware.pump_lock:
             st["running"] = False
+            st["reserved"] = 0.0
             st["last_run"] = time.time()
             st["today_seconds"] += elapsed
             if tripped:

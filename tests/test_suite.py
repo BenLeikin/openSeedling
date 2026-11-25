@@ -705,6 +705,38 @@ def _watering():
         with config.settings_lock:
             config.settings.update(saved)
 
+    # a run cut off by a restart: what was saved as the pump started is enough
+    for st in hardware.pump_state.values():
+        st.update(running=False, today_seconds=0, reserved=0, day=config._today_str())
+    during = {}
+    real_on = hardware._pumps["1"].on
+
+    def on_and_look():
+        during.update(db.kv_get("pump_state")["1"])  # what a kill right now would leave
+        real_on()
+
+    hardware._pumps["1"].on = on_and_look
+    try:
+        water.run_pump("1", 0.2, "manual")
+    finally:
+        hardware._pumps["1"].on = real_on
+    after_run = dict(db.kv_get("pump_state")["1"])
+    db.kv_set("pump_state", {"1": during})
+    hardware.pump_state["1"].update(today_seconds=0, last_run=0.0)
+    water.restore_persistent_state()
+    back = hardware.pump_state["1"]
+    check(
+        during.get("reserved") == 0.2
+        and during.get("last_run", 0) > time.time() - 60
+        and after_run.get("reserved") == 0
+        and 0.19 < after_run.get("today_seconds", 0) < 0.6
+        and back["today_seconds"] == 0.2
+        and back["reserved"] == 0
+        and back["last_run"] == during["last_run"],
+        f"a pump run is on record before the pump starts, so a restart mid-run still "
+        f"counts it against the daily limit and the cooldown ({back['today_seconds']}s)",
+    )
+
     ok, why, detail, _ = fill(lambda res: floats.pop("1", None))
     check(
         not ok and "float sensor stopped answering" in detail,
