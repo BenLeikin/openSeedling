@@ -4,6 +4,30 @@ One entry per update zip, newest first. Install any update with
 `bash scripts/update.sh openSeedling-update-N.zip`; each is cumulative from
 the 4-17 baseline. The installer commits each one with the heading below.
 
+## Unreleased
+
+### Fixed
+- A light schedule that crosses midnight (fixed 20:00 to 06:00, or a duration ending in the small hours) now runs through the night; it used to stop at 00:00.
+- A fill cut short by the daily pump limit is no longer reported as a failed fill, and no longer disarms auto-watering for that tray.
+- A tray that cannot be watered (daily limit, reservoir empty) no longer keeps auto-watering from considering the next tray.
+- The pump buttons report a refused run instead of "started".
+- The focus sweep photographs each focus value it tests; before, every frame was taken at the configured focus.
+- An image job killed for memory reports that, instead of failing with a TypeError.
+- Flattened frames from a camera wider than 4000 px keep their proportions.
+- A status request during a two-camera capture no longer fails, and half frames from an interrupted capture are no longer listed as photos. Leftover capture scratch files are cleared at start.
+- Warnings reach Discord in the warning colour.
+- With the light off, the control loop no longer pushes a status to every open dashboard on each pass.
+- A dashboard polling during a restart shows "Controller starting" instead of empty readings.
+- `update.sh` and `deploy.sh` find tracebacks in a long log and check the port set in `.env`.
+
+### Security
+- Request bodies over 1 MB are refused.
+- Light-plan advice is escaped before it is shown (it can contain a setup's name).
+
+### Added
+- `scripts/deploy.sh`: push `main` and update the Pi from a development checkout, with a health check and rollback.
+- `.gitlab-ci.yml`: lint, format checks and the test suite on every push. `requirements-dev.txt` and a committed `package-lock.json` for the development tools.
+
 ## 63 (2026-10-14): Display off at night
 - Settings, External display, When the lights are off: a third choice, Turn the display off. The HDMI output goes off while every light is off (the panel's backlight goes dark with it) and comes back when a light comes on; a touch wakes it for a minute (the watcher reads the touch panel itself, since the compositor has nowhere to send a tap on a dark screen).
 
