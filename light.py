@@ -950,9 +950,11 @@ def control_loop():
                 hardware.set_fan(cfg.get("fan_auto_speed", 70) if want else 0, why)
             with config.state_lock:
                 l2_now = light2_state["level"]
+                was = config.state.get("brightness")
                 changed = (
                     round(config.state.get("light2_level", -1), 1) != round(l2_now, 1)
-                    or round(config.state.get("brightness") or -1, 1) != round(b, 1)
+                    or was is None
+                    or round(was, 1) != round(b, 1)
                     or config.state.get("override") != ov
                     or config.state.get("on") != on_time
                 )

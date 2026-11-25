@@ -793,6 +793,25 @@ def _sec5():
     check(t.is_alive() and calls["n"] >= 2, "control loop survives an error and retries")
     light_mod.sun_window = real_sw
 
+    # light off and steady: the loop has nothing new to tell the dashboards
+    with config.settings_lock:
+        was_ov = config.settings.get("light_override")
+        config.settings["light_override"] = "off"
+    time.sleep(0.5)  # a few passes to settle at zero
+    pushes = []
+    real_pub = status_mod.publish
+    status_mod.publish = lambda reason="update": (pushes.append(reason), real_pub(reason))[1]
+    try:
+        time.sleep(0.6)
+    finally:
+        status_mod.publish = real_pub
+        with config.settings_lock:
+            config.settings["light_override"] = was_ov
+    check(
+        "light" not in pushes,
+        f"with the light off and unchanged, the control loop pushes no status ({len(pushes)})",
+    )
+
 
 def _dli_band():
     cfg0 = c.get("/api/status").get_json()["settings"]
