@@ -254,8 +254,8 @@ def _soil_temperature(snapshot, cfg, unit_temp, sustain):
                 f"soil_cold:{key}",
                 f < lo,
                 "Soil too cold",
-                f"{reads}, below {shown((lo - 32) * 5 / 9):.0f}{tu}. Chile seed "
-                "germination slows sharply and seed rot risk rises.",
+                f"{reads}, below {shown((lo - 32) * 5 / 9):.0f}{tu}. Germination "
+                "slows sharply and the risk of seed rot rises.",
                 clear_title="Soil temperature recovered",
                 clear_message=f"{reads}.",
                 release=f > lo + TEMP_MARGIN_F,
