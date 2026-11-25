@@ -669,44 +669,44 @@ def clock_synced():
 
 
 def report_loop():
-    """Run the AI report once a day when the clock crosses ai_report_hour:minute.
-
-    A restart does NOT trigger a report: if the service starts up already past
-    today's scheduled time, today is marked done and the last stored report is
-    kept as-is. New reports come only from crossing the time while running, or
-    from the manual button."""
-    last_day = None
-    primed = False
+    """Run the AI report once a day, when the clock reaches its set time."""
+    state = {"last_day": None, "primed": False}
     while True:
         try:
-            with config.settings_lock:
-                cfg = dict(config.settings)
-            if (
-                cfg.get("ai_enabled")
-                and cfg.get("camera_enabled")
-                and ai_report.have_key()
-                and clock_synced()
-            ):
-                tz = ZoneInfo(cfg["timezone"])
-                now = datetime.now(tz)
-                target = int(cfg.get("ai_report_hour", 8)) * 60 + int(
-                    cfg.get("ai_report_minute", 0)
-                )
-                nowmin = now.hour * 60 + now.minute
-                if not primed:
-                    # first pass (on a synced clock): if we're already past
-                    # today's time, treat today as handled so a restart or
-                    # reboot doesn't fire a fresh report
-                    if nowmin >= target:
-                        last_day = now.date()
-                    primed = True
-                if nowmin >= target and last_day != now.date():
-                    log.info("running daily AI report")
-                    run_report("daily")
-                    last_day = now.date()
-        except Exception as e:
-            log.exception(f"report_loop error: {e}")
+            _report_tick(state)
+        except Exception:
+            log.exception("daily report failed")
         time.sleep(60)
+
+
+def _report_tick(state, now=None):
+    """One pass of the report loop: run the report if it is due.
+
+    A restart does not trigger one. If the service starts already past today's
+    time, today counts as done; a new report comes only from reaching the time
+    while running, or from the button. The day is marked done before the
+    report runs, so a report that fails is not attempted again every minute.
+    """
+    with config.settings_lock:
+        cfg = dict(config.settings)
+    if not (
+        cfg.get("ai_enabled")
+        and cfg.get("camera_enabled")
+        and ai_report.have_key()
+        and clock_synced()
+    ):
+        return
+    now = now or datetime.now(ZoneInfo(cfg["timezone"]))
+    target = int(cfg.get("ai_report_hour", 8)) * 60 + int(cfg.get("ai_report_minute", 0))
+    due = now.hour * 60 + now.minute >= target
+    if not state["primed"]:
+        state["primed"] = True
+        if due:
+            state["last_day"] = now.date()
+    if due and state["last_day"] != now.date():
+        state["last_day"] = now.date()
+        log.info("running daily AI report")
+        run_report("daily")
 
 
 KIOSK_CGROUP = Path("/sys/fs/cgroup/system.slice/growlight-kiosk.service/memory.current")

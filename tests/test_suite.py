@@ -2576,6 +2576,45 @@ def _canopy_stale():
         config.wake.set()
 
 
+def _report_once():
+    """The daily report runs once at its time, also when it fails."""
+    runs = []
+
+    def failing(kind):
+        runs.append(kind)
+        raise RuntimeError("report failed")
+
+    keys = ("ai_enabled", "camera_enabled", "ai_report_hour", "ai_report_minute", "timezone")
+    with config.settings_lock:
+        saved = {k: config.settings.get(k) for k in keys}
+        config.settings.update(
+            ai_enabled=True, camera_enabled=True, ai_report_hour=8, ai_report_minute=0
+        )
+        tz_ = ZoneInfo(config.settings["timezone"])
+    real = monitor.run_report, monitor.ai_report.have_key, monitor.clock_synced
+    monitor.run_report = failing
+    monitor.ai_report.have_key = monitor.clock_synced = lambda: True
+    state = {"last_day": None, "primed": False}
+    errors = 0
+    try:
+        for hour, minute in ((7, 58), (8, 0), (8, 1), (8, 2), (20, 0)):
+            try:
+                monitor._report_tick(state, datetime(2026, 3, 10, hour, minute, tzinfo=tz_))
+            except RuntimeError:
+                errors += 1
+        late = {"last_day": None, "primed": False}
+        monitor._report_tick(late, datetime(2026, 3, 10, 9, 0, tzinfo=tz_))
+    finally:
+        monitor.run_report, monitor.ai_report.have_key, monitor.clock_synced = real
+        with config.settings_lock:
+            config.settings.update(saved)
+    check(
+        runs == ["daily"] and errors == 1,
+        f"a daily report that fails is not run again that day ({len(runs)} run)",
+    )
+    check(late["last_day"] is not None, "starting after the report time does not run a report")
+
+
 def _alert_levels():
     """A warning reaches Discord at a level the embed has a colour for."""
     import alerts
@@ -4834,6 +4873,7 @@ run("Out of memory", _oom)
 run("Photo light", _photo_light)
 run("Focus sweep", _focus_sweep)
 run("Canopy staleness", _canopy_stale)
+run("Daily report", _report_once)
 run("Alert levels", _alert_levels)
 run("Heat mat", _heat_mat)
 run("Shared sensors and the heat mat setup", _shared_sensors)
