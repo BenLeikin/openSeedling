@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 from applog import log
 import db
+import events
 import sensors
 import quality
 
@@ -178,6 +179,9 @@ def publish(reason="update"):
         except queue.Full:
             with _subs_lock:
                 _subs.discard(q)  # not keeping up; it will reconnect
+
+
+events.subscribe(publish)
 
 
 def _switch_changed(key):

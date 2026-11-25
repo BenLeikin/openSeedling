@@ -8,6 +8,7 @@ import time
 from rpi_hardware_pwm import HardwarePWM
 
 from applog import log
+import events
 
 import config
 
@@ -168,7 +169,7 @@ def set_fan(speed, reason):
         fan_state.update(on=speed > 0, reason=reason, speed=round(speed))
     if changed:
         log.info(f"fan {round(speed)}% ({reason})")
-        status_mod.publish("fan")
+        events.publish("fan")
 
 
 def fan_should_run(cfg, now, on_time, off_time):

@@ -13,6 +13,7 @@ from astral.sun import sun
 
 from applog import log
 import db
+import events
 import sensors
 
 import config
@@ -1015,7 +1016,7 @@ def control_loop():
             # a ramp every pass changes brightness, but a steady day should not
             # push an identical status to every open browser twice a minute
             if changed:
-                status_mod.publish("light")
+                events.publish("light")
         except Exception as e:
             # One bad pass must not end light control for good: the thread
             # dying leaves the dashboard up while the fixture stays wherever
@@ -1146,4 +1147,3 @@ def _store_sweep(points, step, settle, key, linearize, target):
 
 # imported at the bottom: these modules import this one
 import setups as setups_mod
-import status as status_mod

@@ -7,6 +7,7 @@ import time
 
 from applog import log
 import db
+import events
 import sensors
 import quality
 
@@ -234,7 +235,7 @@ def _record_run(tray, detail, event):
         db.log_event("pump", event)
     except Exception:
         pass
-    status_mod.publish("pump")
+    events.publish("pump")
 
 
 def run_pump(tray, seconds, reason="manual", force=False):
@@ -885,7 +886,3 @@ def probe_cal_check(tray, point, volts, drift, spread):
         else:
             notes.append(f"{span:.3f}V between wet and dry")
     return problems, notes
-
-
-# imported at the bottom: these modules import this one
-import status as status_mod

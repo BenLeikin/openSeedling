@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 from applog import log
 import db
+import events
 import sensors
 import notify
 import ai_report
@@ -763,7 +764,7 @@ def sample_loop():
                 db.log_many(list(readings.items()))
                 run_alerts(readings)
                 water.check_postfill(readings)
-                status_mod.publish("sample")
+                events.publish("sample")
         except Exception as e:
             log.exception(f"sample_loop error: {e}")
         # housekeeping once a day: roll raw -> hourly, prune old raw
@@ -1105,7 +1106,7 @@ def live_loop():
                 )
                 if moved:
                     last = dict(vals)
-                    status_mod.publish("live")
+                    events.publish("live")
         except Exception as e:
             log.exception(f"live sensor read failed: {e}")
         time.sleep(max(2, every))

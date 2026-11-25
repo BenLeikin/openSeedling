@@ -361,6 +361,7 @@ import monitor  # noqa: E402
 import heat  # noqa: E402
 import camera as camera_mod  # noqa: E402
 import status as status_mod  # noqa: E402
+import events  # noqa: E402
 
 # Tests change settings directly and read the status straight back; the shared
 # poll build (reused up to 5 s between changes) is checked on its own.
@@ -972,12 +973,11 @@ def _light_schedule():
         config.settings["light_override"] = "off"
     time.sleep(0.5)  # a few passes to settle at zero
     pushes = []
-    real_pub = status_mod.publish
-    status_mod.publish = lambda reason="update": (pushes.append(reason), real_pub(reason))[1]
+    events.subscribe(pushes.append)
     try:
         time.sleep(0.6)
     finally:
-        status_mod.publish = real_pub
+        events.unsubscribe(pushes.append)
         with config.settings_lock:
             config.settings["light_override"] = was_ov
     check(

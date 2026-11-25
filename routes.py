@@ -28,6 +28,7 @@ from werkzeug.security import check_password_hash
 
 from applog import log
 import db
+import events
 
 import config
 import hardware
@@ -254,7 +255,7 @@ def _changed(resp):
         and resp.status_code < 500
         and request.path not in NOT_CHANGES
     ):
-        status_mod.publish("change")
+        events.publish("change")
     return resp
 
 
