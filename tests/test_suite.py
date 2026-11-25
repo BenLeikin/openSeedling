@@ -4072,7 +4072,9 @@ def _optimizations():
     js = page_js()
     check(
         {"sys:mem_free", "sys:app_mem"} <= set(mem)
-        and all(v > 0 for v in mem.values())
+        and mem["sys:mem_free"] > 0
+        and mem["sys:app_mem"] > 0
+        and all(v >= 0 for v in mem.values())  # swap in use can be zero
         and "{id:'device', title:'Device',           match:k=>k.startsWith('sys:')}" in js
         and "if(s.startsWith('sys:'))return 'MB';" in js,
         f"memory is logged each sample and charted under Device ({mem})",
@@ -4544,4 +4546,5 @@ print(f"\n{'All checks passed.' if not FAILS else f'{len(FAILS)} FAILED:'}")
 for f in FAILS:
     print(f"  - {f}")
 shutil.rmtree(WORK, ignore_errors=True)
-os._exit(len(FAILS))  # daemon threads (control loop) end with the process
+sys.stdout.flush()  # os._exit skips it, and a piped run would lose the summary
+os._exit(min(len(FAILS), 255))  # daemon threads (control loop) end with the process
