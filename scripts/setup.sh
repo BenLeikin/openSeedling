@@ -184,7 +184,9 @@ preflight() {
   fi
 
   echo "    sudo is needed for packages, boot config and the service"
-  sudo -v
+  # passwordless sudo needs no prompt, and "sudo -v" can still ask for a
+  # password there, which fails when no terminal is attached (deploy.sh)
+  sudo -n true 2>/dev/null || sudo -v
 }
 
 # --------------------------------------------------------------------------
