@@ -116,8 +116,10 @@ def rectify(img, corners, out_w=None, out_h=None, cols=6, rows=4):
         # square up the cells given the grid shape
         per = max(out_w / max(cols, 1), out_h / max(rows, 1))
         out_w, out_h = int(per * cols), int(per * rows)
-    out_w = max(64, min(4000, out_w))
-    out_h = max(64, min(4000, out_h))
+    # shrink both sides together so the cells stay square
+    fit = min(1.0, 4000 / max(out_w, out_h, 1))
+    out_w = max(64, int(out_w * fit))
+    out_h = max(64, int(out_h * fit))
     dst = np.float32([[0, 0], [out_w, 0], [out_w, out_h], [0, out_h]])
     M = cv2.getPerspectiveTransform(src, dst)
     return cv2.warpPerspective(img, M, (out_w, out_h))
