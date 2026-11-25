@@ -31,6 +31,7 @@ the 4-17 baseline. The installer commits each one with the heading below.
 
 ### Changed
 - One thing at a time has the light: the schedule, a photo, a focus sweep, the camera alignment, a calibration sweep or the lightning effect. A scheduled photo now waits for a sweep or the lightning effect to finish instead of changing the light under it, a sweep or effect will not start during a photo, and a holder that hangs loses the light when its time limit runs out. A photo gives the light back as soon as the frame is on disk, before it is rotated and thumbnailed.
+- The modules no longer import each other in loops. The control loop has its own module (`control.py`), with `events.py`, `readings.py`, `units.py` and `auth.py` split out of the modules that shared them, and the four route modules are Flask blueprints. The lint rule for import order is back on.
 
 ### Security
 - Request bodies over 1 MB are refused.

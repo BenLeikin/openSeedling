@@ -46,35 +46,24 @@ def have_key():
     return bool(api_key())
 
 
-def _image_b64(path, crop=None):
-    """Return a base64 JPEG of the photo, cut to `crop` (x, y, w, h fractions)
-    if given, downscaled to MAX_IMG_W on the long edge. The resize runs in
-    imgtool.py, a separate process, so the controller never loads OpenCV.
-    Falls back to the raw file bytes if that fails."""
-    try:
-        import json as _json
-        import camera
+def _image_b64(path, crop=None, imgtool=None):
+    """The photo as a base64 JPEG for the API.
 
+    With `imgtool` (camera.imgtool: a callable that runs imgtool.py in its own
+    process, so the caller never loads OpenCV) it is cut to `crop`, (x, y, w,
+    h) fractions, and scaled down to MAX_IMG_W on the long edge. Without it,
+    or if that fails, the file is sent as it is.
+    """
+    if imgtool is not None:
         roi = list(crop) if crop else [0, 0, 1, 1]
         need = MAX_IMG_W / max(0.05, min(roi[2], roi[3]))
-        r = camera.imgtool(
-            [
-                "crop",
-                path,
-                "-",
-                _json.dumps(roi),
-                "--max-w",
-                MAX_IMG_W,
-                "--min-side",
-                int(need),
-                "--q",
-                85,
-            ]
-        )
-        if r.returncode == 0 and r.stdout:
-            return base64.b64encode(r.stdout).decode()
-    except Exception:
-        pass
+        args = ["crop", path, "-", json.dumps(roi), "--max-w", MAX_IMG_W]
+        try:
+            r = imgtool(args + ["--min-side", int(need), "--q", 85])
+            if r.returncode == 0 and r.stdout:
+                return base64.b64encode(r.stdout).decode()
+        except Exception:
+            pass
     return base64.b64encode(Path(path).read_bytes()).decode()
 
 
@@ -433,9 +422,18 @@ MAX_TOKENS = 8000
 TIMEOUT_S = 240
 
 
-def generate(photo_path, data, model=None, max_tokens=MAX_TOKENS, timeout=TIMEOUT_S, crop=None):
-    """Call the Claude API with the photo + context. Returns a dict:
-    {ok, report?, raw?, ts, model, usage?, error?}. Never raises."""
+def generate(
+    photo_path,
+    data,
+    model=None,
+    max_tokens=MAX_TOKENS,
+    timeout=TIMEOUT_S,
+    crop=None,
+    imgtool=None,
+):
+    """Call the Claude API with the photo and context. Returns a dict:
+    {ok, report?, raw?, ts, model, usage?, error?}. `imgtool` resizes the
+    photo first; see _image_b64."""
     key = api_key()
     if not key:
         return {
@@ -447,7 +445,7 @@ def generate(photo_path, data, model=None, max_tokens=MAX_TOKENS, timeout=TIMEOU
         return {"ok": False, "error": "no photo to analyze yet", "ts": int(time.time())}
     model = model or DEFAULT_MODEL
     try:
-        img_b64 = _image_b64(photo_path, crop)
+        img_b64 = _image_b64(photo_path, crop, imgtool)
     except Exception as e:
         return {"ok": False, "error": f"could not read photo: {e}", "ts": int(time.time())}
     body = {

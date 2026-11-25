@@ -502,6 +502,7 @@ def run_report(reason="daily"):
             gather_report_data(),
             crop=None if _flat_on else camera_mod.crop_box(),
             model=cfg.get("ai_model"),
+            imgtool=camera_mod.imgtool,
         )
         result["reason"] = reason
         try:

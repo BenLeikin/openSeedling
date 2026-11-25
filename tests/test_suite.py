@@ -349,29 +349,29 @@ check(
 # --------------------------------------------------------------------------
 section("Import")
 
-from werkzeug.security import generate_password_hash  # noqa: E402
-from zoneinfo import ZoneInfo  # noqa: E402
+from werkzeug.security import generate_password_hash
+from zoneinfo import ZoneInfo
 
-import growlight  # noqa: E402  (imports every module, in order)
-import config  # noqa: E402
-import hardware  # noqa: E402
-import light as light_mod  # noqa: E402
-import control  # noqa: E402
-import setups as setups_mod  # noqa: E402
-import water  # noqa: E402
-import monitor  # noqa: E402
-import heat  # noqa: E402
-import camera as camera_mod  # noqa: E402
-import status as status_mod  # noqa: E402
-import events  # noqa: E402
-import readings as readings_mod  # noqa: E402
+import growlight  # imports the whole app and registers every route
+import config
+import hardware
+import light as light_mod
+import control
+import setups as setups_mod
+import water
+import monitor
+import heat
+import camera as camera_mod
+import status as status_mod
+import events
+import readings as readings_mod
 
 # Tests change settings directly and read the status straight back; the shared
 # poll build (reused up to 5 s between changes) is checked on its own.
 status_mod.POLL_REUSE_S = 0.0
-import routes  # noqa: E402
-import db  # noqa: E402
-import sensors  # noqa: E402
+import routes
+import db
+import sensors
 
 db.init()
 check(Path(db.DB_PATH).parent == APP, "database lives in the temp copy, not the repo")
@@ -437,7 +437,7 @@ check(
     config.settings.get("ai_model") == config.DEFAULTS["ai_model"] != "claude-opus-4-8",
     f"a stored former-default AI model is moved to the current one ({config.settings.get('ai_model')})",
 )
-import ai_report  # noqa: E402
+import ai_report
 
 check(
     "magenta/pink LED" not in ai_report.PROMPT and "tint" in ai_report.PROMPT,
@@ -1201,7 +1201,11 @@ def _camera_crop():
     import base64
 
     b = base64.b64decode(
-        ai_report._image_b64(camera_mod.TIMELAPSE_DIR / "20260925_120000.jpg", (0.1, 0.2, 0.5, 0.6))
+        ai_report._image_b64(
+            camera_mod.TIMELAPSE_DIR / "20260925_120000.jpg",
+            (0.1, 0.2, 0.5, 0.6),
+            camera_mod.imgtool,
+        )
     )
     ai_shape = cv2.imdecode(np.frombuffer(b, np.uint8), 1).shape[:2]
     check(ai_shape == (360, 500), f"the AI report gets the cropped photo ({ai_shape})")

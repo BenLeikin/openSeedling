@@ -1,5 +1,4 @@
 # Run: ruff check . && ruff format --check .
-#   E402  some modules import each other and finish their imports at the bottom
 #   E501  the formatter wraps code; long strings and comments are left alone
 #   B905  zip() without strict=: every zip here is over equal-length lists
 target-version = "py311"
@@ -8,7 +7,12 @@ exclude = ["venv", "timelapse", "timelapse_archive"]
 
 [lint]
 select = ["E", "F", "W", "B"]
-ignore = ["E402", "E501", "B905"]
+ignore = ["E501", "B905"]
+
+[lint.per-file-ignores]
+# the suite copies the app to a temp directory and fakes the hardware
+# modules before it can import anything from it
+"tests/*" = ["E402"]
 
 [format]
 quote-style = "double"

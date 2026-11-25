@@ -1065,10 +1065,14 @@ everything.
 ## Project layout
 
 ```
-growlight.py        entry point: imports the modules below, starts the loops and waitress
+growlight.py        entry point: registers the routes, starts the loops and waitress
 config.py           settings: DEFAULTS, config.json load/save, migrations, validators, shared state
-hardware.py         pins and actuators: PWM channels, pumps, fan, shutdown gate, cleanup()
-light.py            both lights: backends, schedules, ramps, calibration, dithering, storm, control loop
+events.py           publish/subscribe for "the status changed"
+hardware.py         pins and actuators: PWM channels, pumps, fan, shutdown steps, cleanup()
+readings.py         readings in and out of the database: validation and transient filtering
+units.py            display units (Celsius/Fahrenheit, hPa/inHg)
+light.py            both lights: backends, schedules, ramps, calibration, dithering, storm, who holds the light
+control.py          the control loop: lights from the schedule, the fan
 setups.py           grow setups, light windows, DLI integration and curves, Plan verdicts
 water.py            fills, reservoir, probe filtering and moisture, auto-water, post-fill checks
 monitor.py          sampling and live readings, validation, sensor health, alerts, AI report loop
@@ -1087,6 +1091,7 @@ notify.py           ntfy push transport
 discord_alert.py    Discord webhook transport
 ai_report.py        Claude API daily report
 imgtool.py          every OpenCV job, run as a short-lived process (never in the controller)
+auth.py             the dashboard password, the touchscreen's local trust, require_auth
 routes.py           Flask app, sign-in, pages, live status, settings
 routes_camera.py    photos, thumbnails, frames, grid, capture, timelapse
 routes_garden.py    probes, floats, plantings, tray map, pumps, auto-water
@@ -1101,10 +1106,14 @@ tests/              test_suite.py (server, no hardware), test_ui.py (browser)
 deploy/             box config applied by setup.sh (boot, unit, packages, env reference)
 ```
 
-The app modules refer to each other only as `module.name` (never
-`from module import name`), because several globals are rebound at runtime.
-Import-time code may use only `config` and `hardware`; everything else is
-looked up when a function runs.
+The modules are layered, and each imports only from layers below it:
+`config`, `db` and `sensors`; then `hardware`, `readings` and `auth`; `light`;
+`setups` and `heat`; `water`, `camera` and `control`; `monitor`; `status`;
+`routes`; and `growlight` on top, with the four route blueprints. A lower
+layer that has news for a higher one announces it through `events` or
+registers a callback (`hardware.at_shutdown`, `config.SETTINGS_VALIDATORS`).
+They refer to each other as `module.name`, never `from module import name`,
+because several module globals are rebound at runtime.
 
 Runtime files (`config.json`, `growlight.db`, `timelapse/`, `.secret`,
 `.anthropic_key`, `.discord_webhook`, `ai_report.json`) are gitignored.
