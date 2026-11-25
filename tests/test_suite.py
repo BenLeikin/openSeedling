@@ -2365,6 +2365,11 @@ def _canopy_stale():
             },
         )
         cfg = dict(config.settings)
+    # The control loop started in "Light schedule" writes the real on and off
+    # times into config.state on every pass. Park it while this section sets
+    # its own, or the checks below depend on which thread ran last.
+    real_loop_s, light_mod.LOOP_SECONDS = light_mod.LOOP_SECONDS, 3600
+    time.sleep(0.5)  # let a pass already under way finish
     with config.state_lock:
         saved_state = {k: config.state.get(k) for k in ("on", "off")}
         config.state.update(on=day.replace(hour=7), off=day.replace(hour=19))
@@ -2415,6 +2420,8 @@ def _canopy_stale():
         with config.state_lock:
             config.state.update(saved_state)
         monitor._health_cache["ts"] = 0
+        light_mod.LOOP_SECONDS = real_loop_s
+        config.wake.set()
 
 
 def _heat_mat():
