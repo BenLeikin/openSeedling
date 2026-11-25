@@ -36,8 +36,6 @@ import light as light_mod
 import camera as camera_mod
 import status as status_mod
 
-# ----------------------------- dashboard -----------------------------
-
 app = Flask(__name__)
 
 # The largest request the dashboard sends is the settings form with every
@@ -87,10 +85,10 @@ class _SessionInterface(SecureCookieSessionInterface):
     """Decide the cookie's Secure flag per request.
 
     A Secure cookie sent over plain http is dropped by the browser, so a fixed
-    True made login silently fail on a LAN install at http://<pi>:5000, and a
-    fixed False sent the session in clear behind HTTPS. "auto" marks it Secure
-    when the request arrived over HTTPS, directly or via a proxy that sets
-    X-Forwarded-Proto. An explicit true/false in config.json still wins."""
+    True breaks login on a LAN install at http://<pi>:5000, and a fixed False
+    sends the session in clear behind HTTPS. "auto" marks it Secure when the
+    request arrived over HTTPS, directly or via a proxy that sets
+    X-Forwarded-Proto. An explicit true/false in config.json wins."""
 
     def get_cookie_secure(self, app):
         mode = config.settings.get("cookie_secure", "auto")
@@ -107,7 +105,7 @@ app.session_interface = _SessionInterface()
 # One password check at a time. Werkzeug's scrypt hash needs about 32 MB per
 # check; with waitress's 16 threads, a burst of parallel logins against the
 # public URL could ask for 512 MB on a 512 MB board. Serializing also makes
-# the delay a real limit on guessing rather than a per-thread pause.
+# the delay a limit on guessing across all threads.
 _login_lock = threading.Lock()
 _login_fails = {"n": 0}
 LOGIN_DELAY_S = 0.5
@@ -142,9 +140,9 @@ def logout():
 
 
 def _asset_ver():
-    """Static asset version from file mtimes: browsers refetch the scripts
-    (static/js/*.js, screen.js) and stylesheets the moment any changes, so a
-    deploy can never leave a stale script running against new markup."""
+    """Static asset version: the newest mtime among the scripts
+    (static/js/*.js, screen.js) and stylesheets, so browsers refetch them
+    when any changes."""
     try:
         st = Path(app.static_folder)
         files = list(st.glob("js/*.js")) + [st / "style.css", st / "screen.js", st / "screen.css"]
@@ -180,9 +178,9 @@ def index():
 
 @app.after_request
 def _revalidate_scripts(resp):
-    """The dashboard's modules import each other by plain path (no ?v=), so a
-    browser must check each script is current on every load (a 304 when it
-    is) rather than keep running an old one after an update."""
+    """The dashboard's modules import each other by plain path (no ?v=), so
+    the browser is told to revalidate each script on every load (a 304 when
+    it is current)."""
     if request.path.startswith("/static/js/") or request.path.startswith("/static/screen"):
         resp.headers["Cache-Control"] = "no-cache"
     return resp
@@ -257,8 +255,8 @@ def api_stream():
     """Status pushed as it changes, as an EventSource stream.
 
     The browser reconnects on its own if this drops, and the dashboard keeps a
-    slow poll running regardless, so a stream that dies quietly degrades to the
-    old behaviour instead of freezing the page.
+    slow poll running, so a stream that dies quietly does not freeze the page.
+    Returns 503 when STREAM_MAX streams are already open.
     """
     authed = auth.is_authed()  # read while the request context still exists
     with status_mod._subs_lock:
@@ -290,16 +288,15 @@ def api_stream():
                             break
                     yield status_mod._status_event(authed)
                 except queue.Empty:
-                    # a comment keeps the connection warm and, more usefully,
-                    # fails here when the peer has gone so the thread is freed
+                    # an SSE comment keeps the connection warm, and writing it
+                    # fails when the peer has gone, which frees the thread
                     yield ": keepalive\n\n"
         finally:
             with status_mod._subs_lock:
                 status_mod._subs.discard(q)
 
-    # No "Connection" header: it is hop-by-hop, and PEP 3333 forbids a WSGI
-    # application from setting it. The dev server tolerated it; waitress
-    # refuses the response outright.
+    # No "Connection" header: it is hop-by-hop, PEP 3333 forbids a WSGI
+    # application from setting it, and waitress refuses the response.
     return Response(
         gen(),
         mimetype="text/event-stream",
@@ -325,9 +322,8 @@ def status():
 def update_settings():
     """Validate and apply every recognized field in the body.
 
-    Partial bodies are fine, and one bad field no longer discards the rest:
-    valid fields are saved, invalid ones come back in `errors` by name so the
-    form can say exactly what was rejected. Unknown keys are ignored."""
+    Partial bodies are fine. Valid fields are saved; invalid ones come back in
+    `errors` by name and do not block the rest. Unknown keys are ignored."""
     data = request.get_json(silent=True) or {}
     new, errors = {}, {}
     for k, v in data.items():
@@ -386,8 +382,8 @@ def update_settings():
             size_was = (config.settings.get("usb_width"), config.settings.get("usb_height"))
             config.settings.update(new)
             crop_reset = False
-            # (the settings form resubmits the crop field unchanged, so "the
-            # crop was not edited in this save" is the test, not "absent")
+            # The settings form resubmits the crop field unchanged, so the test
+            # is that the crop was not edited in this save, not that it is absent.
             if (
                 roi_was
                 and new.get("roi", roi_was) == roi_was
@@ -399,8 +395,8 @@ def update_settings():
                 config.settings["roi"] = ""
                 crop_reset = True
                 log.info("capture size changed: crop reset to full frame")
-            # a camera removed or swapped, or a new size: the alignment of the
-            # two cameras no longer fits, so photos go back to camera 1 alone
+            # a camera removed or swapped, or a new size: the saved alignment of
+            # the two cameras does not fit, so photos go back to camera 1 alone
             if camera_mod.unstitch(config.settings):
                 if config.settings.get("roi"):
                     config.settings["roi"] = ""

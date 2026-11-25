@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 """Image work for the controller, run as a separate short-lived process.
 
-OpenCV costs about 40 MB the moment it is imported and never gives it back,
-on a 512 MB board where memory is the scarcest resource. So the controller
-never imports it: every warp, crop, rotation, resize and
-sharpness score happens here, launched through camera.oom_first() so that
-under pressure the kernel kills this, not the controller. Memory is returned
-when the process exits.
+OpenCV costs about 40 MB once imported and never gives it back, on a 512 MB
+board. The controller never imports it: every warp, crop, rotation, resize
+and sharpness score happens here, launched through camera.oom_first() so
+that under memory pressure the kernel kills this process first.
 
     imgtool.py rectify SRC DST CORNERS_JSON COLS ROWS [--max-w N] [--min-side N] [--q N]
     imgtool.py crop    SRC DST ROI_JSON [--max-w N] [--min-side N] [--q N]
@@ -34,20 +32,19 @@ import growth
 # Two side-by-side cameras: a homography maps camera 2's frame onto camera 1's
 # plane. The trays are close to flat and seen from above, so one homography
 # holds for the whole overlap (plants standing up are off that plane and may
-# double slightly in the seam). It is found once by `align` and reused by
-# every `stitch`, which is then only a warp and a blend.
+# double slightly in the seam). `align` finds it once; every `stitch` reuses it.
 # Features are matched on frames scaled to this. SIFT doubles the frame
-# internally and keeps float pyramids, so at 1280 it peaked near 340 MB: at
-# 640 it is about 130 MB (Python and OpenCV alone are 50) and, on leaves and
-# tray cells, finds as many agreeing points. ORB is far lighter per pixel.
+# internally and keeps float pyramids: it peaks near 340 MB at 1280 and about
+# 130 MB at 640 (Python and OpenCV alone are 50), and at 640 finds as many
+# agreeing points on leaves and tray cells. ORB is far lighter per pixel.
 ALIGN_WORK_PX = 640
 ALIGN_WORK_PX_ORB = 1280
 MIN_INLIERS = 12  # points agreeing on one fit (a 4-parameter fit, so 12 is plenty)
 # Plants stand up off the tray plane and the cameras are close, so the same
-# leaf shifts by different amounts between the two views (parallax). A tight
-# planar fit rejected most true matches (15 of 85 on the rig); the fit
-# is now a shift, turn and scale with a tolerance of 2% of the frame, and only
-# refined to a full perspective fit when that keeps nearly all of them.
+# leaf shifts by different amounts between the two views (parallax), and a
+# tight planar fit rejects most true matches. The fit is a shift, turn and
+# scale with a tolerance of 2% of the frame, refined to a full perspective fit
+# only when that keeps nearly all of the points.
 FIT_TOL = 0.02
 MAX_TURN_DEG = 15  # each camera is already turned the right way up
 SCALE_RANGE = (0.8, 1.25)
@@ -112,8 +109,9 @@ def crop_array(img, roi):
 
 
 def canvas_box(H, w, h):
-    """(x0, y0, W, Hh): the box holding camera 1's frame and camera 2's
-    warped frame, in camera 1's pixel coordinates."""
+    """(x0, y0, W, Hh, quad): the box holding camera 1's frame and camera 2's
+    warped frame, in camera 1's pixel coordinates, and camera 2's warped
+    corners."""
     quad = cv2.perspectiveTransform(
         np.float32([[0, 0], [w, 0], [w, h], [0, h]]).reshape(-1, 1, 2), np.float64(H)
     ).reshape(-1, 2)
@@ -199,7 +197,7 @@ def align(p1, p2, matches_out=None, rotate=0):
     small = [clahe.apply(cv2.cvtColor(_load_scaled(p, s), cv2.COLOR_BGR2GRAY)) for p in (p1, p2)]
     small[1] = cv2.resize(small[1], (small[0].shape[1], small[0].shape[0]))
     # SIFT finds about twice the matches of ORB in a thin overlap of soil and
-    # leaves; ORB only where this OpenCV lacks it
+    # leaves; ORB is the fallback where this OpenCV build has no SIFT.
     if sift:
         det, norm = cv2.SIFT_create(nfeatures=4000), cv2.NORM_L2
     else:
@@ -328,11 +326,12 @@ def _jpeg_wh(path):
 
 
 def _seam_alpha(out, wb, ma, mb):
-    """How much of camera 2 to show at each pixel (0..255). In the overlap
-    the cut follows the path of least difference between the two views
-    (around leaves rather than through them, so a leaf that stands up and
-    lands in a different place in each view is not shown twice), softened a
-    little; elsewhere it is whichever camera sees that pixel."""
+    """How much of camera 2 to show at each pixel (0..255).
+
+    In the overlap the cut follows the path of least difference between the
+    two views, so it goes around leaves and a leaf that lands in a different
+    place in each view is not shown twice. The cut is softened over
+    SEAM_FEATHER; elsewhere it is whichever camera sees the pixel."""
     W = out.shape[1]
     f = min(1.0, SEAM_WORK_PX / float(W))
 
@@ -370,9 +369,9 @@ def _seam_alpha(out, wb, ma, mb):
 def stitch(p1, p2, H, max_w=None):
     """Camera 1 and camera 2 warped onto one canvas and joined along a seam.
 
-    Memory matters on the Zero with the touchscreen running: each frame is
-    scaled to the output size as soon as it is decoded, camera 1 is placed and
-    freed before camera 2 is read, and the blend runs a few rows at a time."""
+    To keep memory low on the Zero, each frame is scaled to the output size as
+    soon as it is decoded, camera 1 is placed and freed before camera 2 is
+    read, and the blend runs 64 rows at a time."""
     w, h = _jpeg_wh(p1)
     H = np.float64(H)
     x0, y0, W, Hh, _quad = canvas_box(H, w, h)
@@ -462,7 +461,7 @@ def main(argv):
                 warped = growth.rectify(img, corners, cols=int(cols), rows=int(rows))
                 cv2.imwrite(str(out), warped, [cv2.IMWRITE_JPEG_QUALITY, int(opt.get("q", 88))])
             except Exception:
-                shutil.copyfile(src, out)  # a blip, not a gap in the timeline
+                shutil.copyfile(src, out)  # copied unwarped, so the timeline has no gap
     elif op == "sharpness":
         for path in pos:
             img = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)

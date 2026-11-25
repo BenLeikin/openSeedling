@@ -1,4 +1,5 @@
-"""Light and climate routes: the light, its schedule and sweeps, the smart plug, the fan and the heat mat.
+"""Light and climate routes: the light, its schedule and sweeps, the smart
+plug, the fan and the heat mat.
 
 A Flask blueprint; growlight.py registers it on the app.
 """
@@ -25,7 +26,7 @@ bp = Blueprint("climate", __name__)
 @bp.route("/api/lightning", methods=["POST"])
 @auth.require_auth
 def api_lightning():
-    """Run a short lightning effect on the grow light. Entirely for fun."""
+    """Run (or stop) a short lightning effect on the grow light."""
     data = request.get_json(silent=True) or {}
     if data.get("stop"):
         light_mod._lightning_stop.set()
@@ -66,8 +67,8 @@ def api_lightning():
 @auth.require_auth
 def api_light():
     """Manual light hold. 'on' forces manual_bright, 'off' forces dark, 'auto'
-    hands control back to the sun schedule. An optional 'brightness' (0-100)
-    sets the level the 'on' hold uses."""
+    hands control back to the schedule. An optional 'brightness' (0-100) sets
+    the level the 'on' hold uses."""
     data = request.get_json(silent=True) or {}
     mode = data.get("mode")
     bright = data.get("brightness")
@@ -157,11 +158,9 @@ def api_light_sweep():
 def api_plug_discover():
     """Find TP-Link plugs on the local network.
 
-    Broadcast discovery, so it only sees devices on the same subnet as the Pi.
-    Credentials are optional: without them, newer KLAP devices still answer
-    discovery with their model and address, they just report that they could
-    not be authenticated, which is exactly what the user needs to know before
-    typing a password.
+    Broadcast discovery, so it sees only devices on the Pi's subnet.
+    Credentials are optional: without them a newer KLAP device still answers
+    with its model and address, and is reported as needs_auth.
     """
     data = request.get_json(silent=True) or {}
     user = str(data.get("user") or "").strip()
@@ -214,9 +213,8 @@ def api_plug_discover():
 def api_plug_test():
     """Connect to a plug and report what it is, without saving anything.
 
-    Takes the host and credentials from the body so a plug can be tried before
-    it is committed to settings; falls back to whatever is configured, which
-    makes this double as a health check for the current plug.
+    Takes the host and credentials from the body, so a plug can be tried
+    before it is saved; with no host it tests the configured plug.
     """
     data = request.get_json(silent=True) or {}
     host = str(data.get("host") or "").strip()
@@ -277,7 +275,7 @@ def api_fan():
                 pass
         mode = config.settings.get("fan_mode", "auto")
         config.save_config()
-    config.wake.set()  # apply on the next loop pass immediately
+    config.wake.set()  # wake the loop to apply it now
     return jsonify(ok=True, mode=mode)
 
 
@@ -304,9 +302,9 @@ def api_heat():
 @bp.route("/api/schedule", methods=["POST"])
 @auth.require_auth
 def api_schedule():
-    """Update just the schedule window. Separate from /api/settings so the
-    chart's drag handles can commit a change without resubmitting every
-    unrelated setting. Only meaningful in fixed and duration modes."""
+    """Update the schedule window alone, so the chart's drag handles can
+    commit a change without resubmitting every setting. Refused in solar
+    mode."""
     data = request.get_json(silent=True) or {}
     with config.settings_lock:
         mode = config.settings.get("schedule_mode", "solar")

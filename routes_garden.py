@@ -1,4 +1,5 @@
-"""Tray and water routes: probe calibration, floats, plantings and the tray map, the pumps and auto-watering.
+"""Tray and water routes: probe calibration, floats, plantings and the tray
+map, the pumps and auto-watering.
 
 A Flask blueprint; growlight.py registers it on the app.
 """
@@ -26,10 +27,9 @@ bp = Blueprint("garden", __name__)
 def probe_cal_set():
     """Capture a tray probe's reading as its wet (100%) or dry (0%) anchor.
 
-    Watches the probe for a few seconds rather than taking one instant reading,
-    so soil that is still absorbing water is caught before it becomes a bad
-    anchor. A suspect capture is refused with the reason; pass force to store
-    it regardless.
+    Watches the probe for water.PROBE_SETTLE_S seconds, so soil that is still
+    absorbing water is not stored as an anchor. A suspect capture is refused
+    with the reason; pass force to store it anyway.
     """
     data = request.get_json(silent=True) or {}
     tray = str(data.get("tray", ""))
@@ -57,8 +57,8 @@ def probe_cal_set():
         return jsonify(ok=False, error="no reading from that probe"), 200
 
     problems, notes = water.probe_cal_check(tray, point, live, drift, spread)
-    # force means store it: the checks become advice, not a veto. They still
-    # come back in the response so the reason is on record.
+    # With force the value is stored, and the checks come back in the response
+    # as advice.
     if problems and not force:
         return jsonify(
             ok=False,
@@ -138,10 +138,8 @@ def api_planting_end():
     """Finish a planting: record it to history, then clear the cell.
 
     Body: {"tray": "1", "cell": "A1", "outcome": "transplanted"|"died"}.
-    The cell is emptied so it can be replanted immediately; everything it held
-    moves to the plantings table, which is what the germination stats read.
-    Clearing without recording would delete a data point from the variety's
-    success rate every time you potted something on.
+    Everything the cell held moves to the plantings table, which the
+    germination stats read, and the cell is emptied so it can be replanted.
     """
     data = request.get_json(silent=True) or {}
     tray = str(data.get("tray", ""))
@@ -182,8 +180,8 @@ def api_plantings():
 def api_planting_restore():
     """Put a finished planting back in its cell, for a misclick.
 
-    Refused when the cell has since been replanted: silently overwriting a new
-    planting to undo an old mistake would be the worse failure.
+    Refused with 409 when the cell has been replanted since, so a new planting
+    is never overwritten.
     """
     data = request.get_json(silent=True) or {}
     try:
@@ -294,10 +292,8 @@ def api_tray_layout():
     Body: {"action": "add"} | {"action": "remove", "tray": id}
         | {"action": "resize", "tray": id, "rows": n, "cols": n, "label": str}
 
-    Resizing keeps every cell that still fits the new grid. Cells that fall
-    outside it are reported as `dropped`, and are only discarded when the
-    caller passes confirm=true, so a mis-tap cannot silently delete planting
-    records.
+    Resizing keeps every cell that fits the new grid. Cells outside it are
+    reported as `dropped` and discarded only with confirm=true.
     """
     data = request.get_json(silent=True) or {}
     action = str(data.get("action", "resize"))
@@ -379,7 +375,7 @@ def pump_test():
         secs = 3.0
     force = bool(data.get("force", False))
     fill = bool(data.get("until_full"))
-    # answer a refusal here; once the thread starts, nobody is left to tell
+    # a refusal is answered here: once the thread starts, no response carries it
     why = water.pump_refusal(tray, None if fill else secs, force)
     if why:
         return jsonify(ok=False, error=why), 200
@@ -397,12 +393,12 @@ def pump_test():
 @bp.route("/api/auto_water", methods=["POST"])
 @auth.require_auth
 def api_auto_water():
-    """Arm or disarm autonomous watering.
+    """Arm or disarm autonomous watering, for the trays in the body or every
+    pump tray.
 
-    Arming is refused while any tray has a blocker, because the trigger is a
-    probe reading and an untrustworthy probe means a flood or a drought.
-    Disarming is always allowed and never questioned.
-    """
+    Arming is refused while any of those trays has a blocker: the trigger is a
+    probe reading, and an untrustworthy probe means a flood or a drought.
+    Disarming is always allowed."""
     data = request.get_json(silent=True) or {}
     want = bool(data.get("enabled"))
     # which trays: the ones asked for (a setup's trays), else every pump tray

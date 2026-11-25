@@ -1,4 +1,5 @@
-"""Camera routes: photos, thumbnails and frames, the grid, capture and preview, the timelapse and its video.
+"""Camera routes: photos, thumbnails and frames, the grid, capture and preview,
+the timelapse and its video.
 
 A Flask blueprint; growlight.py registers it on the app.
 """
@@ -106,9 +107,8 @@ def update_grid():
     with config.settings_lock:
         cur = config.settings.get("grid") or {}
         cur_locked = bool(cur.get("locked", False))
-        # Server-side lock: while locked, the geometry cannot be changed. A
-        # stale tab or stray save can't move a locked grid; you must unlock
-        # first (which leaves the geometry untouched).
+        # While the grid is locked its geometry cannot change, so a stale tab
+        # or a stray save cannot move it. Unlocking leaves the geometry as it is.
         if cur_locked:
 
             def _same(a, b):
@@ -133,7 +133,7 @@ def update_grid():
             "locked": locked,
         }
         config.save_config()
-    # audit trail so a future revert can be traced to who/when/what
+    # event log: when the grid was saved, and with what geometry
     try:
         db.log_event(
             "grid", f"saved corners[0]={corners[0]} rows={rows} cols={cols} locked={locked}"
@@ -172,12 +172,10 @@ def detect_grid():
 def api_reset_timelapse():
     """Archive the current timelapse and start a fresh one.
 
-    Photos are MOVED, not deleted: a grow run is not reproducible, so the old
-    frames go to timelapse_archive/<timestamp>/ and can be restored or removed
-    by hand once you are sure. Thumbnails and the rendered video are rebuilt
-    from scratch, and the camera-derived per-cell history is optionally cleared
-    since it was measured against the old geometry.
-    """
+    Photos are moved, not deleted: the old frames and the rendered video go to
+    timelapse_archive/<timestamp>/. Without `confirm` it only reports how many
+    photos would be archived. Thumbnails are removed, and with
+    `clear_readings` so are the camera-derived series."""
     data = request.get_json(silent=True) or {}
     if not data.get("confirm"):
         count, _, _ = camera_mod.photo_inventory()
@@ -222,9 +220,9 @@ def api_reset_timelapse():
 def api_rebuild_thumbs():
     """Regenerate every thumbnail from its source photo.
 
-    Needed after the grid corners move or flattening is toggled: thumbnails are
-    built once at capture time, so existing ones keep whatever geometry was
-    current then and the scrubber would show a mix.
+    Thumbnails are built once per photo, so after the grid corners move or
+    flattening is toggled the existing ones keep the geometry they were built
+    with.
     """
     camera_mod.rebuild_thumbs_async()
     return jsonify(ok=True, started=True)
@@ -262,9 +260,9 @@ def api_capture():
         camera_mod.capture_lock.release()
     if not path:
         return jsonify(ok=False, error="Capture failed; check the camera and the log."), 200
-    # analyze growth in the background so the response returns as soon as the
-    # photo is on disk -- but only inside the photoperiod: a night capture is
-    # lit differently and would pollute the growth/dryness series
+    # Canopy analysis runs in the background, so the response returns as soon
+    # as the photo is on disk. Only inside the photoperiod: a night capture is
+    # lit differently and would skew the canopy series.
     with config.state_lock:
         on_t, off_t = config.state["on"], config.state["off"]
     if on_t is not None and off_t is not None and on_t <= now <= off_t:
@@ -297,10 +295,10 @@ def api_preview():
             backend = config.settings.get("camera_backend", "rpicam")
             cfg_snapshot = dict(config.settings)
         if backend == "usb":
-            # The same mode as a real photo, only fewer warmup frames. A UVC
-            # camera reads a different part of its sensor in each mode: the
-            # old 1280x720 preview showed a wider 16:9 view than the 4:3
-            # photos, so what you aligned was not what got captured.
+            # The same mode as a real photo, with fewer warmup frames. A UVC
+            # camera reads a different part of its sensor in each mode
+            # (1280x720 is a wider 16:9 view than the 4:3 photos), so a preview
+            # in another mode would not show what gets captured.
             ok, err = camera_mod._usb_capture_view(
                 cfg_snapshot,
                 tmp,
@@ -613,12 +611,12 @@ def cropped_image():
 
 @bp.route("/rectified.jpg")
 def rectified_image():
-    """The latest photo flattened through the grid corners. This is what the
-    per-cell analysis actually sees, so it is the honest way to check corner
-    placement: if the tray edges are not straight here, the corners are wrong.
+    """The latest photo flattened through the grid corners, as the canopy
+    analysis sees it: if the tray edges are not straight here, the corners are
+    wrong.
 
-    Cached per (photo, geometry): the warp is recomputed only when a new photo
-    lands or the corners move, not once per open browser tab."""
+    Cached per (photo, geometry), so the warp is recomputed only when a new
+    photo lands or the corners move."""
     _, latest, _ = camera_mod.photo_inventory()
     if not latest:
         return ("no photo yet", 404)

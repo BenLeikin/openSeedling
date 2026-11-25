@@ -37,9 +37,8 @@ def lux_k():
 
 
 def ppfd_from_lux(lux, at_canopy=True):
-    """PPFD in umol/m2/s. By default reported at canopy height, since that is
-    what the plants actually experience; pass at_canopy=False for the raw
-    sensor plane."""
+    """PPFD in umol/m2/s, at canopy height by default; pass at_canopy=False
+    for the sensor plane. None without a lux factor or a reading."""
     k = lux_k()
     if not k or lux is None:
         return None
@@ -47,14 +46,12 @@ def ppfd_from_lux(lux, at_canopy=True):
 
 
 def dli_between(start, end, key="lux", k=None):
-    """Measured light between two unix times: (mol/m2, covered, lit_seconds).
+    """Measured light between two unix times: (mol/m2, covered, lit_seconds),
+    or None without a lux factor or two samples.
 
-    The same integration as dli_today, over any window. `covered` is the
-    fraction of the window the sensor record actually spans; gaps over 30
-    minutes are left out rather than invented, so a restart or an outage
-    shows up as low coverage instead of as a dim day. lit_seconds is time the
-    sensor saw real light, whatever produced it.
-    """
+    `covered` is the fraction of the window the sensor record spans: gaps over
+    30 minutes are left out, so a restart or an outage shows as low coverage.
+    lit_seconds is the time the sensor read above the dark level."""
     k = k or lux_k()
     if not k or end <= start:
         return None
@@ -80,9 +77,8 @@ def measured_day(cfg, now, off_time, key="lux", k=None):
     """The most recent complete day as the light sensor recorded it.
 
     Today once every light is out (the photoperiod is over and the sensor has
-    read dark for a quarter hour), otherwise yesterday. The source is named so
-    the card can say which day it is judging.
-    """
+    read dark for a quarter hour), otherwise yesterday. Returns mol, lit_hours
+    and day ("today" or "yesterday"), or None without 90% sensor coverage."""
     midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
     t_mid, t_now = midnight.timestamp(), now.timestamp()
     if now >= off_time:
@@ -103,11 +99,9 @@ def measured_day(cfg, now, off_time, key="lux", k=None):
 
 
 def dli_today(key="lux", k=None):
-    """Daily light integral so far today, in mol/m2/day: PPFD integrated over
-    time since local midnight. This is the number that actually tracks growth,
-    since it folds intensity and duration (ramps included) into one figure.
-    Trapezoidal over logged lux; gaps longer than 30 min are skipped rather
-    than interpolated, so downtime doesn't invent light that never fell."""
+    """Daily light integral so far today, in mol/m2/day: PPFD at canopy height
+    integrated over time since local midnight. Trapezoidal over logged lux;
+    gaps longer than 30 min are skipped, so downtime adds no light."""
     k = k or lux_k()
     if not k:
         return None
@@ -129,9 +123,9 @@ def dli_today(key="lux", k=None):
 
 
 def day_light_summary(key="lux", k=None):
-    """Today's light in one shot: DLI so far, the peak intensity reached, and
-    how long the light has actually been delivering. Reads the same lux history
-    the DLI integration uses, so the numbers always agree."""
+    """Today's light: DLI so far, the peak intensity reached and the minutes
+    lit, from the same lux history the DLI integration reads. None without
+    samples."""
     with config.settings_lock:
         tz = ZoneInfo(config.settings["timezone"])
     now = datetime.now(tz)
@@ -145,7 +139,7 @@ def day_light_summary(key="lux", k=None):
     lit_s = 0
     for (t0, v0), (t1, _) in zip(pts, pts[1:]):
         dt = t1 - t0
-        if 0 < dt <= 1800 and v0 >= 100:  # 100 lx: light is genuinely on
+        if 0 < dt <= 1800 and v0 >= 100:  # 100 lx and above counts as lit
             lit_s += dt
     return {
         "dli": dli_today(key, k),
@@ -157,14 +151,11 @@ def day_light_summary(key="lux", k=None):
 
 
 def dli_forecast(cfg, now, on_time, off_time):
-    """Project today's final DLI by integrating the *scheduled* brightness over
-    the rest of the photoperiod and converting through the measured light
-    response curve. Far better than extrapolating the average so far, which
-    misreads the morning ramp as a dim day and midday as a bright one.
+    """Forecast the light still to come today: the scheduled brightness over
+    the rest of the photoperiod, through the measured light response curve.
 
-    Returns the forecast remaining mol/m2, or None when it can't be computed
-    (no sweep on file, no lux factor, or the light is already done for today).
-    """
+    Returns the remaining mol/m2, or None when it cannot be computed (no sweep
+    on file, no lux factor, or the photoperiod is over)."""
     k = lux_k()
     curve = (cfg.get("light_curve") or {}).get("points")
     if not k or not curve or now >= off_time:
@@ -174,11 +165,9 @@ def dli_forecast(cfg, now, on_time, off_time):
     cf = canopy_factor()
 
     def lux_at(pct):
-        """Interpolate the measured curve at a dashboard brightness.
-
-        The stored curve is RAW hardware response, so the dashboard percent
-        goes through the same calibration the light itself uses first.
-        """
+        """Lux at a dashboard brightness. The stored curve is the raw hardware
+        response, so the percent goes through the light's own calibration
+        first."""
         return light_mod.dashboard_lux(pct, cfg, pts)
         if pct <= pts[0][0]:
             return pts[0][1]
@@ -260,12 +249,11 @@ FIXTURE_LABELS = {
 
 
 def light_options(cfg=None):
-    """The lights a setup can be assigned, named by what they physically are.
+    """The lights a setup can be assigned, labeled by fixture.
 
-    Internally a setup stores "main" or "second", because which fixture is
-    main is a setting (light_backend) and the second light always takes the
-    PWM output main is not using. People think in fixtures, so the names
-    come from the wiring, and they follow a backend change on their own."""
+    A setup stores "main" or "second": which fixture is main is a setting
+    (light_backend), and the second light takes the PWM output main is not
+    using. The labels come from the wiring, so they follow a backend change."""
     if cfg is None:
         with config.settings_lock:
             cfg = dict(config.settings)
@@ -325,9 +313,8 @@ def setup_window(cfg, setup, main_on, main_off):
 
 def camera_trays(cfg):
     """Tray ids the camera measures: its setup's trays, or every tray when the
-    camera is not assigned to a setup with trays. Canopy is only computed,
-    shown and reported for these; another tray's old canopy readings are the
-    past, not the present."""
+    camera is not assigned to a setup with trays. Canopy is computed, shown
+    and reported only for these."""
     cam = setup_with(cfg, "camera")
     got = [str(t) for t in ((cam or {}).get("trays") or [])]
     return got or sorted(str(t) for t in (cfg.get("trays") or {}))
@@ -520,9 +507,9 @@ def setup_status(cfg, setup, on_time, off_time, tz):
     on_time, off_time = setup_window(cfg, setup, on_time, off_time)
     day = day_light_summary(key, k) if key else None
     if day:
-        # What the rest of today should add, as the SENSOR recorded it over the
-        # same hours yesterday: every light and every ramp included, with no
-        # model of any fixture. Nothing is forecast without a clean record.
+        # What the rest of today should add: what the sensor recorded over the
+        # same hours yesterday, every light and ramp included. No forecast
+        # unless the record covers 90% of those hours.
         now_ = datetime.now(tz)
         midnight = now_.replace(hour=0, minute=0, second=0, microsecond=0)
         rest = dli_between(now_.timestamp() - 86400, midnight.timestamp(), key, k)
@@ -553,9 +540,9 @@ def setup_status(cfg, setup, on_time, off_time, tz):
 def light_plan(cfg, on_time, off_time, setup=None):
     """Judge a whole day's light from what the sensor measured.
 
-    The last complete day as recorded, whatever lit it: one fixture, two, a
-    window, a storm. Earlier this modelled the fixtures instead, which called
-    a day "on track" at 10.8 mol while the sensor had measured 14.4.
+    Uses the last complete day as recorded (measured_day), whatever lit it:
+    one fixture, two, or a window. Returns status (ok, low, high, pending or
+    no_sensor), the day's mol and lit hours, and advice lines.
     """
     with config.settings_lock:
         tz = ZoneInfo(config.settings["timezone"])

@@ -26,8 +26,8 @@ import heat as heat_mod
 import camera as camera_mod
 
 
-# never sent to the browser: /api/status is readable without login, and the
-# frontend has no use for any of these
+# Never sent to the browser: /api/status is readable without login, and the
+# frontend has no use for any of these.
 SECRET_SETTINGS = ("password_hash", "discord_webhook", "ntfy_topic", "kasa_user", "kasa_pass")
 # Only for a signed-in viewer: where the grow is. The public dashboard does not
 # need coordinates to render, and a precise latitude/longitude is a home address.
@@ -40,24 +40,21 @@ def public_settings(cfg, authed=True):
 
 
 # ---- live updates (server-sent events) ----------------------------------
-# Waitress can hold a connection open per worker thread, which the development
-# server could not; that is what makes this possible at all. Each subscriber
-# costs one of the server's threads for as long as it is connected, so the
-# count is capped well below the pool: a browser left open on a dozen tabs must
-# not be able to starve the controller of threads to answer with.
+# Each subscriber holds one of waitress's worker threads for as long as it is
+# connected, so the count is capped well below the pool: a browser left open
+# on a dozen tabs must not starve the controller of threads.
 STREAM_MAX = 6  # of waitress's 16 threads
 STREAM_QUEUE = 8  # events buffered per subscriber before it is culled
-STREAM_HEARTBEAT = 10.0  # seconds. Also how quickly a closed tab frees its
-# slot: the write that fails is what tells us the
-# peer is gone, so this doubles as the reclaim time
+# Seconds between heartbeats. Also how quickly a closed tab frees its slot:
+# the failed write is what shows the peer is gone.
+STREAM_HEARTBEAT = 10.0
 
 _subs = set()
 _subs_lock = threading.Lock()
 
-# One rendered status per change, shared by every open tab. Without this each
-# subscriber built its own copy on every push: with six tabs open, six times
-# the SQLite work on a Pi Zero for the same answer. Two variants at most,
-# because a signed-out viewer gets a redacted copy.
+# One rendered status per change, shared by every open tab, so six tabs do not
+# cost six times the SQLite work on a Pi Zero. Two variants at most: a
+# signed-out viewer gets a redacted copy.
 _pub_seq = [0]  # bumped by every publish()
 _status_cache = {}  # authed -> (seq it was built at, SSE text)
 _status_build_lock = threading.Lock()
@@ -81,10 +78,9 @@ POLL_REUSE_S = 5.0
 
 
 def shared_payload(authed):
-    """status_payload for the polled endpoint, built at most once per change
-    (and at most every POLL_REUSE_S) per signed-in state. The stream already
-    shares one build per change; the polled endpoint did not, and the
-    touchscreen polls it every 10 s on top of every open tab."""
+    """status_payload for the polled endpoint, per signed-in state: one build
+    is reused until the next publish, or for POLL_REUSE_S if that is sooner.
+    The touchscreen polls every 10 s on top of every open tab."""
     authed = bool(authed)
     with _status_build_lock:
         seq, now = _pub_seq[0], time.monotonic()
@@ -145,10 +141,9 @@ hardware.at_shutdown(_end_streams)
 def publish(reason="update"):
     """Hand the current status to every listening browser.
 
-    Called from the loops after something actually changes, which is the whole
-    point: a poll asks every 15 seconds whether anything happened, this says so
-    the moment it does. Never raises and never blocks a control loop: a
-    subscriber whose queue has backed up is dropped rather than waited for.
+    Called from the loops when something changes. Never raises and never
+    blocks a control loop: a subscriber whose queue has backed up is dropped,
+    and reconnects.
     """
     with _subs_lock:
         _pub_seq[0] += 1
@@ -180,15 +175,13 @@ except Exception as e:  # a missing switch must never stop the app
 
 
 def status_payload(authed=None):
-    """The dashboard's whole view of the world, as a dict.
-
-    Shared by the polled endpoint and the live stream so both render from
-    byte-identical data; building it twice in two places is how they drift.
+    """The dashboard's whole view of the world, as a dict, shared by the polled
+    endpoint and the live stream. {"error": "warming up"} until the first
+    schedule is computed.
 
     `authed` is passed in by the stream: its generator runs after the request
-    context has been torn down, so the session is not readable from there. The
-    flag is captured once when the stream opens, and a login or logout
-    reconnects the stream anyway."""
+    context is gone, so the session cannot be read there. The flag is captured
+    when the stream opens; a login or logout reconnects the stream."""
     with config.state_lock:
         s = dict(config.state)
         cam = dict(camera_mod.camera)
@@ -199,9 +192,9 @@ def status_payload(authed=None):
     tz = ZoneInfo(cfg["timezone"])
     count, _, latest_time = camera_mod.photo_inventory()
     snap = db.latest()  # one query serves the whole response
-    # Overlay the live read so the chips show the room as it is now, not as it
-    # was at the last logged sample. db.latest() holds (ts, value) tuples, so
-    # the overlay must use that shape. Charts and alerts still read the record.
+    # Overlay the live read, so the chips show the room as it is and not as it
+    # was at the last logged sample. The overlay keeps db.latest()'s
+    # (ts, value) shape. Charts and alerts read the record.
     lv = monitor.live_readings
     if lv["values"] and time.time() - lv["ts"] < 120:
         for k, v in lv["values"].items():
@@ -222,8 +215,8 @@ def status_payload(authed=None):
             ),
         }
         for k, (ts, v) in snap.items()
-        # legacy per-cell camera series (dry:/growth:/moisture:) are
-        # no longer written or shown; canopy hides with the camera
+        # Per-cell camera series (dry:, growth:, moisture:) left in an old
+        # database are not shown; canopy hides with the camera.
         if not (k.startswith("dry:") or k.startswith("growth") or k.startswith("moisture:"))
         and (cam_on or not k.startswith("canopy:"))
         and (not k.startswith("canopy:") or k[7:] in _cam_trays)

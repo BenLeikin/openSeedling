@@ -77,16 +77,13 @@ def api_report_run():
 def build_backup(include_secrets=False):
     """Build a restorable snapshot in memory and return (bytes, filename).
 
-    The database is copied with SQLite's online backup API rather than by
-    reading the file. This runs in WAL mode with the app writing continuously,
-    and a plain file copy can capture a torn database that looks fine until the
-    day you need it. The copy is then integrity-checked before it ships, since
-    a backup nobody verifies is a hope rather than a backup.
+    The database is copied with SQLite's online backup API: the app writes
+    continuously in WAL mode, and a plain file copy can be torn. The copy must
+    pass an integrity check, or RuntimeError is raised.
 
-    `.env` holds the API key, the plug password and the dashboard password
-    hash, so it is excluded unless explicitly requested; config.json also
-    carries the password hash and coordinates, which is why the archive is
-    only ever served to a logged-in session.
+    `.env` can hold the API key and the plug credentials, so it is included
+    only with include_secrets. config.json carries the dashboard password hash
+    and the coordinates, so the archive is served only to a signed-in session.
     """
     import io
     import tarfile
@@ -161,12 +158,10 @@ def api_backup():
 @bp.route("/api/purge_series", methods=["POST"])
 @auth.require_auth
 def api_purge_series():
-    """Delete a sensor's logged history.
+    """Delete the logged history of every sensor key starting with `prefix`.
 
-    Needed when a schema changes: the old `moisture:` per-cell keys are no
-    longer written by anything, so they sit on the dashboard forever showing
-    whatever they last read. Deliberately explicit rather than automatic --
-    this destroys data.
+    For a series nothing writes any more, such as the old per-cell `moisture:`
+    keys. Run only on request: it destroys data.
     """
     data = request.get_json(silent=True) or {}
     prefix = str(data.get("prefix", "")).strip()
@@ -215,13 +210,13 @@ def series_all():
         if only and not k.startswith(only):
             continue
         if k.startswith("canopy:") and k[7:] not in _cam_t:
-            continue  # a tray the camera no longer watches
+            continue  # a tray the camera does not watch
         if k.startswith("float:") or k.startswith("reservoir:"):
             continue  # binary states aren't charted
         if k.startswith("dry:") or k.startswith("growth") or k.startswith("moisture:"):
-            continue  # retired per-cell camera series
+            continue  # old per-cell camera series, not charted
         if not camera_on and k.startswith("canopy:"):
-            continue  # camera vision paused; hide its series
+            continue  # camera disabled: hide its series
         pts = db.series(k, hours)
         if k.startswith("probe:"):
             cal = pcal.get(k[6:]) or {}

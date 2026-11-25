@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
 """Per-tray canopy growth measurement from a tray photo.
 
-Measures canopy coverage (share of plant pixels via the excess-green index)
-for each TRAY region of the camera grid. Earlier versions measured per cell,
-but once seedlings spill over cell boundaries the per-cell attribution is
-fiction; tray boundaries are physical, so tray totals stay honest for the
-whole run. Camera-based soil-dryness estimation was removed for the same
-reason: closed canopies hide the soil entirely.
+Measures canopy coverage (share of plant pixels by the excess-green index)
+for each tray region of the camera grid. Regions are trays, not cells:
+seedlings spill over cell boundaries, while tray boundaries are physical.
 
 Run as a subprocess so OpenCV's memory is released after each call, the same
 pattern as detect_corners.py.
@@ -23,13 +20,12 @@ Prints:  {"ok": true, "readings": {"canopy:1": 12.3, "canopy:2": 8.1}}
 import json
 import sys
 
-# Plant detection uses the excess-green index (ExG = 2G - R - B), not hue.
-# The magenta grow light makes leaves read as magenta, so hue-based detection
-# zeros out real plants; ExG measures *relative* greenness and survives coloured
-# light. Soil sits deeply negative, so a modest positive threshold rejects it
-# cleanly. Raise EXG_MIN if soil/perlite trips it, lower it to catch fainter
-# leaves. (Absolute coverage is understated under magenta light; for true
-# coverage, capture under white light. Good for tracking and ranking either way.)
+# Plant detection uses the excess-green index (ExG = 2G - R - B), not hue:
+# under the magenta grow light leaves read as magenta, while ExG measures
+# relative greenness and survives coloured light. Soil sits deeply negative,
+# so a modest positive threshold rejects it. Raise EXG_MIN if soil or perlite
+# trips it, lower it to catch fainter leaves. Coverage is understated under
+# magenta light; capture under white light for true coverage.
 EXG_MIN = 15
 ANALYSIS_W = 1000  # longest image side scaled to this before counting
 
@@ -91,15 +87,10 @@ def _bil(C, u, v):
 def rectify(img, corners, out_w=None, out_h=None, cols=6, rows=4):
     """Flatten the tray plane to a rectangle using the four grid corners.
 
-    The camera looks at the trays from an angle, so a region at the far edge
-    covers fewer pixels than a near one and its boundaries bow. Coverage is
-    already normalised by each region's own area, so this is a refinement
-    rather than a correction: it gives true projective boundaries (bilinear
-    interpolation of corners is not the same mapping) and an even pixel
-    budget per region.
-
-    `corners` are TL, TR, BR, BL as fractions of the image.
-    """
+    `corners` are TL, TR, BR, BL as fractions of the image. Without out_w and
+    out_h the output keeps cells square and is at most 4000 px on a side. The
+    regions get true projective boundaries (bilinear interpolation of the
+    corners is a different mapping) and an even pixel budget."""
     import cv2
     import numpy as np
 

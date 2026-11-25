@@ -5,9 +5,8 @@ Usage:  detect_corners.py <image.jpg>
 Prints: {"ok": true, "corners": [[x,y],...]}   (TL, TR, BR, BL as 0-1 fractions)
    or:  {"ok": false, "error": "..."}
 
-Run as a subprocess so OpenCV's memory is freed after each call rather than
-staying resident in the controller process. Detection is a starting point only;
-the dashboard always lets you drag the corners to correct it.
+Run as a subprocess so OpenCV's memory is freed after each call. The result is
+a starting point: the dashboard lets the corners be dragged to correct it.
 """
 
 import json
@@ -39,12 +38,13 @@ def detect(path):
         pts = np.array(pts, dtype=np.float32)
         s = pts.sum(1)
         d = np.diff(pts, axis=1).ravel()
+        # TL, TR, BR, BL
         return [
             pts[np.argmin(s)],
             pts[np.argmin(d)],
             pts[np.argmax(s)],
             pts[np.argmax(d)],
-        ]  # TL, TR, BR, BL
+        ]
 
     cnts = sorted(cnts, key=cv2.contourArea, reverse=True)
     quad = None

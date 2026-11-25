@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """Daily AI plant report.
 
-Sends the latest tray photo plus the current sensor/grid/schedule data to the
-Claude API and gets back a structured horticultural report: germination, health
-flags, light and water assessment, concerns, and concrete recommendations. The
-report is stored as JSON for the dashboard and a one-line summary is pushed to
-whichever alert channels are configured (Discord, ntfy). Designed to run once a day, so cost is a few cents at most.
+Sends the latest tray photo plus the current sensor, grid and schedule data to
+the Claude API and gets back a structured report: germination, health flags,
+light and water assessment, concerns and recommendations. The controller
+stores the report as JSON for the dashboard and pushes a one-line summary to
+the configured alert channels (Discord, ntfy).
 
 API key (in priority order):
   1. ANTHROPIC_API_KEY environment variable
   2. a .anthropic_key file next to this module (gitignored)
 
-No SDK dependency -- it POSTs to the Messages API with stdlib urllib so there's
-nothing extra to pip-install on the Pi.
+No SDK: it POSTs to the Messages API with stdlib urllib, so the Pi needs
+nothing extra installed.
 """
 
 import base64

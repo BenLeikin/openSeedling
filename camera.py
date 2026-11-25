@@ -23,21 +23,18 @@ import light as light_mod
 import setups as setups_mod
 
 TIMELAPSE_DIR = Path(__file__).with_name("timelapse")
-PREVIEW_PATH = Path(__file__).with_name(
-    "preview.jpg"
-)  # alignment viewfinder; not a timelapse frame
+# alignment viewfinder; not a timelapse frame
+PREVIEW_PATH = Path(__file__).with_name("preview.jpg")
 THUMB_DIR = TIMELAPSE_DIR / "thumbs"
-# ----------------------------------------------------------------------------
 
 TIMELAPSE_DIR.mkdir(exist_ok=True)
 THUMB_DIR.mkdir(exist_ok=True)
-# camera health: every capture/preview outcome lands here so the dashboard
-# can tell "old photo because night" from "old photo because the camera died"
+# Camera health: every capture and preview outcome lands here, so the dashboard
+# can tell "old photo because night" from "old photo because the camera died".
 camera = {"last_ok": None, "fails": 0, "last_err": "", "last_err_ts": None}
 
-# focus sweep: walk focus_absolute, score each frame's sharpness, pin the best.
-# Replaces guessing focus values over SSH (a guessed 68 produced a week of
-# blurry photos). step counts down as coarse then fine passes run.
+# Focus sweep: walk focus_absolute, score each frame's sharpness, pin the best.
+# step counts up to total through the coarse pass, then the fine one.
 focus_state = {"running": False, "step": 0, "total": 0, "best": None, "error": "", "cancel": False}
 focus_lock = threading.Lock()
 
@@ -58,13 +55,14 @@ capturing = False  # a capture, focus sweep or alignment is using the camera
 HOLD_PHOTO, HOLD_FOCUS, HOLD_ALIGN = "photo", "focus sweep", "camera alignment"
 PHOTO_HOLD_S = 300  # two USB cameras at their timeouts, with room to spare
 capture_lock = threading.Lock()  # serialize camera access (manual vs scheduled)
+# state is idle, running, done or error
 render = {
     "state": "idle",
     "msg": "",
     "frames": 0,
     "started": None,
     "elapsed": None,
-}  # idle|running|done|error
+}
 render_lock = threading.Lock()
 VIDEO_PATH = TIMELAPSE_DIR / "timelapse.mp4"
 ARCHIVE_DIR = Path(__file__).with_name("timelapse_archive")
@@ -99,15 +97,11 @@ def crop_array(img, roi):
 
 
 def oom_first(cmd):
-    """Run cmd as the kernel's first choice to kill when memory runs out.
+    """Wrap cmd so it runs as the kernel's first choice to kill when memory runs out.
 
-    The Pi has little memory the kernel can hand to drivers, and a big camera
-    capture or an image job can exhaust it; without this the kernel may kill
-    the whole controller (lights, pumps, dashboard) instead. A helper started through
-    this raises its own oom_score_adj to the maximum before exec, so the
-    helper dies instead, the job fails and is logged, and the controller keeps
-    running. Raising one's own score needs no privilege.
-    """
+    The wrapper raises its own oom_score_adj to the maximum before exec (this
+    needs no privilege), so a capture or image job that exhausts memory is
+    killed in place of the controller (lights, pumps, dashboard)."""
     return [
         "sh",
         "-c",
@@ -117,11 +111,10 @@ def oom_first(cmd):
 
 
 def imgtool(args, timeout=120):
-    """Run imgtool.py: every OpenCV job, out of the controller's process.
+    """Run an imgtool.py job in its own process; returns the CompletedProcess.
 
-    OpenCV costs about 40 MB once imported and never returns it; run here it
-    is freed when the job ends, and oom_first makes the job, not the
-    controller, the kernel's choice if memory runs out."""
+    Every OpenCV job goes through here: OpenCV costs about 40 MB once imported
+    and never returns it, and in a subprocess it is freed when the job ends."""
     return subprocess.run(
         oom_first([sys.executable, str(IMGTOOL)] + [str(a) for a in args]),
         capture_output=True,
@@ -136,7 +129,7 @@ def _imgtool_err(r):
 
 
 def killed_msg(r, what):
-    """Name an out-of-memory kill instead of reporting "no output"."""
+    """A message naming an out-of-memory kill, or None if r did not die of one."""
     if r.returncode in (-9, 137):
         return (
             f"{what} was killed by the kernel for running out of memory; "
@@ -149,17 +142,12 @@ _thumb_lock = threading.Lock()
 
 
 def make_thumb(photo_path, cfg=None, dst_dir=None):
-    """640px thumbnail for the browser player. Cheap, one-time per photo.
+    """Write the 640 px thumbnail the browser player uses, once per photo.
 
-    Rectified to match the snapshot and the rendered video, so scrubbing the
-    timelapse shows the same corrected view as everything else. Falls back to a
-    plain scale if the grid corners are not set or OpenCV is unavailable.
-
-    One at a time, and written under a temporary name then renamed: a manual
-    capture and the capture loop's backfill used to thumbnail the same new
-    photo at once (two ffmpeg runs writing one file), and a thumbnail is
-    served as immutable for a year, so a bad one would stick.
-    """
+    Flattened to match the snapshot and the rendered video; a plain scale if
+    the grid has no corners or the rectify job fails. One at a time, and
+    renamed into place: the capture loop's backfill can ask for the same photo
+    as a manual capture, and a thumbnail is served as immutable for a year."""
     dst = (dst_dir or THUMB_DIR) / photo_path.name
     if dst.exists():
         return
@@ -246,16 +234,10 @@ _frame_lock = threading.Lock()  # one full-size warp at a time on a 512 MB board
 def frame_view(photo_path, cfg=None):
     """A stored photo at full resolution, framed the way its thumbnail is.
 
-    The player scrubs through 640px thumbnails, which is right for playing
-    at 8 frames a second but soft once the browser stretches one across the
-    card (twice over on a phone or a HiDPI screen). A paused frame is shown
-    through this instead, at the snapshot's resolution. Same rules as
-    make_thumb, so swapping one for the other never reframes the picture:
-    flattened when timelapse_flatten is on and the grid has corners, else cut
-    to the view crop, else the photo itself.
-
-    Returns (jpeg bytes, None), or (None, path) to send the file as it is.
-    """
+    For a paused frame, where a stretched 640 px thumbnail looks soft.
+    Flattened when timelapse_flatten is on and the grid has corners, else cut
+    to the view crop, else the photo itself. Returns (jpeg bytes, None), or
+    (None, path) to send the file as it is; raises ValueError if the job fails."""
     if cfg is None:
         with config.settings_lock:
             cfg = dict(config.settings)
@@ -314,13 +296,13 @@ def photo_inventory():
     return 0, None, None
 
 
-# --------------------------- capture loop ---------------------------
+# ---- capture ----------------------------------------------------------------
 
 # Each entry: config flag -> (v4l2 auto control, value for auto, value for
-# manual, the manual controls it unlocks). Auto is offered because it is what
-# people expect, but note that for a timelapse it produces visible flicker:
-# the camera re-decides exposure and white balance every frame, so brightness
-# and colour shift between shots and the per-cell analysis moves with them.
+# manual, the manual controls it unlocks). With auto on, the camera re-decides
+# exposure and white balance every frame, so brightness and colour shift
+# between shots (flicker in the timelapse) and the canopy analysis moves with
+# them.
 USB_AUTO_GROUPS = {
     "usb_auto_focus": ("focus_automatic_continuous", 1, 0, ("focus_absolute",)),
     "usb_auto_exposure_on": ("auto_exposure", 3, 1, ("exposure_time_absolute", "gain")),
@@ -359,12 +341,11 @@ def _usb_apply_controls(cfg, dev):
 
 
 def _usb_capture(cfg, out_path, width, height, warmup=None, dev=None):
-    """Grab one MJPEG frame from a UVC camera via v4l2-ctl.
+    """Grab one MJPEG frame from a UVC camera via v4l2-ctl. Returns (ok, error).
 
-    UVC sensors need a few frames before auto-gain settles, and the very first
-    frame after opening the device is frequently dark or torn. Capturing a
-    short burst and keeping the last frame costs a second and removes that
-    whole class of bad photo.
+    Captures a short burst (usb_warmup_frames, or `warmup`) and keeps the last
+    whole frame: the first frame after opening the device is often dark or
+    torn, and auto-gain needs a few frames to settle.
     """
     dev = dev or cfg.get("usb_device", "/dev/video0")
     if not Path(dev).exists():
@@ -375,8 +356,7 @@ def _usb_capture(cfg, out_path, width, height, warmup=None, dev=None):
     tmp = Path(str(out_path) + ".raw")
     # Two buffers, not v4l2-ctl's default four: the driver allocates each at
     # the camera's worst-case frame size (16 MB at 3264x2448) from memory the
-    # kernel cannot take from its contiguous pool, and four of those is what
-    # ran the Pi out of memory. Frames are kept one at a time anyway.
+    # kernel cannot reclaim. Frames are kept one at a time anyway.
     cmd = [
         "v4l2-ctl",
         "-d",
@@ -411,9 +391,8 @@ def _usb_capture(cfg, out_path, width, height, warmup=None, dev=None):
         if not starts:
             tmp.unlink(missing_ok=True)
             return False, "no JPEG frame in the stream"
-        # the last frame that is whole (ends in the end-of-image marker): a
-        # stream cut short leaves a truncated last frame, which became a
-        # broken photo ("Premature end of JPEG file")
+        # The last frame that is whole (ends in the end-of-image marker): a
+        # stream cut short leaves a truncated final frame.
         frame = None
         for a, b in zip(reversed(starts), [len(data)] + list(reversed(starts))[:-1]):
             chunk = data[a:b].rstrip(b"\x00")
@@ -433,10 +412,9 @@ def _usb_capture(cfg, out_path, width, height, warmup=None, dev=None):
 # ---- two cameras side by side ----------------------------------------------
 # With a second USB camera set (usb_device2) and the pair aligned (Settings,
 # Camera, Align cameras; stored in cam_stitch), every photo and preview is the
-# two frames stitched into one wide view, and everything downstream (corners,
-# crop, canopy, timelapse, AI report) works on that as if from one camera.
-# The cameras are read one after the other, never together, so they never
-# share the hub's bandwidth with each other.
+# two frames stitched into one wide view, and everything downstream works on
+# that as if from one camera. The cameras are read one after the other, so
+# they never share the hub's bandwidth.
 
 
 def stitch_of(cfg):
@@ -460,10 +438,10 @@ def cam_turns(cfg):
     return [int(cfg.get("cam_rotate", 0) or 0), int(cfg.get("cam2_rotate", 0) or 0)]
 
 
-STITCH_MAX_W = 3072  # the stitched frame's widest; bounds memory on the Zero
+STITCH_MAX_W = 3072  # widest the stitched frame may be; bounds memory on the Zero
 # each camera's frame from the last Align cameras, shown in Settings
 ALIGN_FRAMES = [PREVIEW_PATH.with_name(f"align_cam{i}.jpg") for i in (1, 2)]
-# ...and what matched between them (green: agrees with the fit, red: rejected)
+# what matched between them (green: agrees with the fit, red: rejected)
 ALIGN_MATCHES = PREVIEW_PATH.with_name("align_matches.jpg")
 
 
@@ -509,7 +487,7 @@ def _usb_capture_view(cfg, out_path, width, height, warmup=None):
 
 
 def _frame_to_cam1(pt, st, size):
-    """A point as fractions of a raw (unrotated) photo, in camera 1's pixels."""
+    """A point given as fractions of a stored photo, in camera 1's pixels."""
     if not st:
         return [pt[0] * size[0], pt[1] * size[1]]
     (x0, y0), (cw, ch) = st["offset"], st["canvas"]
@@ -528,7 +506,7 @@ def regrid_for_stitch(cfg, old_st, new_st):
     the grid stays over the same part of the trays when the photos switch
     between one camera and the stitched pair. Both are laid out in camera 1's
     frame turned the right way up. Returns the new corners, or None when
-    there are none. (The view crop is not moved: it is reset.)"""
+    there are none. The view crop is not moved: the caller resets it."""
     corners = (cfg.get("grid") or {}).get("corners")
     if not corners or len(corners) != 4:
         return None
@@ -574,8 +552,8 @@ def align_cameras():
             ok, err = _usb_capture(cfg, part, w, h, warmup=4, dev=dev)
             if not ok:
                 return {"ok": False, "error": f"camera {i}: {err}"}
-            # each the right way up first, so the two are matched as they
-            # will be shown (and a camera mounted upside down is no obstacle)
+            # each turned the right way up first, so the two are matched as
+            # they will be shown
             _rotate_file(part, turns[i - 1])
         r = imgtool(["align", parts[0], parts[1], "--matches", ALIGN_MATCHES], timeout=180)
         if r.returncode != 0:
@@ -625,9 +603,9 @@ def align_cameras():
 
 
 def unstitch(settings):
-    """Settings changed so the saved alignment no longer applies (a camera
-    removed or swapped, a new capture size): drop it, and move the grid back
-    to camera 1's view. Caller holds settings_lock; returns True if dropped."""
+    """Drop the saved alignment when it does not fit the settings (a camera
+    removed or swapped, a new capture size), and move the grid back to
+    camera 1's view. Caller holds settings_lock; returns True if dropped."""
     st = settings.get("cam_stitch") or {}
     if not st.get("h") or stitch_of(settings):
         return False
@@ -639,16 +617,11 @@ def unstitch(settings):
 
 
 def _postprocess_file(path, cfg):
-    """Rotate a just-captured JPEG in place.
+    """Rotate a just-captured JPEG in place by cam_rotate.
 
-    Rotation is baked in because it is not a matter of interpretation: the
-    camera is mounted upside down and every consumer wants it the right way up.
-    Flattening deliberately is NOT baked in -- it is applied when the image is
-    served, so the stored frame stays raw and the grid corners can always be
-    re-dragged against the real scene.
-
-    Failure is non-fatal: the original frame is kept and the reason is logged.
-    """
+    Rotation is baked into the stored file; flattening is applied when the
+    image is served, so the grid corners can be re-dragged against the real
+    scene. On failure the frame is kept as captured and the reason is logged."""
     degrees = int(cfg.get("cam_rotate", 0) or 0)
     if degrees not in (90, 180, 270):
         return
@@ -660,7 +633,7 @@ def _postprocess_file(path, cfg):
         log.error(f"post-process failed ({e}); keeping the frame as captured")
 
 
-# kept for callers that only need the rotation
+# Rotate by a given angle: each camera of a pair has its own.
 def _rotate_file(path, degrees):
     _postprocess_file(path, {"cam_rotate": degrees})
 
@@ -747,16 +720,16 @@ def take_photo(cfg, now, manual=False):
 
 def record_growth(path, cfg, now):
     """Measure per-tray canopy coverage from a just-captured photo and log it.
-    Per-cell measurement was retired: seedlings spill across cell lines and the
-    attribution becomes fiction, while tray boundaries are physical. Runs
-    growth.py as a subprocess so OpenCV memory is freed afterwards."""
+
+    Measured per tray because seedlings spill across cell lines, while tray
+    boundaries are physical. Runs growth.py as a subprocess so OpenCV's memory
+    is freed afterwards."""
     grid = cfg.get("grid") or {}
     if not grid.get("corners"):
         return
-    # tray column spans, left to right, mirroring how the trays sit under the
-    # camera (tray 1 leftmost)
-    # only the trays the camera's setup covers: the grid spans those, left to
-    # right, and nothing else is in the frame to measure
+    # Tray column spans, left to right as the trays sit under the camera
+    # (tray 1 leftmost). Only the trays the camera's setup covers: the grid
+    # spans those and nothing else is in the frame.
     mine = set(setups_mod.camera_trays(cfg))
     trays = [
         {"id": tid, "cols": int((t or {}).get("cols", 3))}
@@ -811,11 +784,8 @@ def canopy_due_since(cfg, now=None):
     none are due now.
 
     Canopy is measured from each photo, and photos are taken only while the
-    camera's light is on, with timelapse capture on and grid corners set. At
-    night the last reading is hours old by design, so it must not read as
-    stale; and in the morning the age counts from when the light came on,
-    not from last night's final photo.
-    """
+    camera's light is on, with timelapse capture on and grid corners set.
+    Inside that window the age counts from when the light came on."""
     if not (cfg.get("camera_enabled") and cfg.get("capture_enabled")):
         return None
     if not (cfg.get("grid") or {}).get("corners"):
@@ -857,19 +827,17 @@ def capture_loop():
         try:
             last_shot = _capture_tick(last_shot)
         except Exception:
-            # One bad tick (a full disk, an odd file) must not end the
-            # timelapse: if this thread dies, photos stop while the dashboard
-            # looks fine. Log it and carry on.
+            # One bad tick (a full disk, an odd file) must not end the thread:
+            # photos would stop while the dashboard looks fine.
             log.exception("capture loop error")
         time.sleep(15)
 
 
 def _capture_tick(last_shot):
     """One pass of the capture loop; returns the new last_shot."""
-    # opportunistic thumbnail backfill, at most one per tick
-    # Not while a capture is running, nor for a file under 10 s old: that
-    # photo may still be being written or rotated, and take_photo makes
-    # its own thumbnail once it is done.
+    # Thumbnail backfill, at most one per tick. Not while a capture is
+    # running, nor for a file under 10 s old: that photo may still be being
+    # written or rotated, and take_photo makes its own thumbnail.
     missing = (
         None
         if capturing
@@ -897,9 +865,9 @@ def _capture_tick(last_shot):
             if disk_free_gb() < LOW_FREE_GB:
                 prune_archives()
         if in_day and due and disk_free_gb() < MIN_FREE_GB:
-            # A full SD card stops the database and settings writes too,
-            # so photos are what give way. Logged once an hour; the alert
-            # (monitor) says the same thing louder.
+            # A full SD card stops the database and settings writes too, so
+            # photos give way first. Logged once an hour; monitor raises the
+            # alert.
             last_shot = now
             if time.time() - _disk_warned[0] > 3600:
                 _disk_warned[0] = time.time()
@@ -927,8 +895,7 @@ def usb_link_speed(dev):
 
     A camera behind the wrong hub enumerates at 12 Mbit/s (USB 1.1) and then
     offers only tiny MJPEG sizes (160x120 is typical), which looks like a
-    camera fault rather than the hub's. The status and an alert carry this
-    number so that failure is named for what it is."""
+    camera fault. The status and an alert carry this number to name the cause."""
     try:
         # a /dev/v4l/by-path name is a link to the /dev/videoN node sysfs knows
         node = SYSFS_V4L / Path(dev).resolve().name / "device"
@@ -953,14 +920,12 @@ _pruned_check = [0.0]
 
 
 def prune_archives(free_fn=None):
-    """Make room by deleting archived timelapse runs, oldest first, when the
-    SD card is low. Archived runs are the ones "Start new timelapse" moved to
-    timelapse_archive/; the current run is never touched.
+    """Delete archived timelapse runs, oldest first, when the SD card is low.
 
-    Below LOW_FREE_GB it deletes the oldest archive, then the next, until
-    PRUNE_TARGET_GB is free, keeping the newest archive unless free space is
-    below MIN_FREE_GB (where photos would stop anyway). Each removal is an
-    event, so nothing goes quietly. Returns the names removed."""
+    Starts below LOW_FREE_GB and stops once PRUNE_TARGET_GB is free, keeping
+    the newest archive unless free space is below MIN_FREE_GB (where photos
+    would stop anyway). The current run is never touched. Each removal is
+    logged as an event. Returns the names removed."""
     free_fn = free_fn or disk_free_gb
     removed = []
     try:
@@ -996,18 +961,15 @@ def disk_free_gb(path=None):
         return 1e9  # unknown: do not block photos on a failed check
 
 
-# ----------------------------- video render -----------------------------
+# ---- video render -----------------------------------------------------------
 
 
 def _flatten_frames_to(dest, frames, cfg):
     """Write rectified copies of `frames` into `dest`, numbered in order.
 
-    The timelapse is rendered from flattened frames so the video matches what
-    the dashboard shows, but the originals on disk stay raw: that is what keeps
-    the grid corners re-draggable against the real scene. Frames that cannot be
-    rectified are copied through unchanged rather than dropped, so a bad frame
-    leaves a blip instead of a gap in the timeline.
-    """
+    Returns dest, or None when the grid has no corners or the job fails. The
+    video is rendered from these, while the originals on disk stay raw. A
+    frame that cannot be rectified is copied through unchanged."""
     grid = cfg.get("grid") or {}
     corners = grid.get("corners")
     if not corners or len(corners) != 4:
@@ -1108,10 +1070,9 @@ def render_worker():
             )
         vf = (crop_filter(roi) + "," + vf_scale) if roi else vf_scale
         tmp = TIMELAPSE_DIR / "_render_tmp.mp4"
-        # Encode pass: small footprint so the 512MB Zero never OOMs.
-        # 1280-wide, ultrafast, single thread, no faststart here (the
-        # +faststart second pass rewrites the whole file in memory and is
-        # what tips the box over). We add faststart as a cheap remux after.
+        # Encode pass, sized for the 512 MB Zero: 1280 wide, ultrafast, single
+        # thread, and no +faststart here (its second pass rewrites the whole
+        # file in memory). Faststart is added by a stream-copy remux afterwards.
         fps = max(1.0, float(cfg_r.get("video_fps", 8)))
         r = subprocess.run(
             oom_first(
@@ -1132,9 +1093,9 @@ def render_worker():
                     # encoder signal a crop that some hardware decoders render as black.
                     "-vf",
                     vf,
-                    # crf 20, not 24: ultrafast turns off adaptive quantization and
-                    # deblocking, so at 24 fine leaf and soil texture smeared. Same
-                    # preset, so encode time and memory stay the same; files grow.
+                    # crf 20: ultrafast turns off adaptive quantization and
+                    # deblocking, and a higher crf smears fine leaf and soil
+                    # texture. crf changes file size, not encode time or memory.
                     "-c:v",
                     "libx264",
                     "-preset",
@@ -1162,11 +1123,11 @@ def render_worker():
             capture_output=True,
             timeout=3600,
         )
-        # Faststart as a stream-copy remux: no re-encode, trivial memory.
         if r.returncode == 0 and tmp.exists():
-            # Remux beside the finished video, then swap it in with one
+            # Faststart as a stream-copy remux: no re-encode, little memory.
+            # Written beside the finished video, then swapped in with one
             # rename: a download running during the remux keeps reading the
-            # old file instead of a half-written one.
+            # old file.
             part = VIDEO_PATH.with_name("timelapse.part.mp4")
             r2 = subprocess.run(
                 oom_first(
