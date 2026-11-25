@@ -141,7 +141,7 @@ if [[ $N -eq 0 ]]; then ok "already installed; nothing to do"; exit 0; fi
 
 BOX=0
 for f in "${CHANGED[@]}" "${ADDED[@]}"; do
-  case "$f" in deploy/*|requirements.txt|requirements-optional.txt|scripts/setup.sh) BOX=1 ;; esac
+  case "$f" in deploy/*|requirements.txt|requirements-optional.txt|constraints.txt|scripts/setup.sh) BOX=1 ;; esac
 done
 [[ $BOX -eq 1 ]] && note "includes box config: setup.sh --defaults will apply it"
 

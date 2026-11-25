@@ -1,0 +1,40 @@
+# The version of every package the ones in requirements.txt bring with them,
+# as installed on openSeedling (pip freeze, Nov 2026). pip installs only what
+# the platform needs from this list, and at these versions:
+#   pip install -r requirements.txt -c constraints.txt
+# To refresh: upgrade in a venv on a Pi, run the tests there, then replace the
+# list with `pip freeze --local` minus the packages requirements*.txt name.
+Adafruit-Blinka-Raspberry-Pi5-Neopixel==1.0.0rc2
+Adafruit-Blinka==9.2.0
+adafruit-circuitpython-busdevice==5.2.17
+adafruit-circuitpython-connectionmanager==3.1.8
+adafruit-circuitpython-register==1.12.1
+adafruit-circuitpython-requests==4.1.17
+adafruit-circuitpython-typing==1.12.3
+Adafruit-PlatformDetect==3.89.1
+Adafruit-PureIO==1.1.11
+aiohappyeyeballs==2.7.1
+aiohttp==3.14.4
+aiosignal==1.4.0
+asyncclick==8.4.2.1
+binho-host-adapter==0.1.6
+blinker==1.9.0
+click==8.4.1
+colorzero==2.0
+frozenlist==1.8.0
+gpiozero==2.0.1
+itsdangerous==2.2.0
+Jinja2==3.1.6
+MarkupSafe==3.0.3
+mashumaro==3.22
+multidict==6.9.1
+propcache==0.5.2
+pyftdi==0.57.2
+pyserial==3.5
+pyusb==1.3.1
+RPi.GPIO==0.7.1
+rpi_ws281x==5.0.0
+sysv_ipc==1.2.0
+typing_extensions==4.16.0
+Werkzeug==3.1.9
+yarl==1.25.1

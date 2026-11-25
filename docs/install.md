@@ -37,6 +37,7 @@ Everything the script changes on the box comes from files in the repo:
 | `deploy/growlight.service` | `/etc/systemd/system/growlight.service` |
 | `deploy/env.example` | Reference for `.env` (not copied) |
 | `requirements.txt` | Pinned venv packages |
+| `constraints.txt` | The versions of what those packages depend on |
 | `requirements-optional.txt` | OpenCV and NumPy, allowed to fail |
 
 The script is idempotent and never touches `config.json`, `growlight.db` or

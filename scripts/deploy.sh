@@ -104,7 +104,7 @@ mapfile -t FILES < <(git diff --name-only "$OLD" "$NEW")
 git diff --stat "$OLD" "$NEW" | tail -1 | sed 's/^/   /'
 BOX=0
 for f in "${FILES[@]}"; do
-  case "$f" in deploy/*|requirements.txt|requirements-optional.txt|scripts/setup.sh) BOX=1 ;; esac
+  case "$f" in deploy/*|requirements.txt|requirements-optional.txt|constraints.txt|scripts/setup.sh) BOX=1 ;; esac
 done
 [[ $BOX -eq 1 ]] && echo "    includes box config: setup.sh --defaults will apply it"
 if [[ "$CHECK" -eq 1 ]]; then echo "Check only: nothing changed."; exit 0; fi

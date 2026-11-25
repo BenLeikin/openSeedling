@@ -137,7 +137,7 @@ provision() {
   : "${MODULES_FILE:=/etc/modules}"
 
   for f in deploy/apt-packages.txt deploy/boot-config.txt deploy/growlight.service \
-           requirements.txt requirements-optional.txt; do
+           requirements.txt requirements-optional.txt constraints.txt; do
     [[ -f "$REPO_ROOT/$f" ]] || { echo "ERROR: $f missing from the checkout"; exit 1; }
   done
   echo "==> openSeedling setup: $APP_DIR  (user: $RUN_USER, mode: $MODE)"
@@ -488,11 +488,13 @@ step_journal() {
   fi
 }
 
-pin_check() {     # pin_check FILE -> prints mismatches, returns 1 if any
-  "$VENV/bin/python" - "$1" << 'PY'
+pin_check() {     # pin_check FILE [installed] -> prints mismatches, returns 1 if any
+  # with "installed", a package that is not installed is not a mismatch
+  "$VENV/bin/python" - "$1" "${2:-}" << 'PY'
 import sys
 from importlib.metadata import version, PackageNotFoundError
 bad = 0
+installed_only = sys.argv[2] == "installed"
 for line in open(sys.argv[1]):
     line = line.split("#")[0].strip()
     if not line:
@@ -502,6 +504,8 @@ for line in open(sys.argv[1]):
         have = version(name)
     except PackageNotFoundError:
         have = None
+    if have is None and installed_only:
+        continue
     if have != want:
         print(f"{name}: want {want}, have {have or 'missing'}")
         bad += 1
@@ -529,13 +533,26 @@ step_venv() {
       drift "$req:"; sed 's/^/      /' <<< "$out"
     elif [[ "$req" == requirements.txt ]]; then
       echo "    installing $req (several minutes on a Pi Zero)"
-      "$VENV/bin/pip" install --quiet --disable-pip-version-check -r "$REPO_ROOT/$req"
+      "$VENV/bin/pip" install --quiet --disable-pip-version-check -r "$REPO_ROOT/$req" \
+        -c "$REPO_ROOT/constraints.txt"
     else
       echo "    installing $req (optional)"
       "$VENV/bin/pip" install --quiet --disable-pip-version-check -r "$REPO_ROOT/$req" \
+        -c "$REPO_ROOT/constraints.txt" \
         || echo "    WARNING: $req failed; grid auto-detect and canopy tracking will be off"
     fi
   done
+  # what those packages bring with them, at the versions constraints.txt names
+  if out="$(pin_check "$REPO_ROOT/constraints.txt" installed)"; then
+    ok "constraints.txt satisfied"
+  elif [[ "$MODE" == check ]]; then
+    drift "constraints.txt:"; sed 's/^/      /' <<< "$out"
+  else
+    echo "    updating dependencies to constraints.txt"
+    sed 's/^/      /' <<< "$out"
+    "$VENV/bin/pip" install --quiet --disable-pip-version-check -r "$REPO_ROOT/requirements.txt" \
+      -c "$REPO_ROOT/constraints.txt"
+  fi
   return 0
 }
 
