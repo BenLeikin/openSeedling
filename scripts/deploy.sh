@@ -156,9 +156,14 @@ sudo systemctl restart "$SERVICE"
 healthy 120 || rollback "the service did not come back (journalctl -u $SERVICE -n 50)"
 sleep 15
 pid="$(systemctl show -p MainPID --value "$SERVICE")"
-if [[ -n "$pid" && "$pid" != 0 ]] && \
-   journalctl _PID="$pid" --no-pager 2>/dev/null | grep -q Traceback; then
-  journalctl _PID="$pid" --no-pager | grep -A12 Traceback | head -30 | sed 's/^/    | /'
+tb=""
+if [[ -n "$pid" && "$pid" != 0 ]]; then
+  # grep reads the whole log: with pipefail, a reader that stops early
+  # (grep -q, head) fails the pipeline and hides the match
+  tb="$(journalctl _PID="$pid" --no-pager 2>/dev/null | grep -A12 Traceback || true)"
+fi
+if [[ -n "$tb" ]]; then
+  sed -n '1,30s/^/    | /p' <<< "$tb"
   rollback "the new version is logging tracebacks"
 fi
 ok "running $(git log --oneline -1 HEAD) on port $PORT"
