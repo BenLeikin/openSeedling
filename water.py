@@ -673,6 +673,10 @@ def auto_water_pass():
         f = sensors.read_float(fl)
         if f is None or f < 1:
             continue  # no float, or already full
+        why = pump_refusal(tray)
+        if why:
+            log.debug(f"auto-water tray {tray} skipped: {why}")
+            continue  # this tray's daily limit must not hold up the next one
 
         # Confirm before pumping. The decision above came from the
         # logged history; take a fresh reading now and require it to
