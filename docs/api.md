@@ -14,13 +14,13 @@ Signed-out viewers see neither the location nor any credential in
 | --- | --- | --- |
 | GET | `/api/status` | Full state: light, sensors, water, settings, auth |
 | GET | `/api/series` | Sensor history for charts |
-| GET | `/api/photos`, `/photo/latest`, `/thumb/<name>`, `/frame/<name>` | Timelapse frames (thumbnail, and full size framed like it) |
+| GET | `/api/photos`, `/photo/latest`, `/thumb/<name>`, `/frame/<name>` | Timelapse frames (thumbnail, and full size framed like it; `/frame/` needs a login) |
 | GET | `/video` | Rendered MP4 |
 | GET | `/api/float` | Fast float read |
 | GET | `/api/report` | Latest AI report + generating flag |
 | GET | `/api/series_all` | Every sensor's history in one call (feeds the chart grid) |
 | GET | `/api/frame_context?ts=` | Sensor readings nearest a timelapse frame (feeds the scrubber overlay) |
-| GET | `/api/stream` | Server-sent events: the status pushed as it changes (6 connections max) |
+| GET | `/api/stream` | Server-sent events: the status pushed as it changes (6 connections max, 2 of them for signed-out viewers) |
 | GET | `/api/host` | Pi health: CPU temperature, load, memory, throttling, Wi-Fi |
 | GET | `/api/plantings` | Finished plantings (germination history) |
 | GET | `/preview.jpg`, `/rectified.jpg` | Latest alignment preview; latest frame flattened to the tray grid |
@@ -48,7 +48,7 @@ Signed-out viewers see neither the location nor any credential in
 | POST | `/api/auto_water` | Arm or disarm auto-watering |
 | POST | `/api/planting_end`, `/api/planting_restore` | Move a cell to the planting history, or bring it back |
 | POST | `/api/plug_discover`, `/api/plug_test` | Find and test a Kasa smart plug |
-| POST | `/api/login`, `/api/logout` | Auth. Logins are checked one at a time, with a delay that doubles per consecutive failure (0.5 s to 8 s) |
+| POST | `/api/login`, `/api/logout` | Auth. A wrong password makes that client address wait (1 s, doubling to 60 s); a login sent during the wait gets 429 with `Retry-After` |
 
 Secrets (`password_hash`, webhook URLs, ntfy topic, Kasa credentials) are
 redacted from `/api/status`; the read-only dashboard never exposes them.

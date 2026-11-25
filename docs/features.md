@@ -228,7 +228,8 @@ Render. **Flatten for canopy analysis** only changes what `growth.py` measures.
 **Player sharpness.** The Grow player plays 640px thumbnails (light enough for
 8 frames a second over Wi-Fi). When it stops on a frame, paused or scrubbed to,
 it swaps in that photo at full resolution from `/frame/<name>`, framed the same
-way, so a still frame is as sharp as the snapshot. The rendered video is
+way, so a still frame is as sharp as the snapshot (signed-out viewers keep the
+thumbnail: a full-size frame needs a login). The rendered video is
 1280 wide, lanczos-scaled, x264 ultrafast at CRF 20.
 
 **Enlarged view.** Click the snapshot or the timelapse frame (tap on a phone)
@@ -485,6 +486,14 @@ GROWLIGHT_ALLOWED_HOSTS=grow.lan,seedlings.example.org
 
 With a password set there is nothing to list: any name works, because the
 session cookie belongs to the name you signed in under.
+
+A session lasts 30 days and belongs to the password it signed in with: setting a
+new password signs every browser out. To sign everyone out without changing the
+password, delete `.secret` in the app folder and restart the service.
+
+A wrong password makes that client wait before its next try: 1 s, doubling with
+each failure in a row up to 60 s. Other clients are not held up. Behind a
+reverse proxy every client has the proxy's address, so they share one wait.
 
 `cookie_secure` defaults to `"auto"`: the session cookie is marked Secure when the
 request arrived over HTTPS, directly or through a proxy that sets
