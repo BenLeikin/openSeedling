@@ -3631,6 +3631,94 @@ def _external_display():
     check(ok, "a display mode must look like 1024x600 or 1024x600@60, or be blank")
 
 
+def _capture_scratch():
+    """Files a capture is still working on are never taken for photos, and
+    what an interrupted capture leaves behind is cleared."""
+    tl = camera_mod.TIMELAPSE_DIR
+    jpeg = b"\xff\xd8\xff\xd9"
+    photo = tl / "20260101_120000.jpg"
+    photo.write_bytes(jpeg)
+    out = tl / "20260101_121000.jpg"
+    devices = ["/dev/cam1", "/dev/cam2"]
+    cfg = dict(
+        config.settings,
+        camera_backend="usb",
+        usb_device=devices[0],
+        usb_device2=devices[1],
+        usb_width=1200,
+        usb_height=900,
+        cam_rotate=0,
+        cam2_rotate=0,
+        cam_stitch={
+            "h": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+            "devices": devices,
+            "capture": [1200, 900],
+            "rotations": [0, 0],
+        },
+    )
+    seen = {}
+
+    def fake_capture(cfg_, path, w, h, warmup=None, dev=None):
+        Path(path).write_bytes(jpeg)
+        return True, None
+
+    def fake_imgtool(args, timeout=120):
+        # both cameras' frames are on disk here; the stitched photo is not yet
+        seen["listed"] = sorted(p.name for p in tl.glob("*.jpg"))
+        seen["latest"] = camera_mod.photo_inventory()[1]
+        Path(args[3]).write_bytes(jpeg)
+        return types.SimpleNamespace(returncode=0, stderr=b"", stdout=b"")
+
+    real = camera_mod._usb_capture, camera_mod.imgtool
+    camera_mod._usb_capture, camera_mod.imgtool = fake_capture, fake_imgtool
+    try:
+        ok, _ = camera_mod._usb_capture_view(cfg, out, 1200, 900)
+    finally:
+        camera_mod._usb_capture, camera_mod.imgtool = real
+    check(
+        ok
+        and out.exists()
+        and seen.get("listed")
+        and not [n for n in seen["listed"] if ".cam" in n]
+        and ".cam" not in seen["latest"].name
+        and not list(tl.glob(out.name + ".cam*")),
+        f"while two cameras are being stitched, their separate frames are not listed as "
+        f"photos ({len(seen.get('listed', []))} listed)",
+    )
+
+    ghost = tl / "99991231_235959.jpg"  # listed, but gone by the time it is read
+    ghost.symlink_to(tl / "nowhere.jpg")
+    try:
+        n, latest, when = camera_mod.photo_inventory()
+    finally:
+        ghost.unlink()
+    check(
+        latest is not None and latest != ghost and when is not None,
+        "a photo removed between listing and reading does not break the photo count",
+    )
+
+    stale = [tl / "20260101_110000.jpg.raw", tl / "20260101_110000.jpg.cam1.tmp"]
+    for f in stale:
+        f.write_bytes(b"x")
+        os.utime(f, (time.time() - 3600,) * 2)
+    fresh = tl / "20260101_123000.jpg.part"
+    fresh.write_bytes(b"x")
+    try:
+        removed = camera_mod.clear_capture_scratch()
+        check(
+            removed == 2
+            and not any(f.exists() for f in stale)
+            and fresh.exists()
+            and photo.exists(),
+            "leftovers of an interrupted capture are cleared at start; a file a capture "
+            "may still be writing, and every photo, is left alone",
+        )
+    finally:
+        for f in (fresh, photo, out, *stale):
+            f.unlink(missing_ok=True)
+        (camera_mod.THUMB_DIR / out.name).unlink(missing_ok=True)
+
+
 def _lux_range():
     """The BH1750 read at most 27,306 lx (11 Oct): a 250 W fixture passed that
     at 19% of its power, the sweep took that for full output, and the
@@ -4649,6 +4737,7 @@ run("Kiosk bring-up", _kiosk_bringup)
 run("Sensors per tray", _tray_sensor_map)
 run("USB link", _usb_link)
 run("Two cameras", _two_cameras)
+run("Capture scratch files", _capture_scratch)
 run("Light sensor range", _lux_range)
 run("External display", _external_display)
 run("Settings layout", _settings_layout)

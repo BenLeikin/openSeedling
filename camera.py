@@ -325,10 +325,12 @@ def frame_etag(photo_path, cfg):
 def photo_inventory():
     # leading underscore marks render scratch, which is not a captured photo
     photos = sorted(p for p in TIMELAPSE_DIR.glob("*.jpg") if not p.name.startswith("_"))
-    if not photos:
-        return 0, None, None
-    latest = photos[-1]
-    return len(photos), latest, datetime.fromtimestamp(latest.stat().st_mtime)
+    for latest in reversed(photos):
+        try:
+            return len(photos), latest, datetime.fromtimestamp(latest.stat().st_mtime)
+        except FileNotFoundError:
+            continue  # removed since the listing (a reset, or pruning for space)
+    return 0, None, None
 
 
 # --------------------------- capture loop ---------------------------
@@ -496,7 +498,8 @@ def _usb_capture_view(cfg, out_path, width, height, warmup=None):
         if ok:
             _rotate_file(out_path, turns[0])
         return ok, err
-    parts = [Path(f"{out_path}.cam{i}.jpg") for i in (1, 2)]
+    # not *.jpg: everything that lists the timelapse folder takes a .jpg for a photo
+    parts = [Path(f"{out_path}.cam{i}.tmp") for i in (1, 2)]
     try:
         for i, (dev, part) in enumerate(zip(st["devices"], parts), 1):
             ok, err = _usb_capture(cfg, part, width, height, warmup=warmup, dev=dev)
@@ -832,7 +835,31 @@ def canopy_due_since(cfg, now=None):
     return on_time.timestamp()
 
 
+CAPTURE_SCRATCH = ("*.raw", "*.part", "*.tmp")
+
+
+def clear_capture_scratch(min_age_s=600):
+    """Remove what an interrupted capture left in the timelapse folder.
+
+    A capture cleans up after itself, but not when the process is killed part
+    way through. Only files old enough that no capture can still own them.
+    """
+    removed = 0
+    for pattern in CAPTURE_SCRATCH:
+        for p in TIMELAPSE_DIR.glob(pattern):
+            try:
+                if time.time() - p.stat().st_mtime > min_age_s:
+                    p.unlink()
+                    removed += 1
+            except OSError:
+                pass
+    if removed:
+        log.info(f"removed {removed} leftover capture file(s) from {TIMELAPSE_DIR.name}/")
+    return removed
+
+
 def capture_loop():
+    clear_capture_scratch()
     last_shot = None
     while True:
         try:
