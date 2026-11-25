@@ -78,7 +78,7 @@ def crop_box(cfg=None):
         with config.settings_lock:
             cfg = dict(config.settings)
     try:
-        return parse_roi(cfg.get("roi", ""))
+        return config.parse_roi(cfg.get("roi", ""))
     except ValueError:
         return None
 
@@ -96,27 +96,6 @@ def crop_array(img, roi):
     x0, y0 = int(round(iw * x)), int(round(ih * y))
     x1, y1 = min(iw, x0 + max(2, int(round(iw * w)))), min(ih, y0 + max(2, int(round(ih * h))))
     return img[y0:y1, x0:x1]
-
-
-def parse_roi(s):
-    """Validate 'x,y,w,h' fraction string. Returns tuple or None for blank."""
-    s = (s or "").strip()
-    if not s:
-        return None
-    parts = [float(p) for p in s.split(",")]
-    if len(parts) != 4:
-        raise ValueError("need four numbers")
-    x, y, w, h = parts
-    if not (
-        0 <= x < 1
-        and 0 <= y < 1
-        and 0.05 <= w <= 1
-        and 0.05 <= h <= 1
-        and x + w <= 1.001
-        and y + h <= 1.001
-    ):
-        raise ValueError("out of range")
-    return x, y, w, h
 
 
 def oom_first(cmd):

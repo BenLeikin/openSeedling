@@ -487,10 +487,32 @@ def _v_timezone(v):
     return v
 
 
+def parse_roi(s):
+    """A crop as (x, y, w, h) fractions of the frame, from "x,y,w,h"; None for
+    blank. Raises ValueError when it is not four numbers inside the frame."""
+    s = (s or "").strip()
+    if not s:
+        return None
+    parts = [float(p) for p in s.split(",")]
+    if len(parts) != 4:
+        raise ValueError("need four numbers")
+    x, y, w, h = parts
+    if not (
+        0 <= x < 1
+        and 0 <= y < 1
+        and 0.05 <= w <= 1
+        and 0.05 <= h <= 1
+        and x + w <= 1.001
+        and y + h <= 1.001
+    ):
+        raise ValueError("out of range")
+    return x, y, w, h
+
+
 def _v_roi(v):
     v = str(v or "").strip()
     try:
-        camera_mod.parse_roi(v)
+        parse_roi(v)
     except ValueError:
         raise ValueError("must be 'x,y,w,h' as fractions 0-1, or blank") from None
     return v
@@ -538,109 +560,6 @@ def _v_heat_sensor(v):
     if not re.fullmatch(r"temp:soil(_[0-9A-Za-z]+)?", v):
         raise ValueError("pick a soil temperature probe")
     return v
-
-
-def _v_setups(v):
-    """A list of grow setups; see setups(). An empty list means one default."""
-    if not isinstance(v, list):
-        raise ValueError("must be a list")
-    if len(v) > setups_mod.MAX_SETUPS:
-        raise ValueError(f"at most {setups_mod.MAX_SETUPS} setups")
-    out, ids, lights, luxes = [], set(), set(), set()
-    for i, x in enumerate(v, 1):
-        if not isinstance(x, dict):
-            raise ValueError(f"setup {i} is not an object")
-        name = str(x.get("name") or "").strip()[:40]
-        if not name:
-            raise ValueError(f"setup {i} needs a name")
-        sid = (
-            re.sub(r"[^a-z0-9]+", "-", str(x.get("id") or name).lower()).strip("-")[:24]
-            or f"setup{i}"
-        )
-        while sid in ids:
-            sid += "x"
-        light = x.get("light") or ""
-        if light not in ("main", "second", ""):
-            raise ValueError(f"{name}: unknown light")
-        if light and light in lights:
-            raise ValueError(
-                f"{name}: the {setups_mod.light_label(light)} is already assigned to another setup"
-            )
-        lux = str(x.get("lux") or "")
-        if lux and not re.fullmatch(r"lux(:\d)?", lux):
-            raise ValueError(f"{name}: light sensor must be lux or lux:2")
-        if lux and lux in luxes:
-            raise ValueError(f"{name}: {lux} is already assigned to another setup")
-        k = x.get("k")
-        if k in (None, "", 0):
-            k = None
-        else:
-            try:
-                k = float(k)
-            except (TypeError, ValueError):
-                raise ValueError(f"{name}: the lux-to-PPFD factor must be a number") from None
-            if not 10 <= k <= 200:
-                raise ValueError(f"{name}: the lux-to-PPFD factor must be 10 to 200")
-        sens = x.get("sensors") or []
-        if (
-            not isinstance(sens, list)
-            or len(sens) > 64
-            or not all(
-                isinstance(q, str) and re.fullmatch(r"[a-z_]+(:[A-Za-z0-9_]+)?", q) for q in sens
-            )
-        ):
-            raise ValueError(f"{name}: sensors must be a list of sensor keys")
-        trays_ = x.get("trays") or []
-        if (
-            not isinstance(trays_, list)
-            or len(trays_) > 32
-            or not all(
-                isinstance(q, (str, int)) and re.fullmatch(r"[A-Za-z0-9_-]{1,24}", str(q))
-                for q in trays_
-            )
-        ):
-            raise ValueError(f"{name}: trays must be a list of tray ids")
-        with settings_lock:
-            known = set((settings.get("trays") or {}).keys())
-        trays_ = sorted({str(q) for q in trays_} & known)  # a deleted tray drops out
-        try:
-            lo, hi = float(x.get("dli_low")), float(x.get("dli_high"))
-        except (TypeError, ValueError):
-            raise ValueError(f"{name}: the DLI band needs a low and a high") from None
-        if not (0.5 <= lo < hi <= 65):
-            raise ValueError(f"{name}: the DLI band low must be below the high (0.5 to 65)")
-        # A tray's probe, canopy and float come with the tray, the light sensor
-        # is chosen on its own, and the reservoir follows its flag: none of
-        # them belong in the sensor list. A sensor may be listed in more than
-        # one setup: one air sensor between two close areas counts for both.
-        sens = [q for q in sens if not re.match(r"(probe|canopy|float|reservoir):|lux(:|$)", q)]
-        for flag in ("fan", "camera", "reservoir", "heat"):
-            if x.get(flag):
-                if any(o.get(flag) for o in out):
-                    raise ValueError(f"{name}: the {flag} is already assigned to another setup")
-        ids.add(sid)
-        if light:
-            lights.add(light)
-        if lux:
-            luxes.add(lux)
-        out.append(
-            {
-                "id": sid,
-                "name": name,
-                "light": light,
-                "lux": lux,
-                "k": k,
-                "sensors": sorted(set(sens)),
-                "trays": trays_,
-                "fan": bool(x.get("fan")),
-                "camera": bool(x.get("camera")),
-                "reservoir": bool(x.get("reservoir")),
-                "heat": bool(x.get("heat")),
-                "dli_low": lo,
-                "dli_high": hi,
-            }
-        )
-    return out
 
 
 def _v_tray_sensors(v):
@@ -865,7 +784,6 @@ SETTINGS_VALIDATORS = {
     "usb_warmup_frames": _v_int(1, 20),
     "live_interval_s": _v_int(0, 120),
     "heat_mode": _v_choice("off", "auto", "on"),
-    "setups": _v_setups,
     "tray_sensors": _v_tray_sensors,
     "dli_target_low": _v_float(0.5, 60, clamp=False),
     "dli_target_high": _v_float(1, 65, clamp=False),
@@ -913,8 +831,3 @@ def form_spec():
     """FORM for the page, each field with its default (the page fills a
     missing value from it, and saves it for a field left blank)."""
     return {k: dict(s, default=DEFAULTS.get(k)) for k, s in FORM.items()}
-
-
-# imported at the bottom: these modules import this one
-import setups as setups_mod
-import camera as camera_mod
