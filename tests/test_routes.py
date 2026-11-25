@@ -49,7 +49,7 @@ def test_routes():
 
 def test_sign_in():
     with config.settings_lock:
-        config.settings.update(kasa_user="me@example.com", latitude=34.2, longitude=-118.8)
+        config.settings.update(kasa_user="me@example.com", latitude=51.5, longitude=-0.12)
     s = c.get("/api/status").get_json()["settings"]
     assert "kasa_user" not in s and "password_hash" not in s, "credentials never in /api/status"
     assert "latitude" in s, "no password set: location shown"

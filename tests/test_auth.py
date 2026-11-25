@@ -373,8 +373,8 @@ def test_a_signed_out_viewer_gets_only_the_settings_the_page_draws_with():
     with config.settings_lock:
         config.settings.update(
             ai_notes="the tray by the kitchen window",
-            latitude=34.2,
-            longitude=-118.8,
+            latitude=51.5,
+            longitude=-0.12,
             kasa_user="me@example.com",
             screen_night="dim",
         )
@@ -482,7 +482,7 @@ def test_a_signed_out_viewer_does_not_get_the_machines_name_or_address():
     hoststats.all_stats = lambda: {
         "cpu_temp_c": 48.2,
         "host": "openSeedling",
-        "ip": "10.0.2.220",
+        "ip": "192.0.2.20",
         "wifi": {"iface": "wlan0", "percent": 70, "dbm": -58},
         "model": "Raspberry Pi Zero 2 W",
     }
@@ -493,7 +493,7 @@ def test_a_signed_out_viewer_does_not_get_the_machines_name_or_address():
         assert set(anon) == {"cpu_temp_c", "model"}, f"signed out: health only ({sorted(anon)})"
         owner = routes.app.test_client()
         owner.post("/api/login", json={"password": "pw"})
-        assert owner.get("/api/host").get_json()["ip"] == "10.0.2.220"
+        assert owner.get("/api/host").get_json()["ip"] == "192.0.2.20"
     finally:
         hoststats.all_stats = real
         set_password(False)

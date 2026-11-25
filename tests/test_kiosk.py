@@ -79,7 +79,7 @@ def test_kiosk():
         local = c2.post("/api/fan", **fan, **ON_SCREEN).status_code
         main_port = c2.post("/api/fan", **fan).status_code
         remote = c2.post(
-            "/api/fan", **fan, **ON_SCREEN, environ_base={"REMOTE_ADDR": "10.0.0.69"}
+            "/api/fan", **fan, **ON_SCREEN, environ_base={"REMOTE_ADDR": "192.0.2.69"}
         ).status_code
     finally:
         config.TRUST_LOCALHOST = was

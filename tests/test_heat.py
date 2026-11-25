@@ -168,7 +168,7 @@ def test_heat_mat():
             heat_mode="auto",
             heat_target_f=75,
             heat_max_f=95,
-            kasa_host="10.0.3.177",
+            kasa_host="192.0.2.77",
             light_backend="dim",
         )
     heat.heat_state.update(

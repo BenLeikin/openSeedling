@@ -18,8 +18,10 @@ from applog import log
 
 # ------------------- defaults (overridden by config.json) -------------------
 DEFAULTS = {
-    "latitude": 34.17,
-    "longitude": -118.84,
+    # downtown Los Angeles, to go with the default timezone; setup.sh and
+    # Settings, System ask for the real ones
+    "latitude": 34.05,
+    "longitude": -118.24,
     "timezone": "America/Los_Angeles",
     "max_bright": 100,  # percent
     "ramp_min": 30,  # minutes
