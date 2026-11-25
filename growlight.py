@@ -50,6 +50,13 @@ if __name__ == "__main__":
     proxy = config.proxy_options()
     if proxy:
         log.info(f"trusting forwarded headers from the proxy at {proxy['trusted_proxy']}")
+    if config.login_https_only():
+        log.info("sign-in is accepted over HTTPS only")
+    elif config.LOGIN_HTTPS_ONLY:
+        log.error(
+            "GROWLIGHT_LOGIN_HTTPS_ONLY is set without a usable GROWLIGHT_TRUSTED_PROXY, "
+            "so nothing arrives over HTTPS; sign-in stays open on plain http"
+        )
     # One process only: the loops above own the PWM, the pumps and the I2C bus,
     # and a second worker would be a second controller on the same hardware.
     try:

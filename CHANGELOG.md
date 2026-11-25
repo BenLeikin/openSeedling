@@ -52,6 +52,7 @@ the 4-17 baseline. The installer commits each one with the heading below.
 - `GROWLIGHT_TRUSTED_PROXY` names the reverse proxy in front of the dashboard. Its `X-Forwarded-For` and `X-Forwarded-Proto` are believed, so behind HTTPS the session cookie is marked Secure and the login back-off counts per browser. The cookie was never marked Secure behind a proxy before: the web server drops those headers from addresses it was not told to trust.
 - With a password set, a signed-out viewer's status carries only the settings the read-only page draws with (35 on a typical install, down from about 130): the timezone, device paths, alert thresholds and the AI report notes are no longer public. Before, every setting was sent unless it was on a short list of secrets.
 - Signed-out viewers get sunrise and sunset to the nearest quarter hour, and the light window too when it follows the sun; to the second they place the grow within a few kilometres. `/api/host` leaves out the Pi's hostname, IP address and Wi-Fi link for them, and the status leaves out the smart plug's address.
+- `GROWLIGHT_LOGIN_HTTPS_ONLY=1`: behind a trusted proxy, a password is accepted over HTTPS only. The plain-http address on the local network stays a read-only view and its page does not show the password box, so the password does not cross the network in clear.
 - Request bodies over 1 MB are refused.
 - Light-plan advice is escaped before it is shown (it can contain a setup's name).
 - The Discord webhook URL and ntfy topic are kept out of the log when a send fails.

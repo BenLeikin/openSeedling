@@ -116,6 +116,8 @@ def login():
         h = config.settings.get("password_hash", "")
     if not h:
         return jsonify(ok=True, authed=True)  # no password set -> open
+    if config.login_https_only() and not request.is_secure:
+        return jsonify(ok=False, error="sign in at the https address; this one is read-only"), 403
     pw = str((request.get_json(silent=True) or {}).get("password", ""))[:256]
     who = request.remote_addr or "?"
     wait = auth.logins.begin(who)

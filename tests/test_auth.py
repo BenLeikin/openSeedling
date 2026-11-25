@@ -497,3 +497,41 @@ def test_a_signed_out_viewer_does_not_get_the_machines_name_or_address():
     finally:
         hoststats.all_stats = real
         set_password(False)
+
+
+def test_with_https_only_a_password_is_refused_over_plain_http():
+    was = config.TRUSTED_PROXY, config.LOGIN_HTTPS_ONLY
+    checks = []
+    real_check = routes.check_password_hash
+    routes.check_password_hash = lambda h, pw: checks.append(pw) or real_check(h, pw)
+    set_password(True)
+    try:
+        config.TRUSTED_PROXY, config.LOGIN_HTTPS_ONLY = "10.0.0.5", True
+        assert _status(c)["login_https_only"] is True
+
+        plain = routes.app.test_client()
+        r = plain.post("/api/login", json={"password": "pw"})
+        assert r.status_code == 403 and "https" in r.get_json()["error"]
+        assert checks == [], "the password is not even checked"
+        assert plain.post("/api/login", json={"password": "pw"}).status_code == 403, (
+            "and the refusal is not counted as a wrong password"
+        )
+        assert not _status(plain)["authed"]
+        assert plain.get("/api/status").status_code == 200, "the plain address still shows the page"
+
+        https = routes.app.test_client()
+        r = https.post("/api/login", json={"password": "pw"}, base_url="https://localhost")
+        assert r.status_code == 200 and "Secure" in r.headers["Set-Cookie"]
+
+        # without a proxy nothing arrives over HTTPS: the setting must not lock everyone out
+        config.TRUSTED_PROXY = ""
+        assert not config.login_https_only() and _status(c)["login_https_only"] is False
+        assert (
+            routes.app.test_client().post("/api/login", json={"password": "pw"}).status_code == 200
+        )
+        config.TRUSTED_PROXY = "not-an-address"
+        assert not config.login_https_only()
+    finally:
+        config.TRUSTED_PROXY, config.LOGIN_HTTPS_ONLY = was
+        routes.check_password_hash = real_check
+        set_password(False)

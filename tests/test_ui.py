@@ -812,6 +812,29 @@ def visitor(pw, base, owner_sees):
     b.close()
 
 
+def https_only(pw, base):
+    """With sign-in limited to HTTPS, the plain-http page asks for no password."""
+    b = pw.chromium.launch()
+    page = b.new_context(viewport={"width": 1400, "height": 1000}).new_page()
+    page.goto(base + "/")
+    page.wait_for_timeout(3500)
+    got = page.evaluate(
+        """()=>{ const shown = id => getComputedStyle(document.getElementById(id)).display !== 'none';
+           return {pw: shown('pw'), btn: shown('loginbtn'), ro: shown('rolabel'),
+                   why: document.getElementById('rolabel').title,
+                   readonly: document.body.classList.contains('readonly')}; }"""
+    )
+    check(
+        got["readonly"]
+        and got["ro"]
+        and not got["pw"]
+        and not got["btn"]
+        and "https" in got["why"],
+        f"over plain http with HTTPS-only sign-in the page shows read-only and no password box ({got})",
+    )
+    b.close()
+
+
 def camera_pair(page, base, app):
     """With a second camera set, Settings' Align cameras asks and then aligns,
     and the camera card's own Align button still opens the align view."""
@@ -1127,6 +1150,11 @@ def main():
             (app / "config.json").write_text(json.dumps(cfg))
             proc, base = start(app, port)
             visitor(pw, base, owner_sees)
+            proc.terminate()
+            proc.wait(15)
+            os.environ.update(GROWLIGHT_TRUSTED_PROXY="10.0.0.5", GROWLIGHT_LOGIN_HTTPS_ONLY="1")
+            proc, base = start(app, port)
+            https_only(pw, base)
     finally:
         proc.terminate()
         try:

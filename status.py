@@ -500,6 +500,8 @@ def status_payload(authed=None):
         )((snap.get("lux") or (None, None))[1]),
         authed=auth.is_authed() if authed is None else bool(authed),
         auth_enabled=auth.auth_enabled(),
+        # the page leaves the password box out where a login would be refused
+        login_https_only=config.login_https_only(),
         # which sensors sit in which tray, and the reverse (Settings, Setups)
         tray_map=setups_mod.tray_map(cfg)[0],
         sensor_trays=setups_mod.tray_map(cfg)[1],

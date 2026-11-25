@@ -60,6 +60,7 @@ read by the systemd unit:
 | `GROWLIGHT_LOG_LEVEL` | `info` | `debug`, `info`, `warning`, `error` |
 | `GROWLIGHT_LOG_FILE` | | Adds a rotating log file (in the app folder: the service cannot write elsewhere) |
 | `GROWLIGHT_TRUSTED_PROXY` | | IP address of a reverse proxy whose `X-Forwarded-For` and `X-Forwarded-Proto` are believed ([install.md](install.md#reverse-proxy)) |
+| `GROWLIGHT_LOGIN_HTTPS_ONLY` | | `1`: a password is accepted over HTTPS only (needs `GROWLIGHT_TRUSTED_PROXY`); the plain-http address is read-only |
 
 `deploy/env.example` documents every key. Re-running setup keeps any key it does
 not ask about.

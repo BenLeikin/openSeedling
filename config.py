@@ -265,21 +265,27 @@ def listen_on():
 TRUSTED_PROXY = os.environ.get("GROWLIGHT_TRUSTED_PROXY", "").strip()
 
 
+def trusted_proxy():
+    """TRUSTED_PROXY as an IP address; "" when it is unset or is not one."""
+    try:
+        return str(ipaddress.ip_address(TRUSTED_PROXY)) if TRUSTED_PROXY else ""
+    except ValueError:
+        return ""
+
+
 def proxy_options():
     """waitress's settings for TRUSTED_PROXY; none without one.
 
     Only a single IP address is accepted. A name, a network or "*" would let
     anyone who can send from there choose the address their logins are counted
     under."""
-    if not TRUSTED_PROXY:
-        return {}
-    try:
-        address = str(ipaddress.ip_address(TRUSTED_PROXY))
-    except ValueError:
-        log.error(
-            f"GROWLIGHT_TRUSTED_PROXY={TRUSTED_PROXY!r} is not an IP address; "
-            "forwarded headers are not trusted"
-        )
+    address = trusted_proxy()
+    if not address:
+        if TRUSTED_PROXY:
+            log.error(
+                f"GROWLIGHT_TRUSTED_PROXY={TRUSTED_PROXY!r} is not an IP address; "
+                "forwarded headers are not trusted"
+            )
         return {}
     return {
         "trusted_proxy": address,
@@ -287,6 +293,20 @@ def proxy_options():
         "trusted_proxy_headers": {"x-forwarded-for", "x-forwarded-proto"},
         "clear_untrusted_proxy_headers": True,
     }
+
+
+# GROWLIGHT_LOGIN_HTTPS_ONLY=1: a password is accepted only over HTTPS, the
+# site the trusted proxy publishes. The plain-http address on the local
+# network stays a read-only view, and the page there does not offer the
+# password box, so a password is not typed where it would cross the network
+# in clear.
+LOGIN_HTTPS_ONLY = os.environ.get("GROWLIGHT_LOGIN_HTTPS_ONLY", "") == "1"
+
+
+def login_https_only():
+    """LOGIN_HTTPS_ONLY, in force only while there is a trusted proxy: without
+    one no request arrives over HTTPS, and nobody could sign in at all."""
+    return LOGIN_HTTPS_ONLY and bool(trusted_proxy())
 
 
 CONFIG_PATH = Path(__file__).with_name("config.json")

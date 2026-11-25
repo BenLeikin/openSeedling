@@ -48,7 +48,7 @@ Signed-out viewers see neither the location nor any credential in
 | POST | `/api/auto_water` | Arm or disarm auto-watering |
 | POST | `/api/planting_end`, `/api/planting_restore` | Move a cell to the planting history, or bring it back |
 | POST | `/api/plug_discover`, `/api/plug_test` | Find and test a Kasa smart plug |
-| POST | `/api/login`, `/api/logout` | Auth. A wrong password makes that client address wait (1 s, doubling to 60 s); a login sent during the wait gets 429 with `Retry-After` |
+| POST | `/api/login`, `/api/logout` | Auth. A wrong password makes that client address wait (1 s, doubling to 60 s); a login sent during the wait gets 429 with `Retry-After`. With `GROWLIGHT_LOGIN_HTTPS_ONLY`, a login over plain http gets 403 |
 
 Secrets (`password_hash`, webhook URLs, ntfy topic, Kasa credentials) are
 never in `/api/status`. With a password set, a signed-out viewer gets a

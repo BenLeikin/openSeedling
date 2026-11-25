@@ -174,6 +174,17 @@ setting every visitor through the proxy shares one wait. Set a password
 (`scripts/set_password.py`) before the dashboard is reachable from outside.
 
 Proxy the main port only, never the touchscreen's (5001): requests there are
-signed in without a password. The main port still answers plain http on your
-own network; to close that, allow only the proxy's address to reach it in the
-Pi's firewall.
+signed in without a password.
+
+The main port still answers plain http on your own network. To keep the
+password off it, add
+
+```
+GROWLIGHT_LOGIN_HTTPS_ONLY=1
+```
+
+Sign-in is then accepted only through the proxy's HTTPS site. The plain
+address stays a read-only view and its page does not show the password box.
+The setting does nothing without `GROWLIGHT_TRUSTED_PROXY`, so it cannot lock
+you out of an install that has no HTTPS. The hop from the proxy to the Pi is
+plain http either way; keep the two on a network you trust.

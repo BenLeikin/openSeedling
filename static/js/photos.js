@@ -602,9 +602,13 @@ export function applyAuth(j) {
   document.body.classList.toggle('readonly', authEnabled && !canEdit);
   const box = document.getElementById('authbox');
   box.style.display = authEnabled ? 'flex' : 'none';
-  document.getElementById('pw').style.display = authEnabled && !canEdit ? '' : 'none';
-  document.getElementById('loginbtn').style.display = authEnabled && !canEdit ? '' : 'none';
-  document.getElementById('rolabel').style.display = authEnabled && !canEdit ? '' : 'none';
+  // over plain http the controller may take no password: then none is asked for
+  const here = !j.login_https_only || location.protocol === 'https:';
+  document.getElementById('pw').style.display = authEnabled && !canEdit && here ? '' : 'none';
+  document.getElementById('loginbtn').style.display = authEnabled && !canEdit && here ? '' : 'none';
+  const ro = document.getElementById('rolabel');
+  ro.style.display = authEnabled && !canEdit ? '' : 'none';
+  ro.title = here ? '' : "Sign in at this dashboard's https address";
   document.getElementById('logoutbtn').style.display = authEnabled && canEdit ? '' : 'none';
 }
 export async function doLogin() {
