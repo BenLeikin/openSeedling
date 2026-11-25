@@ -4,7 +4,7 @@ Hardware test: ramp the grow light 0% -> 100% -> 0% over 30 seconds.
 
 Run it with the service stopped so the two don't fight over the PWM channel:
   sudo systemctl stop growlight
-  ~/growlight/venv/bin/python ~/growlight/scripts/test_ramp.py
+  ~/growlight/venv/bin/python ~/growlight/scripts/ramp_check.py
   sudo systemctl start growlight
 """
 
