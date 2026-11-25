@@ -820,6 +820,7 @@ SEEN_TTL = 3 * 86400  # a sensor silent this long is treated as removed
 # binary sensors are legitimately constant for days; a flatline there means
 # nothing and accusing them would train you to ignore the rule
 NON_STUCK_PREFIXES = ("float:", "reservoir:", "canopy:", "heat:", "sys:")
+LUX_DARK = 2.0  # lx; the BH1750's smallest step is about 1.9
 
 
 def stuck_sensors(cadence_s):
@@ -832,6 +833,8 @@ def stuck_sensors(cadence_s):
             vals = db.recent_values(key, n=24, max_age=48 * 3600)
         except Exception:
             continue
+        if key.startswith("lux") and vals and max(vals) < LUX_DARK:
+            continue  # a light sensor in the dark reads a steady zero all night
         why = quality.check_stuck(vals, cadence_s)
         if why:
             out[key] = why
