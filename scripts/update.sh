@@ -25,7 +25,7 @@
 set -euo pipefail
 
 APP="$HOME/growlight"; ZIP=""; CHECK=0; YES=0
-SERVICE=growlight; PORT="${GROWLIGHT_PORT:-5000}"; KEEP_BACKUPS=5
+SERVICE=growlight; PORT=5000; KEEP_BACKUPS=5
 BK=""; STAGE=""; APPLIED=0; ROLLING=0
 declare -a CHANGED=() ADDED=() REMOVED=()
 
@@ -101,6 +101,9 @@ done
 
 [[ $EUID -ne 0 ]] || die "run as your normal user, not root"
 [[ -f "$APP/growlight.py" ]] || die "$APP does not look like the app (use --dir)"
+# the port the service listens on is set in .env, not in this shell
+env_port="$(sed -n 's/^GROWLIGHT_HTTP_PORT=//p' "$APP/.env" 2>/dev/null | tail -1 | tr -d "\"' " || true)"
+PORT="${env_port:-$PORT}"
 if [[ -z "$ZIP" ]]; then
   here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   ZIP="$(ls -1t ./openSeedling*.zip "$here"/openSeedling*.zip "$HOME"/openSeedling*.zip \

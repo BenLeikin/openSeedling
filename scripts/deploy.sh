@@ -63,7 +63,7 @@ echo "==> Updating $HOST:$DIR"
 ssh -o BatchMode=yes "$HOST" bash -s -- "$DIR" "$BRANCH" "$CHECK" << 'REMOTE'
 set -euo pipefail
 APP="${1/#\~/$HOME}"; BRANCH="$2"; CHECK="$3"
-SERVICE=growlight; PORT="${GROWLIGHT_PORT:-5000}"
+SERVICE=growlight; PORT=5000
 
 step() { echo "==> $*"; }
 ok()   { echo "    ok: $*"; }
@@ -84,6 +84,9 @@ healthy() {       # healthy SECONDS: service active and /api/status answers 200
 
 cd "$APP" 2>/dev/null || die "$APP not found on $(hostname)"
 [[ -d .git ]] || die "$APP is not a git checkout"
+# the port the service listens on is set in .env, not in this shell
+env_port="$(sed -n 's/^GROWLIGHT_HTTP_PORT=//p' .env 2>/dev/null | tail -1 | tr -d "\"' " || true)"
+PORT="${env_port:-$PORT}"
 [[ "$(git rev-parse --abbrev-ref HEAD)" == "$BRANCH" ]] \
   || die "$APP is on $(git rev-parse --abbrev-ref HEAD), not $BRANCH"
 
