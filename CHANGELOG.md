@@ -35,6 +35,7 @@ the 4-17 baseline. The installer commits each one with the heading below.
 - Alerts remind once a day while a problem lasts, instead of every six hours (Settings, Alerts; an install keeps the interval it has saved). Alert state survives a restart, so restarting the service no longer announces every standing problem again.
 - The touchscreen is signed in because it connects to its own port, 5001 on 127.0.0.1 (`GROWLIGHT_SCREEN_PORT`), not because its requests come from the Pi. After updating, restart the kiosk: `sudo systemctl restart growlight-kiosk`.
 - The server tests run under pytest: the single 5,000-line script is now one file per area with plain asserts, and each test starts from the same settings and an empty history, so any test passes on its own.
+- The README is a short front page; the detail it held is in `docs/`, one file per topic.
 
 ### Security
 - Request bodies over 1 MB are refused.
