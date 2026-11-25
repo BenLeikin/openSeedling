@@ -22,6 +22,7 @@ the 4-17 baseline. The installer commits each one with the heading below.
 - A change the controller refuses (the fan, the heat mat, a pump run, the report settings) is said in a notice on the page; several of these failed silently, or showed an error that the next redraw wiped.
 - Right after the light's mode was changed, a status could still report the old mode until the control loop's next pass, and the buttons flicked back. The status reports the mode that was asked for.
 - The dashboard fetches the photo list and the AI report when a status says they changed, not on every status. Picking a chart range twice quickly no longer shows the wrong range's data.
+- The photo list (`/api/photos`) is listed from disk only when the thumbnail folder changes, and a browser that already has it gets a 304. A run of 7,500 photos used to be listed, sorted and sent in full on every page load.
 - `update.sh` and `deploy.sh` find tracebacks in a long log and check the port set in `.env`.
 - A pump run is put on record before the pump starts, so a restart part way through still counts it against the daily limit and the cooldown.
 - Failed fills are kept per tray: a good fill on one tray no longer clears another tray's alert.
@@ -53,6 +54,11 @@ the 4-17 baseline. The installer commits each one with the heading below.
 - With a password set, a signed-out viewer's status carries only the settings the read-only page draws with (35 on a typical install, down from about 130): the timezone, device paths, alert thresholds and the AI report notes are no longer public. Before, every setting was sent unless it was on a short list of secrets.
 - Signed-out viewers get sunrise and sunset to the nearest quarter hour, and the light window too when it follows the sun; to the second they place the grow within a few kilometres. `/api/host` leaves out the Pi's hostname, IP address and Wi-Fi link for them, and the status leaves out the smart plug's address.
 - `GROWLIGHT_LOGIN_HTTPS_ONLY=1`: behind a trusted proxy, a password is accepted over HTTPS only. The plain-http address on the local network stays a read-only view and its page does not show the password box, so the password does not cross the network in clear.
+- Every reply carries a content security policy (scripts and styles from the dashboard itself only, no framing by other sites), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` and `Referrer-Policy: no-referrer`. The touchscreen's saved calibration is now data in the page instead of an inline script, which the policy would refuse.
+- The device tiles and the AI report's germination count are escaped like the rest of the page.
+- `config.json`, its backup, the session key and the database are readable by their owner only, however they were created; `setup.sh` fixes the mode of existing ones.
+- The packages the pinned requirements bring with them are pinned too, in `constraints.txt`, and `setup.sh` installs against it. This moves aiohttp to 3.14.4, multidict to 6.9.1, yarl to 1.25.1 and Werkzeug to 3.1.9, past the advisories published for the versions that were installed.
+- The default location is downtown Los Angeles, and the tests use documentation addresses.
 - Request bodies over 1 MB are refused.
 - Light-plan advice is escaped before it is shown (it can contain a setup's name).
 - The Discord webhook URL and ntfy topic are kept out of the log when a send fails.
