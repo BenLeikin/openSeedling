@@ -375,7 +375,12 @@ def pump_test():
     except (TypeError, ValueError):
         secs = 3.0
     force = bool(data.get("force", False))
-    if data.get("until_full"):
+    fill = bool(data.get("until_full"))
+    # answer a refusal here; once the thread starts, nobody is left to tell
+    why = water.pump_refusal(tray, None if fill else secs, force)
+    if why:
+        return jsonify(ok=False, error=why), 200
+    if fill:
         threading.Thread(
             target=lambda: water.run_pump_until_full(tray, "fill", force), daemon=True
         ).start()
