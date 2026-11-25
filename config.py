@@ -1,7 +1,9 @@
 """Settings: DEFAULTS, config.json load and save, startup migrations,
 validators, and the shared runtime state and locks."""
 
+import copy
 import json
+import math
 import os
 import re
 import threading
@@ -235,7 +237,7 @@ TRUST_LOCALHOST = os.environ.get("GROWLIGHT_TRUST_LOCALHOST", "") == "1"
 CONFIG_PATH = Path(__file__).with_name("config.json")
 TIMEZONES = sorted(available_timezones())
 
-settings = dict(DEFAULTS)
+settings = copy.deepcopy(DEFAULTS)
 _file_keys = set()
 CONFIG_BAK = CONFIG_PATH.with_name("config.json.bak")
 # Set when config.json exists but neither it nor its backup could be read.
@@ -419,15 +421,26 @@ def _today_str():
 
 
 def _v_bool(v):
+    if isinstance(v, str):
+        return v.strip().lower() in ("1", "true", "yes", "on")
     return bool(v)
+
+
+def _number(v):
+    """v as a finite float; blank counts as 0. NaN and infinity are refused:
+    they pass every range comparison and cannot be written as JSON."""
+    try:
+        n = float(v if v not in (None, "") else 0)
+    except (TypeError, ValueError):
+        raise ValueError("must be a number") from None
+    if not math.isfinite(n):
+        raise ValueError("must be a finite number")
+    return n
 
 
 def _v_int(lo, hi, clamp=True):
     def f(v):
-        try:
-            n = int(float(v if v not in (None, "") else 0))
-        except (TypeError, ValueError):
-            raise ValueError("must be a number") from None
+        n = int(_number(v))
         if clamp:
             return max(lo, min(hi, n))
         if not lo <= n <= hi:
@@ -439,10 +452,7 @@ def _v_int(lo, hi, clamp=True):
 
 def _v_float(lo, hi, clamp=True):
     def f(v):
-        try:
-            n = float(v if v not in (None, "") else 0)
-        except (TypeError, ValueError):
-            raise ValueError("must be a number") from None
+        n = _number(v)
         if clamp:
             return max(lo, min(hi, n))
         if not lo <= n <= hi:
@@ -835,6 +845,8 @@ def _v_touch_cal(v):
         m = [float(x) for x in v["m"]]
     except (TypeError, ValueError):
         raise ValueError("the six values must be numbers") from None
+    if not all(math.isfinite(x) for x in m):
+        raise ValueError("the six values must be finite numbers")
     # a squeezed mapping needs a large factor to undo it (taps on the rig
     # arrived within about a twentieth of the screen's height)
     if any(abs(x) > 200 for x in (m[0], m[1], m[3], m[4])) or any(
@@ -863,6 +875,38 @@ SETTINGS_VALIDATORS = {
     "theme": _v_choice("auto", "light", "dark"),
 }
 SETTINGS_VALIDATORS.update({k: _form_validator(s) for k, s in FORM.items()})
+
+LOAD_CHECKED_KINDS = ("int", "float", "tempF", "bool", "choice", "time")
+
+
+def check_loaded(loaded, keys):
+    """Put saved form settings through the validators a POST would meet.
+
+    config.json can be edited by hand, and a wrong type there (a number in
+    quotes, a mode that does not exist) would otherwise surface later as an
+    exception inside a control loop. A value that fails is replaced in
+    `loaded` by its default and reported; the file itself is left alone.
+    Blank values are skipped: for several fields "not set" is a choice.
+    """
+    bad = []
+    for key in sorted(keys):
+        if FORM.get(key, {}).get("kind") not in LOAD_CHECKED_KINDS:
+            continue
+        if loaded.get(key) in (None, ""):
+            continue
+        try:
+            loaded[key] = SETTINGS_VALIDATORS[key](loaded[key])
+        except (ValueError, TypeError) as e:
+            log.error(
+                f"config.json: {key} = {loaded[key]!r} is not valid ({e}); "
+                f"using the default, {DEFAULTS.get(key)!r}"
+            )
+            loaded[key] = copy.deepcopy(DEFAULTS.get(key))
+            bad.append(key)
+    return bad
+
+
+check_loaded(settings, _file_keys)
 
 
 def form_spec():

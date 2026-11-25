@@ -3408,6 +3408,45 @@ def _config_safety():
     )
 
 
+def _loaded_settings():
+    """Hand-edited settings are checked at start-up, and numbers must be finite."""
+    loaded = {
+        "ramp_min": "30",  # a number in quotes
+        "schedule_mode": "lunar",  # no such mode
+        "max_bright": 400,  # out of range
+        "fixed_on": "25:99",
+        "light_linear_on": "false",
+        "moisture_threshold_pct": None,  # blank: left alone
+        "trays": {"1": {"cells": {}}},  # not a form field: left alone
+    }
+    untouched = {k: loaded[k] for k in ("moisture_threshold_pct", "trays")}
+    bad = config.check_loaded(loaded, set(loaded))
+    check(
+        loaded["ramp_min"] == 30
+        and loaded["light_linear_on"] is False
+        and bad == ["fixed_on", "max_bright", "schedule_mode"]
+        and all(loaded[k] == config.DEFAULTS[k] for k in bad)
+        and all(loaded[k] == v for k, v in untouched.items()),
+        f"a loaded setting of the wrong type is coerced, an invalid one falls back to its "
+        f"default, and everything else is left as it was ({bad})",
+    )
+    refused = []
+    for key, value in (
+        ("light_floor_pct", "nan"),
+        ("light_floor_pct", float("inf")),
+        ("ramp_min", "1e999"),
+        ("screen_touch_cal", {"m": [1, 0, 0, 0, float("nan"), 0]}),
+    ):
+        try:
+            config.SETTINGS_VALIDATORS[key](value)
+        except ValueError:
+            refused.append(key)
+    check(
+        len(refused) == 4,
+        f"NaN and infinity are refused wherever a number is expected ({len(refused)} of 4)",
+    )
+
+
 def _form_validity():
     """Save is never blocked by the browser's own validation of a field in a
     closed section; the server validates instead."""
@@ -4947,6 +4986,7 @@ run("Heat mat", _heat_mat)
 run("Shared sensors and the heat mat setup", _shared_sensors)
 run("Charts", _charts)
 run("Config safety and input checks", _config_safety)
+run("Loaded settings", _loaded_settings)
 run("Settings form validity", _form_validity)
 run("Phone layout", _phone_layout)
 run("Touchscreen kiosk", _kiosk)
