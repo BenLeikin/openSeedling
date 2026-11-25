@@ -15,6 +15,7 @@ from applog import log
 # Importing these starts the app: each module sets itself up when imported.
 # config loads the settings, hardware claims the pins, light starts its dither
 # thread, status arms the switch watchers, routes builds the Flask app.
+import auth
 import config
 import hardware
 import control
@@ -56,7 +57,7 @@ if __name__ == "__main__":
             listen=config.listen_on(),
             threads=16,
             channel_timeout=120,
-            max_request_body_size=routes.MAX_BODY_BYTES,
+            max_request_body_size=auth.MAX_BODY_BYTES,
             ident="OpenSeedling",
         )
     except ImportError:

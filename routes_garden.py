@@ -23,7 +23,6 @@ bp = Blueprint("garden", __name__)
 
 
 @bp.route("/api/probe_cal", methods=["POST"])
-@auth.require_auth
 def probe_cal_set():
     """Capture a tray probe's reading as its wet (100%) or dry (0%) anchor.
 
@@ -95,12 +94,12 @@ def probe_cal_set():
 
 
 @bp.route("/api/float")
+@auth.public
 def api_float():
     return jsonify(floats={t: sensors.read_float(t) for t in sensors.FLOAT_PINS})
 
 
 @bp.route("/api/probe_tempcomp", methods=["POST"])
-@auth.require_auth
 def probe_tempcomp():
     """Estimate (and optionally apply) a tray probe's temperature-drift
     coefficient from logged data. Run it over a warm, no-watering window."""
@@ -133,7 +132,6 @@ def probe_tempcomp():
 
 
 @bp.route("/api/planting_end", methods=["POST"])
-@auth.require_auth
 def api_planting_end():
     """Finish a planting: record it to history, then clear the cell.
 
@@ -166,6 +164,7 @@ def api_planting_end():
 
 
 @bp.route("/api/plantings")
+@auth.public
 def api_plantings():
     """Finished plantings, newest first. Readable without login, like the rest
     of the dashboard."""
@@ -176,7 +175,6 @@ def api_plantings():
 
 
 @bp.route("/api/planting_restore", methods=["POST"])
-@auth.require_auth
 def api_planting_restore():
     """Put a finished planting back in its cell, for a misclick.
 
@@ -212,7 +210,6 @@ def api_planting_restore():
 
 
 @bp.route("/api/trays", methods=["POST"])
-@auth.require_auth
 def api_trays():
     """Save what's planted in each cell. Body: {"tray": "1"|"2", "cells":
     {"A1": {"seed": str, "equipment": str, "planted": "YYYY-MM-DD",
@@ -285,7 +282,6 @@ def _cell_ids(rows, cols):
 
 
 @bp.route("/api/tray_layout", methods=["POST"])
-@auth.require_auth
 def api_tray_layout():
     """Add, remove, rename or resize a tray.
 
@@ -358,7 +354,6 @@ def api_tray_layout():
 
 
 @bp.route("/api/pump", methods=["POST"])
-@auth.require_auth
 def pump_test():
     data = request.get_json(silent=True) or {}
     tray = str(data.get("tray", "1"))
@@ -391,7 +386,6 @@ def pump_test():
 
 
 @bp.route("/api/auto_water", methods=["POST"])
-@auth.require_auth
 def api_auto_water():
     """Arm or disarm autonomous watering, for the trays in the body or every
     pump tray.

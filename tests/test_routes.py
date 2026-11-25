@@ -5,6 +5,8 @@ import threading
 import time
 
 from harness import (
+    events,
+    auth,
     c,
     config,
     db,
@@ -38,7 +40,7 @@ def test_routes():
     assert not leaks, f"all {len(mutating)} mutating routes refuse non-JSON with 415" + (
         f" {leaks}" if leaks else ""
     )
-    big = b'{"pad": "' + b"x" * (routes.MAX_BODY_BYTES + 1) + b'"}'
+    big = b'{"pad": "' + b"x" * (auth.MAX_BODY_BYTES + 1) + b'"}'
     assert (
         c.post("/api/pump", data=big, content_type="application/json").status_code == 413
         and c.post("/api/login", data=big, content_type="application/json").status_code == 413
@@ -188,3 +190,119 @@ def test_data():
     assert sensors.LIVE_READS == (sensors._read_air, sensors._read_lux), (
         "live refresh reads only air and light"
     )
+
+
+def test_routes_are_guarded_unless_marked_public():
+    """A route needs a login unless it says otherwise."""
+    public = sorted(
+        r.rule
+        for r in routes.app.url_map.iter_rules()
+        if getattr(routes.app.view_functions[r.endpoint], "is_public", False)
+    )
+    assert public == [
+        "/",
+        "/api/float",
+        "/api/frame_context",
+        "/api/host",
+        "/api/login",
+        "/api/logout",
+        "/api/photos",
+        "/api/plantings",
+        "/api/report",
+        "/api/screen_event",
+        "/api/series",
+        "/api/series_all",
+        "/api/status",
+        "/api/stream",
+        "/favicon.ico",
+        "/frame/<name>",
+        "/photo/cropped.jpg",
+        "/photo/latest",
+        "/preview.jpg",
+        "/rectified.jpg",
+        "/screen",
+        "/site.webmanifest",
+        "/thumb/<name>",
+        "/video",
+    ], "the list of routes that need no login changed; update it here if that is intended"
+
+    # a route nobody marked: take the mark off one and it needs a login
+    view = routes.app.view_functions["data.api_host"]
+    set_password(True)
+    anon = routes.app.test_client()
+    try:
+        assert anon.get("/api/host").status_code == 200
+        del view.is_public
+        assert anon.get("/api/host").status_code == 401, "an unmarked route needs a login"
+        assert anon.get("/api/backup").status_code == 401
+        assert anon.get("/api/status").status_code == 200, "a public route does not"
+        assert anon.get("/static/style.css").status_code == 200
+        assert anon.get("/no/such/route").status_code == 404
+    finally:
+        view.is_public = True
+        set_password(False)
+
+
+def test_a_change_must_be_a_json_object():
+    for body in ("[1, 2]", '"text"', "7"):
+        r = c.post("/api/fan", data=body, content_type="application/json")
+        assert r.status_code == 400, f"a JSON body that is not an object is refused ({body})"
+    assert c.post("/api/login", data="x", content_type="text/plain").status_code == 415
+    assert c.post("/api/logout", data="x", content_type="text/plain").status_code == 415
+    assert c.post("/api/fan", json={"mode": "auto"}).status_code == 200
+
+
+def test_without_a_password_only_its_own_names_are_answered():
+    """With no password a page on another site could be pointed at this server
+    by DNS rebinding; its requests carry that site's name as their Host."""
+    set_password(False)
+    hosts = {
+        "localhost:5000": 200,
+        "192.168.1.20:5000": 200,
+        "[fe80::1]:5000": 200,
+        f"{config.ALLOWED_HOSTS and sorted(config.ALLOWED_HOSTS)[0]}": 200,
+        "evil.example:5000": 403,
+        "evil.example": 403,
+    }
+    got = {h: c.get("/api/status", headers={"Host": h}).status_code for h in hosts}
+    assert got == hosts
+    post = c.post("/api/fan", json={"mode": "auto"}, headers={"Host": "evil.example:5000"})
+    assert post.status_code == 403
+    set_password(True)
+    try:
+        r = routes.app.test_client().get("/api/status", headers={"Host": "grow.example.org"})
+        assert r.status_code == 200, "with a password set, any name reaches the public pages"
+    finally:
+        set_password(False)
+
+
+def test_unreadable_settings_do_not_open_guarded_routes():
+    was = config.config_broken
+    config.config_broken = "config.json could not be read"
+    try:
+        anon = routes.app.test_client()
+        assert anon.get("/api/backup").status_code == 401
+        assert anon.get("/api/status").status_code == 200
+        assert anon.post("/api/fan", json={"mode": "auto"}).status_code == 503
+    finally:
+        config.config_broken = was
+
+
+def test_a_refused_request_announces_no_change():
+    seen = []
+    events.subscribe(seen.append)
+    set_password(True)
+    try:
+        anon = routes.app.test_client()
+        anon.post("/api/fan", json={"mode": "auto"})  # 401
+        anon.post("/api/fan", data="x", content_type="text/plain")  # 415
+        refused = list(seen)
+        signed_in = routes.app.test_client()
+        signed_in.post("/api/login", json={"password": "pw"})
+        seen.clear()
+        signed_in.post("/api/fan", json={"mode": "auto"})
+    finally:
+        set_password(False)
+        events.unsubscribe(seen.append)
+    assert "change" not in refused, "a request that was refused changed nothing"
+    assert "change" in seen, "one that was accepted announces the change"

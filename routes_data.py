@@ -26,6 +26,7 @@ bp = Blueprint("data", __name__)
 
 
 @bp.route("/api/report")
+@auth.public
 def api_report_get():
     """Latest stored AI report (or nulls if none yet), plus generating flag."""
     try:
@@ -38,7 +39,6 @@ def api_report_get():
 
 
 @bp.route("/api/ai_settings", methods=["POST"])
-@auth.require_auth
 def update_ai_settings():
     data = request.get_json(silent=True) or {}
     with config.settings_lock:
@@ -67,7 +67,6 @@ def update_ai_settings():
 
 
 @bp.route("/api/report", methods=["POST"])
-@auth.require_auth
 def api_report_run():
     if not ai_report.have_key():
         return jsonify(ok=False, error="no API key set on the controller"), 200
@@ -134,7 +133,6 @@ def build_backup(include_secrets=False):
 
 
 @bp.route("/api/backup")
-@auth.require_auth
 def api_backup():
     """Download a restorable snapshot. Login required: the archive contains the
     password hash and, optionally, the secrets from .env."""
@@ -156,7 +154,6 @@ def api_backup():
 
 
 @bp.route("/api/purge_series", methods=["POST"])
-@auth.require_auth
 def api_purge_series():
     """Delete the logged history of every sensor key starting with `prefix`.
 
@@ -176,6 +173,7 @@ def api_purge_series():
 
 
 @bp.route("/api/series")
+@auth.public
 def series():
     sensor = request.args.get("sensor", "")
     try:
@@ -188,6 +186,7 @@ def series():
 
 
 @bp.route("/api/series_all")
+@auth.public
 def series_all():
     """Every logged sensor's history in one request, so the chart grid doesn't
     fire a request per card. Probe voltages are temperature-compensated here,
@@ -232,6 +231,7 @@ def series_all():
 
 
 @bp.route("/api/host")
+@auth.public
 def api_host():
     """Pi health. Separate from /api/status so the 15s poll stays cheap:
     vcgencmd shells out, and none of this changes fast."""

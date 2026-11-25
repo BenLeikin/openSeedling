@@ -468,6 +468,24 @@ settings require a session):
 ./venv/bin/python scripts/set_password.py
 ```
 
+Every request goes through one check (`auth.check_request`) before its route
+runs. A route needs a login unless it is marked public in the code, and a
+request that changes anything must carry a JSON object, which is what stops
+another site's page from posting to the dashboard through your browser.
+
+While no password is set, the dashboard answers only when it is addressed by
+its IP address, `localhost` or the Pi's hostname (plain or `.local`). That
+blocks DNS rebinding, where a page on another site points its own name at
+your Pi. If you reach a password-less dashboard through another name (a DNS
+entry on your router, a reverse proxy), list it in `.env`:
+
+```
+GROWLIGHT_ALLOWED_HOSTS=grow.lan,seedlings.example.org
+```
+
+With a password set there is nothing to list: any name works, because the
+session cookie belongs to the name you signed in under.
+
 `cookie_secure` defaults to `"auto"`: the session cookie is marked Secure when the
 request arrived over HTTPS, directly or through a proxy that sets
 `X-Forwarded-Proto: https`. Set `true` to force it (only if every request is

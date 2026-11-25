@@ -13,7 +13,6 @@ from applog import log
 import db
 import sensors
 
-import auth
 import config
 import light as light_mod
 import setups as setups_mod
@@ -24,7 +23,6 @@ bp = Blueprint("climate", __name__)
 
 
 @bp.route("/api/lightning", methods=["POST"])
-@auth.require_auth
 def api_lightning():
     """Run (or stop) a short lightning effect on the grow light."""
     data = request.get_json(silent=True) or {}
@@ -64,7 +62,6 @@ def api_lightning():
 
 
 @bp.route("/api/light", methods=["POST"])
-@auth.require_auth
 def api_light():
     """Manual light hold. 'on' forces manual_bright, 'off' forces dark, 'auto'
     hands control back to the schedule. An optional 'brightness' (0-100) sets
@@ -96,7 +93,6 @@ def api_light():
 
 
 @bp.route("/api/light_sweep", methods=["POST"])
-@auth.require_auth
 def api_light_sweep():
     """Start (or cancel) a light response sweep."""
     data = request.get_json(silent=True) or {}
@@ -154,7 +150,6 @@ def api_light_sweep():
 
 
 @bp.route("/api/plug_discover", methods=["POST"])
-@auth.require_auth
 def api_plug_discover():
     """Find TP-Link plugs on the local network.
 
@@ -209,7 +204,6 @@ def api_plug_discover():
 
 
 @bp.route("/api/plug_test", methods=["POST"])
-@auth.require_auth
 def api_plug_test():
     """Connect to a plug and report what it is, without saving anything.
 
@@ -253,7 +247,6 @@ def api_plug_test():
 
 
 @bp.route("/api/fan", methods=["POST"])
-@auth.require_auth
 def api_fan():
     """Set the fan mode: auto (schedule + humidity), on, or off."""
     data = request.get_json(silent=True) or {}
@@ -280,7 +273,6 @@ def api_fan():
 
 
 @bp.route("/api/heat", methods=["POST"])
-@auth.require_auth
 def api_heat():
     """Set the heat mat mode: auto (thermostat), on, or off."""
     data = request.get_json(silent=True) or {}
@@ -300,7 +292,6 @@ def api_heat():
 
 
 @bp.route("/api/schedule", methods=["POST"])
-@auth.require_auth
 def api_schedule():
     """Update the schedule window alone, so the chart's drag handles can
     commit a change without resubmitting every setting. Refused in solar

@@ -43,6 +43,10 @@ the 4-17 baseline. The installer commits each one with the heading below.
 - Request bodies over 1 MB are refused.
 - Light-plan advice is escaped before it is shown (it can contain a setup's name).
 - The Discord webhook URL and ntfy topic are kept out of the log when a send fails.
+- A route needs a login unless it is marked public; before, a route was open unless someone remembered to guard it. One check, `auth.check_request`, applies the body limit, the JSON rule and the login to every request.
+- Without a password the dashboard answers only to its IP address, `localhost`, its hostname and names in `GROWLIGHT_ALLOWED_HOSTS`, which blocks DNS rebinding. With a password set nothing changes.
+- A JSON body that is not an object is refused with 400 (it was a 500), login and logout need a JSON body like every other change, and a refused request no longer triggers a status rebuild for every open dashboard.
+- If `config.json` cannot be read, routes that need a login stay closed; they used to open, because the defaults have no password.
 - With the touchscreen kiosk on, every request from the Pi itself was signed in, including ones forwarded by a reverse proxy running on the Pi: the web server drops the header the check relied on. Only the screen's own port is trusted now; the main port always needs the password.
 
 ### Added

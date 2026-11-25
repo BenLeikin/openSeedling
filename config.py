@@ -6,6 +6,7 @@ import json
 import math
 import os
 import re
+import socket
 import threading
 import time
 from datetime import datetime
@@ -237,6 +238,15 @@ TRUST_LOCALHOST = os.environ.get("GROWLIGHT_TRUST_LOCALHOST", "") == "1"
 SCREEN_PORT = int(os.environ.get("GROWLIGHT_SCREEN_PORT", "5001"))
 
 
+# Extra names the dashboard answers to while it has no password, besides its
+# IP address, localhost and this machine's hostname: comma-separated, in
+# GROWLIGHT_ALLOWED_HOSTS. See auth.check_request.
+ALLOWED_HOSTS = {"localhost", socket.gethostname().lower(), socket.gethostname().lower() + ".local"}
+ALLOWED_HOSTS |= {
+    h.strip().lower() for h in os.environ.get("GROWLIGHT_ALLOWED_HOSTS", "").split(",") if h.strip()
+}
+
+
 def listen_on():
     """The addresses the web server listens on, for waitress's `listen`."""
     listen = [f"0.0.0.0:{HTTP_PORT}"]
@@ -255,7 +265,7 @@ CONFIG_BAK = CONFIG_PATH.with_name("config.json.bak")
 # The app then runs on defaults to keep the lights and loops going, but it
 # must not save (that would overwrite the real settings with defaults) and
 # must not accept changes (the defaults have no password, so the dashboard
-# would be open to anyone who can reach it). auth.require_auth checks it.
+# would be open to anyone who can reach it). auth.check_request refuses changes while it is set.
 config_broken = ""
 
 

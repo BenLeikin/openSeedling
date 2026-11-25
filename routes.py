@@ -43,16 +43,8 @@ app = Flask(__name__)
 # The largest request the dashboard sends is the settings form with every
 # tray's cells, a few tens of kB. Anything past this is refused with 413
 # before it is read into memory.
-MAX_BODY_BYTES = 1024 * 1024
-app.config["MAX_CONTENT_LENGTH"] = MAX_BODY_BYTES
-
-
-@app.before_request
-def _body_limit():
-    # MAX_CONTENT_LENGTH only acts when a handler reads the body; refuse an
-    # oversized one up front so a route that returns early does not accept it
-    if (request.content_length or 0) > MAX_BODY_BYTES:
-        return jsonify(error="request too large"), 413
+app.config["MAX_CONTENT_LENGTH"] = auth.MAX_BODY_BYTES
+app.before_request(auth.check_request)
 
 
 SECRET_PATH = Path(__file__).with_name(".secret")
@@ -115,6 +107,7 @@ LOGIN_DELAY_MAX_S = 8.0
 
 
 @app.route("/api/login", methods=["POST"])
+@auth.public
 def login():
     with config.settings_lock:
         h = config.settings.get("password_hash", "")
@@ -136,6 +129,7 @@ def login():
 
 
 @app.route("/api/logout", methods=["POST"])
+@auth.public
 def logout():
     session.clear()
     return jsonify(ok=True, authed=False)
@@ -166,6 +160,7 @@ def form_attrs(key):
 
 
 @app.route("/")
+@auth.public
 def index():
     return render_template(
         "index.html",
@@ -199,7 +194,7 @@ def _changed(resp):
     across the change (status.shared_payload keys its cache on this)."""
     if (
         request.method in ("POST", "PUT", "DELETE")
-        and resp.status_code < 500
+        and resp.status_code < 400
         and request.path not in NOT_CHANGES
     ):
         events.publish("change")
@@ -207,6 +202,7 @@ def _changed(resp):
 
 
 @app.route("/screen")
+@auth.public
 def screen():
     """The touchscreen's one-page summary (scripts/kiosk.sh shows it)."""
     return render_template(
@@ -222,12 +218,14 @@ def _touch_cal():
 
 
 @app.route("/favicon.ico")
+@auth.public
 def favicon():
     # browsers request this at the site root regardless of the <link> tags
     return send_from_directory(app.static_folder, "favicon.ico", mimetype="image/x-icon")
 
 
 @app.route("/site.webmanifest")
+@auth.public
 def webmanifest():
     """Home-screen metadata. Served from a route rather than /static because
     Flask's mimetype guess for .webmanifest is application/octet-stream, which
@@ -253,6 +251,7 @@ def webmanifest():
 
 
 @app.route("/api/stream")
+@auth.public
 def api_stream():
     """Status pushed as it changes, as an EventSource stream.
 
@@ -310,6 +309,7 @@ def api_stream():
 
 
 @app.route("/api/status")
+@auth.public
 def status():
     payload = status_mod.shared_payload(auth.is_authed())
     if payload.get("error") == "warming up":
@@ -320,7 +320,6 @@ def status():
 
 
 @app.route("/api/settings", methods=["POST"])
-@auth.require_auth
 def update_settings():
     """Validate and apply every recognized field in the body.
 
