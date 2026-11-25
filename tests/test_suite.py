@@ -744,6 +744,19 @@ def _watering():
     )
     check(not hardware._pumps["1"].value, "pump is off after a lost float")
 
+    # tray 1 has no float now: a fill is refused even when forced
+    water.fill_failures.clear()
+    with config.settings_lock:
+        config.settings.update(auto_water=True, auto_water_trays=["1", "2"])
+    ok, why = water.run_pump_until_full("1", "fill", force=True)
+    check(
+        not ok
+        and "refusing to fill blind" in why
+        and not water.fill_failures
+        and "1" in water.armed_trays(config.settings),
+        "a forced fill with no float is refused outright, not run and reported as a fault",
+    )
+
 
 def _data():
     global active, floats, calls

@@ -132,7 +132,9 @@ def _start_refusal(tray, force, daily_cap, seconds=None, fl=None):
         st["today_seconds"] = 0.0
     if seconds is None:
         f0 = sensors.read_float(fl) if fl is not None else None
-        if f0 is None and not force:
+        if f0 is None:
+            # even when forced: a fill ends at the float, and without one it
+            # would stop at once and report a wiring fault that is not there
             return f"no float sensor in tray {tray}; refusing to fill blind"
         if f0 is not None and f0 < 1:
             return f"tray {tray} already full"
