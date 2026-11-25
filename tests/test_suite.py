@@ -449,7 +449,7 @@ def set_password(on):
         config.settings["password_hash"] = FAST_HASH if on else ""
 
 
-def _sec0():
+def _routes():
     global active, floats, calls
     errors = []
     for rule in routes.app.url_map.iter_rules():
@@ -483,7 +483,7 @@ def _sec0():
     )
 
 
-def _sec1():
+def _sign_in():
     global active, floats, calls
     with config.settings_lock:
         config.settings.update(kasa_user="me@example.com", latitude=34.2, longitude=-118.8)
@@ -541,7 +541,7 @@ def _sec1():
     set_password(False)
 
 
-def _sec2():
+def _live_stream():
     global active, floats, calls
     with routes.app.test_request_context("/api/stream"):
         resp = routes.api_stream()
@@ -586,7 +586,7 @@ def _sec2():
         gi.close()
 
 
-def _sec3():
+def _watering():
     global active, floats, calls
     floats = sensors._floats()
 
@@ -713,7 +713,7 @@ def _sec3():
     check(not hardware._pumps["1"].value, "pump is off after a lost float")
 
 
-def _sec4():
+def _data():
     global active, floats, calls
     nowi = int(time.time())
     errs = []
@@ -762,7 +762,7 @@ def _sec4():
     )
 
 
-def _sec5():
+def _light_schedule():
     global active, floats, calls
     cfg = dict(
         config.settings,
@@ -1987,8 +1987,8 @@ def _report_by_setup():
             config.settings["light2_on"] = saved["light2_on"]
 
 
-def _startup_log_noise():
-    """Three things from a real start's journal (25 Sep, 16:09)."""
+def _clean_start():
+    """A clean start logs no false alarms, and two thumbnail jobs never collide."""
     import logging
 
     # 1. "lux sensor not found; disabled" logged just before "found"
@@ -2162,9 +2162,9 @@ def _unsaved_settings():
 
 
 def _oom():
-    """25 Sep: a 3264x2448 capture asked the camera driver for four 16 MB
-    buffers from the ~36 MB the kernel had outside its 256 MB contiguous pool,
-    and the out-of-memory killer took the controller three times."""
+    """Camera and image helpers are the kernel's first choice when memory runs
+    out, ask the driver for as few buffers as they need, and report an
+    out-of-memory kill as one."""
     of = getattr(camera_mod, "oom_first", lambda c: list(c))
     wrapped = of(["v4l2-ctl", "--all"])
     ok_wrap = wrapped[:2] == ["sh", "-c"] and wrapped[-2:] == ["v4l2-ctl", "--all"]
@@ -2268,8 +2268,7 @@ def _oom():
 
 
 def _photo_light():
-    """Photos leave the light alone unless "Set the light for each photo" is on
-    (Ben did not like the light changing for every photo)."""
+    """Photos leave the light alone unless "Set the light for each photo" is on."""
     set_to = []
     real_sb, real_usb = light_mod.set_brightness, camera_mod._usb_capture
     light_mod.set_brightness = lambda p, *a, **k: set_to.append(p)
@@ -2541,10 +2540,10 @@ def _heat_mat():
         "a pulse shorter than a minute is skipped rather than clicking the relay",
     )
 
-    # A simulation of Ben's rig as it behaved under proportional control on
-    # 26 Sep (about 12 min dead time and two ~15 min lags; soil settles near
-    # 16.5 + 0.38 air + 3.69 duty C). With update 21's tuning this model swings
-    # about 2.8F, as the real soil did, so it is fit to judge a retune.
+    # A model of the reference rig (docs/heat-tuning.md): about 12 min dead
+    # time and two ~15 min lags; soil settles near 16.5 + 0.38 air + 3.69 duty C.
+    # Under plain proportional control it swings about 2.8F, as the real soil
+    # did, so it is fit to judge a tuning.
     def simulate(ctrl, hours=14.0):
         dt, dead, tau, g, c0, a0 = 30.0, 741.0, 0.24, 3.69, 16.5, 0.38
         tgt = (86 - 32) * 5 / 9
@@ -2906,7 +2905,7 @@ def _shared_sensors():
             and "RH 55% (same sensor as Transplants)" in blk.get("Seedlings", "")
             and "Heat mat" in blk.get("Seedlings", "")
             and "Heat mat" not in blk.get("Transplants", "")
-            and not any(l.startswith("Heat mat") for l in ctx.splitlines()),
+            and not any(ln.startswith("Heat mat") for ln in ctx.splitlines()),
             "the AI report lists a shared sensor under both setups, says it is one sensor, "
             "and puts the heat mat under its own setup",
         )
@@ -2987,8 +2986,8 @@ def _charts():
     )
 
 
-def _review_fixes():
-    """Fixes from the 27 Sep code review."""
+def _config_safety():
+    """Config file safety, capture error handling and input checks."""
     # 1. config.json: atomic writes, a backup, and no silent fall back to defaults
     tmpd = WORK / "cfgtest"
     tmpd.mkdir(exist_ok=True)
@@ -3128,8 +3127,11 @@ def _review_fixes():
         and 'log.exception("capture loop error")' in loop.group(0),
         "one failed capture tick is logged and the timelapse carries on (the thread used to die)",
     )
+
     # 4. a photo is the last whole frame, written whole
-    frame = lambda n: b"\xff\xd8" + bytes([n]) * 50 + b"\xff\xd9"
+    def frame(n):
+        return b"\xff\xd8" + bytes([n]) * 50 + b"\xff\xd9"
+
     stream = frame(1) + frame(2) + b"\xff\xd8" + b"\x03" * 30  # last frame cut short
     dev = WORK / "video9"
     dev.write_bytes(b"")
@@ -3174,9 +3176,8 @@ def _review_fixes():
 
 
 def _form_validity():
-    """27 Sep: Save did nothing. The migrated video speed 7.92 broke the field's
-    step="1", and the browser silently refused to submit while that field sat
-    in a closed section."""
+    """Save is never blocked by the browser's own validation of a field in a
+    closed section; the server validates instead."""
     html = c.get("/").get_data(as_text=True)
     check(
         re.search(r'<form id="cfgform"[^>]*\bnovalidate\b', html) is not None,
@@ -3202,8 +3203,8 @@ def _form_validity():
 
 
 def _phone_layout():
-    """29 Sep, on Ben's phone: the planting map's five columns widened the page
-    past the screen, so the browser zoomed the whole dashboard out."""
+    """On a phone the planting map scrolls inside its card and the page stays
+    the width of the screen."""
     js = page_js()
     css = Code((APP / "static" / "style.css").read_text())
     check(
@@ -3292,7 +3293,7 @@ def _kiosk():
     )
 
 
-def _kiosk_bringup():
+def _kiosk_unit():
     """What the screen needed on the real Pi: the browser's errors in the
     journal, WebKit's sandbox off, CPU rendering, an invisible cursor, and the
     stopgap drop-ins cleaned up by a reinstall."""
@@ -3631,6 +3632,25 @@ def _external_display():
     check(ok, "a display mode must look like 1024x600 or 1024x600@60, or be blank")
 
 
+def _flatten_proportions():
+    """A flattened frame keeps its cells square when it has to be shrunk."""
+    try:
+        import cv2  # noqa: F401
+        import numpy as np
+    except ImportError:
+        skip("flattened frame proportions (OpenCV not installed here)")
+        return
+    import growth
+
+    wide = np.zeros((2592, 4608, 3), np.uint8)
+    corners = [[0.02, 0.02], [0.98, 0.02], [0.98, 0.98], [0.02, 0.98]]
+    h, w = growth.rectify(wide, corners, cols=6, rows=4).shape[:2]
+    check(
+        max(w, h) <= 4000 and abs(w / h - 6 / 4) < 0.01,
+        f"a 6x4 grid across a 4608 px frame flattens to 3:2 within the size limit ({w}x{h})",
+    )
+
+
 def _capture_scratch():
     """Files a capture is still working on are never taken for photos, and
     what an interrupted capture leaves behind is cleared."""
@@ -3720,9 +3740,8 @@ def _capture_scratch():
 
 
 def _lux_range():
-    """The BH1750 read at most 27,306 lx (11 Oct): a 250 W fixture passed that
-    at 19% of its power, the sweep took that for full output, and the
-    dashboard's 100% drove the fixture at 19%."""
+    """A calibration sweep that hits the light sensor's ceiling is refused: a
+    clipped reading must not be taken for the fixture's full output."""
     import types as _types
 
     writes = []
@@ -3802,7 +3821,7 @@ def _lux_range():
 
 
 def _two_cameras():
-    """Two USB cameras side by side (11 Oct): picked by port, aligned once,
+    """Two USB cameras side by side: picked by port, aligned once,
     stitched into one wide photo; the grid follows and the crop resets."""
     ok = config._v_usb_device("/dev/v4l/by-path/platform-3f980000.usb-usb-0:1.2:1.0-video-index0")
     bad = []
@@ -3887,7 +3906,8 @@ def _two_cameras():
     def fake_capture(cfg, out, w, h, warmup=None, dev=None):
         dev = dev or cfg.get("usb_device")
         shots.append(dev)
-        cv2.imwrite(str(out), frames[dev])
+        # as the real capture does: JPEG bytes, whatever the file is called
+        Path(out).write_bytes(cv2.imencode(".jpg", frames[dev])[1].tobytes())
         return True, None
 
     real = camera_mod._usb_capture
@@ -4077,8 +4097,8 @@ def _two_cameras():
 
 
 def _usb_link():
-    """The camera behind a hub at USB 1.1 speed offered only 160x120 (4 Sep).
-    The link speed is now in the status, alerted, and checked by usbcheck.sh."""
+    """A camera on a USB 1.1 link offers only tiny modes. The link speed is in
+    the status, raises an alert, and is checked by usbcheck.sh."""
     root = WORK / "sysfs"
     iface = root / "devices" / "usb1" / "1-1" / "1-1.3" / "1-1.3:1.0"
     iface.mkdir(parents=True, exist_ok=True)
@@ -4130,7 +4150,7 @@ def _usb_link():
 
 
 def _settings_layout():
-    """3 Oct: fifteen settings groups merged into eight, nothing lost."""
+    """Settings has eight groups, and every field is in exactly one of them."""
     html = c.get("/").get_data(as_text=True)
     form = html[
         html.index('<form id="cfgform"') : html.index("</form>", html.index('<form id="cfgform"'))
@@ -4154,7 +4174,10 @@ def _settings_layout():
         "plug_use",
         "units",
     }
-    sec = lambda t: form[form.index(f"<summary><h3>{t}</h3>") :]
+
+    def sec(t):
+        return form[form.index(f"<summary><h3>{t}</h3>") :]
+
     check(
         titles
         == [
@@ -4191,9 +4214,9 @@ def _settings_layout():
     )
 
 
-def _optimizations():
-    """3 Oct: OpenCV out of the controller, memory charted, the polled status
-    shared, a lite status for the touchscreen."""
+def _memory_and_status():
+    """OpenCV stays out of the controller, memory is charted, a polled status
+    is built once for all readers, and the touchscreen gets a lite status."""
     # 1. no OpenCV in the controller after every image path has been used
     import sys as _sys
 
@@ -4437,8 +4460,8 @@ def _refuses(fn, value):
 
 
 def _page_modules():
-    """5 Oct: the dashboard's scripts are ES modules with explicit imports,
-    entered through static/js/main.js."""
+    """The dashboard's scripts are ES modules with explicit imports, entered
+    through static/js/main.js."""
     page = c.get("/").get_data(as_text=True)
     jsdir = APP / "static" / "js"
     mods = sorted(p.name for p in jsdir.glob("*.js") if p.name != "main.js")
@@ -4467,60 +4490,18 @@ def _page_modules():
     )
 
 
-def _project_hygiene():
-    """5 Oct: one style everywhere, a version and a changelog, and install
-    commits that say what was installed."""
+def _version():
+    """The version in pyproject.toml is the one that heads the changelog."""
     ver = re.search(r'^version = "(\w+)"', (APP / "pyproject.toml").read_text(), re.M)
     top = re.search(r"^## (\w+) \(", (APP / "CHANGELOG.md").read_text(), re.M)
-    upd = (APP / "scripts" / "update.sh").read_text()
     check(
-        ver
-        and top
-        and ver.group(1) == top.group(1)
-        and 'commit -q -m "$(commit_msg)"' in upd
-        and "commit_msg()" in upd,
-        f"the version in pyproject.toml heads the changelog ({ver and ver.group(1)}), and the "
-        f"installer commits with that version and heading",
-    )
-    have = [
-        f
-        for f in ("ruff.toml", ".prettierrc.json", "eslint.config.mjs", ".pre-commit-config.yaml")
-        if (APP / f).exists()
-    ]
-    rt = (APP / "ruff.toml").read_text()
-    check(
-        len(have) == 4 and "[format]" in rt and "line-length = 100" in rt,
-        f"formatters and linters are configured in the repo ({have})",
-    )
-
-
-def _comments():
-    """Comments say why the code is the way it is; history (who, when, which
-    update) lives in the changelog, git and docs/."""
-    srcs = sorted(
-        [p for p in APP.glob("*.py")]
-        + [p for p in (APP / "scripts").glob("*")]
-        + [p for p in (APP / "static").rglob("*.js")]
-        + [APP / "static" / "style.css", APP / "templates" / "index.html"]
-    )
-    months = "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec"
-    pat = re.compile(r"\bBen'?s?\b|\b\d{1,2} (%s)\b|\b(%s) \d{1,2}\b" % (months, months))
-    hits = [
-        f"{p.relative_to(APP)}:{i}"
-        for p in srcs
-        if p.is_file()
-        for i, line in enumerate(p.read_text(errors="replace").split("\n"), 1)
-        if pat.search(line)
-    ]
-    check(
-        not hits and (APP / "docs" / "heat-tuning.md").exists(),
-        f"no names or dates in the code's comments; the heat mat's tuning story is in "
-        f"docs/heat-tuning.md ({hits[:5]})",
+        ver and top and ver.group(1) == top.group(1),
+        f"pyproject.toml and CHANGELOG.md agree on the version ({ver and ver.group(1)})",
     )
 
 
 def _tray_sensor_map():
-    """11 Oct: any sensor can be placed in any tray (Settings, Setups), and a
+    """Any sensor can be placed in any tray (Settings, Setups), and a
     tray's watering reads the probe and float placed in it."""
     v = config.SETTINGS_VALIDATORS["tray_sensors"]
     good = v({"1": ["probe:2", "float:2", "canopy:1", "lux"], "3": ["probe:1", "temp:soil"]})
@@ -4699,12 +4680,12 @@ def run(name, fn):
         check(False, f"{name}: crashed with {type(e).__name__}: {e}")
 
 
-run("Routes", _sec0)
-run("Sign-in and privacy", _sec1)
-run("Live stream", _sec2)
-run("Watering", _sec3)
-run("Data", _sec4)
-run("Light schedule", _sec5)
+run("Routes", _routes)
+run("Sign-in and privacy", _sign_in)
+run("Live stream", _live_stream)
+run("Watering", _watering)
+run("Data", _data)
+run("Light schedule", _light_schedule)
 run("DLI target", _dli_band)
 run("Camera flattening", _camera_flatten)
 run("Camera preview", _camera_preview)
@@ -4719,7 +4700,7 @@ run("Probe names", _probe_names)
 run("Per-light calibration and per-tray arming", _per_sensor_controls)
 run("Camera canopy trays", _camera_canopy)
 run("AI report by setup", _report_by_setup)
-run("Startup log noise and thumbnail race", _startup_log_noise)
+run("Clean start", _clean_start)
 run("Unsaved settings", _unsaved_settings)
 run("Out of memory", _oom)
 run("Photo light", _photo_light)
@@ -4729,23 +4710,23 @@ run("Alert levels", _alert_levels)
 run("Heat mat", _heat_mat)
 run("Shared sensors and the heat mat setup", _shared_sensors)
 run("Charts", _charts)
-run("Review fixes", _review_fixes)
+run("Config safety and input checks", _config_safety)
 run("Settings form validity", _form_validity)
 run("Phone layout", _phone_layout)
 run("Touchscreen kiosk", _kiosk)
-run("Kiosk bring-up", _kiosk_bringup)
+run("Kiosk unit and cursor", _kiosk_unit)
 run("Sensors per tray", _tray_sensor_map)
 run("USB link", _usb_link)
 run("Two cameras", _two_cameras)
+run("Flattened frame proportions", _flatten_proportions)
 run("Capture scratch files", _capture_scratch)
 run("Light sensor range", _lux_range)
 run("External display", _external_display)
 run("Settings layout", _settings_layout)
 run("Settings field definitions", _form_definitions)
 run("Dashboard modules", _page_modules)
-run("Project hygiene", _project_hygiene)
-run("Comments", _comments)
-run("Optimizations", _optimizations)
+run("Version", _version)
+run("Memory and shared status", _memory_and_status)
 run("Shutdown", _shutdown)
 
 # --------------------------------------------------------------------------

@@ -823,7 +823,10 @@ def screen(pw, base, app):
         const t=new Touch({identifier:Date.now(), target:el, clientX:x, clientY:y});
         el.dispatchEvent(new TouchEvent('touchstart',{touches:[t],changedTouches:[t],bubbles:true,cancelable:true}));
         setTimeout(()=>{ el.dispatchEvent(new TouchEvent('touchend',{touches:[],changedTouches:[t],bubbles:true,cancelable:true})); res(); }, hold); })"""
-    distort = lambda x, y: (150 - 0.15 * x, 30 + 0.05 * y)
+
+    def distort(x, y):
+        return (150 - 0.15 * x, 30 + 0.05 * y)
+
     page.evaluate(tap, [300, 500, 3200])
     page.wait_for_timeout(300)
     opened = page.evaluate("()=>!!document.querySelector('.calib .caltarget')")
