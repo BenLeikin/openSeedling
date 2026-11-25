@@ -475,6 +475,12 @@ def _sec0():
         f"all {len(mutating)} mutating routes refuse non-JSON with 415"
         + (f" {leaks}" if leaks else ""),
     )
+    big = b'{"pad": "' + b"x" * (routes.MAX_BODY_BYTES + 1) + b'"}'
+    check(
+        c.post("/api/pump", data=big, content_type="application/json").status_code == 413
+        and c.post("/api/login", data=big, content_type="application/json").status_code == 413,
+        "a request body over the size limit is refused with 413, signed in or not",
+    )
 
 
 def _sec1():

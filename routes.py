@@ -39,6 +39,21 @@ import status as status_mod
 
 app = Flask(__name__)
 
+# The largest request the dashboard sends is the settings form with every
+# tray's cells, a few tens of kB. Anything past this is refused with 413
+# before it is read into memory.
+MAX_BODY_BYTES = 1024 * 1024
+app.config["MAX_CONTENT_LENGTH"] = MAX_BODY_BYTES
+
+
+@app.before_request
+def _body_limit():
+    # MAX_CONTENT_LENGTH only acts when a handler reads the body; refuse an
+    # oversized one up front so a route that returns early does not accept it
+    if (request.content_length or 0) > MAX_BODY_BYTES:
+        return jsonify(error="request too large"), 413
+
+
 SECRET_PATH = Path(__file__).with_name(".secret")
 
 

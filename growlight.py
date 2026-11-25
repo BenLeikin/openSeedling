@@ -68,6 +68,7 @@ if __name__ == "__main__":
             port=config.HTTP_PORT,
             threads=16,
             channel_timeout=120,
+            max_request_body_size=routes.MAX_BODY_BYTES,
             ident="OpenSeedling",
         )
     except ImportError:
