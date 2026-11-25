@@ -248,6 +248,9 @@ def off_now():
         log.error(f"could not turn the heat mat off: {e}")
 
 
+hardware.at_shutdown(off_now)
+
+
 def status(cfg):
     with _lock:
         st = dict(heat_state)

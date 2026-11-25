@@ -13,6 +13,7 @@ from astral.sun import sun
 
 from applog import log
 import db
+import readings as readings_mod
 import events
 import sensors
 
@@ -991,7 +992,9 @@ def control_loop():
                 fon, foff = setups_mod.setup_window(
                     cfg, setups_mod.setup_with(cfg, "fan") or {"light": "main"}, on_time, off_time
                 )
-                want, why = hardware.fan_should_run(cfg, now, fon, foff)
+                # filtered, so one bad humidity reading does not start the fan
+                rh, _ = readings_mod.reading_filtered("humidity")
+                want, why = hardware.fan_should_run(cfg, now, fon, foff, rh)
                 hardware.set_fan(cfg.get("fan_auto_speed", 70) if want else 0, why)
             with config.state_lock:
                 l2_now = light2_state["level"]
@@ -1144,6 +1147,30 @@ def _store_sweep(points, step, settle, key, linearize, target):
         )
     log.info(f"light sweep: {len(points)} points, peak {max(p[1] for p in points):.0f} lx")
 
+
+def _dark():
+    """Shutdown: both channels dark."""
+    _dither_stop()
+    light2_state["level"] = 0.0  # or the write below would keep the second light lit
+    set_brightness(0)
+
+
+def _park_channels():
+    """Shutdown, last: leave each PWM channel where the light stays off.
+
+    The hardware PWM lives in sysfs and keeps running after the process
+    exits. A MOSFET channel can be released, but the dim line must stay driven
+    at its dark duty: released, it floats high and the fixture goes to full.
+    The main pin carries the dim fixture when no separate dim pin is set.
+    """
+    main_is_dim = hardware.pwm2 is None and light_backend() == "dim"
+    _stop_pwm(hardware.pwm, "dim" if main_is_dim else "pwm")
+    if hardware.pwm2 is not None:
+        _stop_pwm(hardware.pwm2, "dim")
+
+
+hardware.at_shutdown(_dark, "off")
+hardware.at_shutdown(_park_channels, "end")
 
 # imported at the bottom: these modules import this one
 import setups as setups_mod

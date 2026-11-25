@@ -2011,6 +2011,15 @@ def _shutdown():
     t = threading.Thread(target=lambda: out.update(r=water.run_pump_until_full("1", "auto")))
     t.start()
     time.sleep(0.4)
+    ran = []
+
+    def broken_step():
+        ran.append("broken")
+        raise RuntimeError("a shutdown step that fails")
+
+    hardware.at_shutdown(broken_step)
+    hardware.at_shutdown(lambda: ran.append("end"), "end")
+    PWM_WRITES.clear()
     t0 = time.time()
     try:
         hardware.cleanup()
@@ -2019,6 +2028,10 @@ def _shutdown():
         exited = e.code in (0, None)
     t.join(3)
     check(exited, "cleanup finishes with a clean exit")
+    check(
+        ran == ["broken", "end"] and PWM_WRITES and not hardware._pumps["1"].value,
+        f"a shutdown step that fails does not keep the rest from running ({ran})",
+    )
     time.sleep(0.2)
     check(
         "at" in ended and ended["at"] - t0 < 1.5,
@@ -3124,9 +3137,9 @@ def _heat_mat():
             config.settings["plug_use"] = "heat"
         sent.clear()
         heat.off_now()
-        src = (APP / "hardware.py").read_text()
         check(
-            sent == [False] and "heat_mod.off_now()" in src, "shutting down turns the heat mat off"
+            sent == [False] and heat.off_now in hardware._shutdown_steps["start"],
+            "shutting down turns the heat mat off",
         )
         r1 = c.post("/api/settings", json={"light_backend": "kasa"}).get_json()
         r2 = c.post("/api/settings", json={"heat_target_f": 80, "heat_max_f": 81}).get_json()

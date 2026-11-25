@@ -161,6 +161,9 @@ def _end_streams():
             pass  # it is awake already and sees the flag
 
 
+hardware.at_shutdown(_end_streams)
+
+
 def publish(reason="update"):
     """Hand the current status to every listening browser.
 

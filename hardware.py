@@ -172,14 +172,11 @@ def set_fan(speed, reason):
         events.publish("fan")
 
 
-def fan_should_run(cfg, now, on_time, off_time):
-    """Decide the fan's state in auto mode. Returns (on, reason)."""
-    rh = None
-    try:
-        # filtered: a single bad humidity reading should not kick the fan on
-        rh, _ = monitor.reading_filtered("humidity")
-    except Exception:
-        pass
+def fan_should_run(cfg, now, on_time, off_time, rh=None):
+    """Decide the fan's state in auto mode. Returns (on, reason).
+
+    `rh` is the relative humidity to judge by, or None when there is none.
+    """
     hum_on = cfg.get("fan_humidity_on", 0)
     if hum_on and rh is not None and rh >= hum_on:
         return True, f"humidity {rh:.0f}%"
@@ -189,8 +186,33 @@ def fan_should_run(cfg, now, on_time, off_time):
     return False, "idle"
 
 
+# What other modules need done at shutdown. This module knows the pins; the
+# light's two channels, the heat mat's plug and the open dashboard streams
+# belong to modules above it, which register their part here.
+_shutdown_steps = {"off": [], "start": [], "end": []}
+
+
+def at_shutdown(fn, when="start"):
+    """Have fn() called when the service stops.
+
+    when: "off"   with every pass that switches the actuators off (it runs
+                  twice, so it must be safe to repeat)
+          "start" once, right after the first of those passes
+          "end"   once, last, to leave an output in its resting state
+    """
+    _shutdown_steps[when].append(fn)
+
+
+def _run_steps(when):
+    for fn in _shutdown_steps[when]:
+        try:
+            fn()
+        except Exception as e:  # one failed step must not skip the rest
+            log.error(f"shutdown step {fn.__name__} failed: {e}")
+
+
 def _all_off():
-    """Every actuator off: pumps, fan, both light channels."""
+    """Every actuator off: pumps, fan, and whatever registered for "off"."""
     for _p in _pumps.values():
         try:
             _p.off()
@@ -201,44 +223,24 @@ def _all_off():
             _fan.value = 0
         except Exception:
             pass
-    light_mod._dither_stop()
-    light_mod.light2_state["level"] = 0.0  # or the write below would keep it lit
-    light_mod.set_brightness(0)  # darkens both channels
+    _run_steps("off")
 
 
 def cleanup(*_):
-    # From here on, hardware writes may only turn things off (see
-    # SHUTTING_DOWN). Explicit off for every actuator: a SIGTERM mid-fill must
-    # not leave a pump relying on gpiozero's atexit teardown and a gate pulldown.
+    """Stop the service: everything off, then exit. The signal handler."""
+    # From here on, hardware writes may only turn things off. Explicit off for
+    # every actuator: a SIGTERM mid-fill must not leave a pump relying on
+    # gpiozero's teardown and a gate pulldown.
     SHUTTING_DOWN.set()
     _all_off()
-    heat_mod.off_now()  # the smart plug, when it is the heat mat's
-    status_mod._end_streams()
+    _run_steps("start")
     # A pump thread or control pass already past its check could still write
     # once more. They poll every 0.1 s and now see the flag; wait for running
-    # pumps to finish, then turn everything off a second time to be sure.
+    # pumps to finish, then turn everything off a second time.
     deadline = time.time() + 2.0
     while time.time() < deadline and any(st["running"] for st in pump_state.values()):
         time.sleep(0.05)
     time.sleep(0.2)
     _all_off()
-    # Stopping the PWM releases the pin, and on the optocoupler wiring that
-    # means the dim line floats back to its own ~10.8V and the fixture goes to
-    # FULL. Exactly backwards for a shutdown. The hardware PWM lives in sysfs
-    # and keeps running after the process exits, so leaving that channel
-    # driving its dark duty is what actually keeps the light off.
-    # The main pin carries the dim fixture when no separate dim pin is set, and
-    # releasing that pin would let the fixture come on.
-    light_mod._stop_pwm(
-        pwm, "dim" if (pwm2 is None and light_mod.light_backend() == "dim") else "pwm"
-    )
-    if pwm2 is not None:
-        light_mod._stop_pwm(pwm2, "dim")  # dim line: keep it pulled down, or it lights
+    _run_steps("end")
     sys.exit(0)
-
-
-# imported at the bottom: these modules import this one
-import light as light_mod
-import monitor
-import heat as heat_mod
-import status as status_mod
