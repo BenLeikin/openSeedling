@@ -1,4 +1,5 @@
 // openSeedling dashboard: Pi health tiles, the light plan and day progress, the fan, focus and USB camera controls, and start-up.
+import { request } from './store.js';
 import {
   S,
   dragTimer,
@@ -58,7 +59,7 @@ export async function loadHost() {
   const grid = document.getElementById('hgrid');
   if (!grid) return;
   try {
-    const r = await fetch('/api/host');
+    const r = await request('/api/host');
     const h = await r.json();
     let out = '';
     if (h.cpu_temp_c != null) {
@@ -419,7 +420,7 @@ export async function setHeat(mode) {
   const info = document.getElementById('heatinfo');
   if (info) info.textContent = '\u2026';
   try {
-    const r = await fetch('/api/heat', {
+    const r = await request('/api/heat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mode })
@@ -449,7 +450,7 @@ export async function sendFanSpeed(v) {
   const mode = (document.querySelector('.fanbtn.on') || { dataset: {} }).dataset.mode || 'auto';
   const body = mode === 'on' ? { speed: v } : { auto_speed: v };
   try {
-    await fetch('/api/fan', {
+    await request('/api/fan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
@@ -460,7 +461,7 @@ export async function setFan(mode) {
   const info = document.getElementById('faninfo');
   if (info) info.textContent = '\u2026';
   try {
-    const r = await fetch('/api/fan', {
+    const r = await request('/api/fan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mode })
@@ -480,7 +481,7 @@ export let focusRunning = false;
 export async function startFocusSweep() {
   const info = document.getElementById('focusinfo');
   if (focusRunning) {
-    await fetch('/api/focus_sweep', {
+    await request('/api/focus_sweep', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cancel: true })
@@ -489,7 +490,7 @@ export async function startFocusSweep() {
   }
   if (info) info.textContent = 'starting\u2026';
   try {
-    const r = await fetch('/api/focus_sweep', {
+    const r = await request('/api/focus_sweep', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({})
@@ -529,7 +530,7 @@ export async function loadDisplay() {
   const info = document.getElementById('dispinfo');
   const sel = document.querySelector('.modepick');
   try {
-    const j = await (await fetch('/api/display', { cache: 'no-store' })).json();
+    const j = await (await request('/api/display', { cache: 'no-store' })).json();
     const d = j.display;
     const rot = d ? (d.transform ? `turned ${d.transform}\u00b0` : 'not turned') : '';
     if (info) {
@@ -574,7 +575,7 @@ export async function loadCameraList(ev) {
   if (!sel || sel.dataset.loaded) return;
   sel.dataset.loaded = '1';
   try {
-    const j = await (await fetch('/api/cameras')).json();
+    const j = await (await request('/api/cameras')).json();
     const cams = j.cameras || [];
     const opts = cams
       .map(
@@ -617,7 +618,7 @@ export async function alignCameras() {
     return;
   say('aligning\u2026 (about a minute)');
   try {
-    const r = await fetch('/api/align_cameras', {
+    const r = await request('/api/align_cameras', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({})
@@ -629,7 +630,7 @@ export async function alignCameras() {
     for (let i = 0; i < 150; i++) {
       await new Promise(res => setTimeout(res, 2000));
       const p = await (
-        await fetch('/api/align_cameras', { cache: 'no-store' })
+        await request('/api/align_cameras', { cache: 'no-store' })
       )
         .json()
         .catch(() => ({}));
@@ -812,7 +813,7 @@ export function initLight() {
           )
         )
           return;
-        await fetch('/api/settings', {
+        await request('/api/settings', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ screen_touch_cal: {} })

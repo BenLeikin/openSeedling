@@ -118,7 +118,8 @@ def test_page_modules():
     through static/js/main.js."""
     page = c.get("/").get_data(as_text=True)
     jsdir = APP / "static" / "js"
-    mods = sorted(p.name for p in jsdir.glob("*.js") if p.name != "main.js")
+    # store.js is imported by the others and has nothing to start
+    mods = sorted(p.name for p in jsdir.glob("*.js") if p.name not in ("main.js", "store.js"))
     main = (jsdir / "main.js").read_text()
     imported = re.findall(r"from '\./(\w+\.js)'", main)
     no_export = [m for m in mods if "export " not in (jsdir / m).read_text()]

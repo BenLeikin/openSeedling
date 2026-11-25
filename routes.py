@@ -198,6 +198,10 @@ def _changed(resp):
         and request.path not in NOT_CHANGES
     ):
         events.publish("change")
+    if request.path.startswith("/api/"):
+        # after the publish above, so the reply to a change names the revision
+        # that includes it
+        resp.headers["X-Status-Rev"] = status_mod.revision()
     return resp
 
 

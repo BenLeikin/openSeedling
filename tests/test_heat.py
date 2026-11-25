@@ -324,7 +324,7 @@ def test_heat_mat():
         'id="heatrow"' in html
         and 'name="plug_use"' in page
         and 'name="heat_target_f"' in page
-        and "fetch('/api/heat'" in js
+        and "request('/api/heat'" in js
         and "renderHeat(j);" in js
         and ".lcbtn:not(.fanbtn):not(.heatbtn)" in js
         and ".lcbtn:not(.fanbtn)')" not in js

@@ -1,4 +1,5 @@
 // openSeedling dashboard: Grow setups (tabs, light view, the Setups editor) and the USB camera's modes.
+import { request } from './store.js';
 import { S } from './light.js';
 import { formDirty } from './photos.js';
 import { probeNames, renderChartGrid, sensorData, sensorMeta, set_lightBackend } from './charts.js';
@@ -342,7 +343,7 @@ export async function loadCameraModes() {
   if (!sel || sel.dataset.loaded) return;
   sel.dataset.loaded = '1';
   try {
-    const r = await fetch('/api/camera_modes');
+    const r = await request('/api/camera_modes');
     const j = await r.json();
     if (!j.modes || !j.modes.length) {
       sel.innerHTML = '<option value="">no modes reported</option>';
@@ -494,7 +495,7 @@ export function start() {
       save.addEventListener('click', async () => {
         const msg = document.getElementById('setupmsg');
         try {
-          const r = await fetch('/api/settings', {
+          const r = await request('/api/settings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ setups: setupDraft || [], tray_sensors: trayDraft || {} })

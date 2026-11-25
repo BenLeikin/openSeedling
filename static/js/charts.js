@@ -1,4 +1,5 @@
 // openSeedling dashboard: Sensor readouts and units, and the chart grid.
+import { request } from './store.js';
 import { S, agoStr } from './light.js';
 import { inSetup, sensorTrays, trayInSetup } from './setups.js';
 import { set_playerFps } from './photos.js';
@@ -431,18 +432,23 @@ export function convertFor(s) {
 }
 export let lastChartLoad = 0,
   lastHostLoad = 0;
+let chartLoad = null; // the load in flight; a newer one cancels it
 export async function loadChart() {
   lastChartLoad = Date.now();
   const info = document.getElementById('chartinfo');
   if (info) info.textContent = 'loading\u2026';
+  if (chartLoad) chartLoad.abort();
+  const mine = (chartLoad = new AbortController());
   try {
-    const r = await fetch(`/api/series_all?hours=${chartHours}`);
+    const r = await request(`/api/series_all?hours=${chartHours}`, { signal: mine.signal });
+    if (!r.ok) throw new Error(`series: ${r.status}`);
     const j = await r.json();
+    if (mine.signal.aborted) return; // a later range was picked meanwhile
     seriesData = j.series || {};
     if (info) info.textContent = '';
     renderChartGrid();
   } catch (e) {
-    if (info) info.textContent = 'charts unavailable';
+    if (!mine.signal.aborted && info) info.textContent = 'charts unavailable';
   }
 }
 export let expandedCharts = new Set();
@@ -1012,7 +1018,7 @@ export let pumpActive = false;
 export async function pollFloat() {
   if (!pumpActive) return;
   try {
-    const r = await fetch('/api/float');
+    const r = await request('/api/float');
     if (!r.ok) return;
     const j = await r.json();
     for (const t in j.floats || {}) {
@@ -1173,7 +1179,7 @@ export async function toggleAutoWater() {
   )
     return;
   try {
-    const r = await fetch('/api/auto_water', {
+    const r = await request('/api/auto_water', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled: want, trays: autoWaterTrays })
@@ -1198,7 +1204,7 @@ export async function waterAct(tray, body, msg) {
   if (info) info.textContent = msg;
   pumpActive = true; // watch the float live from the moment the run starts
   try {
-    const r = await fetch('/api/pump', {
+    const r = await request('/api/pump', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...body, tray })
@@ -1223,7 +1229,7 @@ export async function calibrateProbe(tray, point, force, volts) {
       : 'watching the probe for 15s to be sure it has settled\u2026';
   }
   try {
-    const r = await fetch('/api/probe_cal', {
+    const r = await request('/api/probe_cal', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1267,7 +1273,7 @@ export async function checkTempComp(tray, apply) {
   const info = document.getElementById('probetcinfo');
   if (info) info.textContent = 'analyzing\u2026';
   try {
-    const r = await fetch('/api/probe_tempcomp', {
+    const r = await request('/api/probe_tempcomp', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tray, hours: 72, apply: !!apply })

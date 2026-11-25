@@ -18,6 +18,8 @@ the 4-17 baseline. The installer commits each one with the heading below.
 - Warnings reach Discord in the warning colour.
 - With the light off, the control loop no longer pushes a status to every open dashboard on each pass.
 - A dashboard polling during a restart shows "Controller starting" instead of empty readings.
+- A status that arrives out of order no longer puts the dashboard back to an older state: every status carries a revision and the page shows only what is newer, also across a change made on the page.
+- The dashboard fetches the photo list and the AI report when a status says they changed, not on every status. Picking a chart range twice quickly no longer shows the wrong range's data.
 - `update.sh` and `deploy.sh` find tracebacks in a long log and check the port set in `.env`.
 - A pump run is put on record before the pump starts, so a restart part way through still counts it against the daily limit and the cooldown.
 - Failed fills are kept per tray: a good fill on one tray no longer clears another tray's alert.

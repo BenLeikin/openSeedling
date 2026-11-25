@@ -57,7 +57,9 @@ def test_old_config_is_migrated():
 
 def test_dashboard_posts_send_json():
     js = page_js()
-    posts = re.findall(r"fetch\((['\"`][^'\"`]+['\"`]),\{method:'POST'(.{0,160})", squash(js), re.S)
+    posts = re.findall(
+        r"request\((['\"`][^'\"`]+['\"`]),\{method:'POST'(.{0,160})", squash(js), re.S
+    )
     no_json = [u for u, rest in posts if "application/json" not in rest]
     assert posts and not no_json, f"every dashboard POST sends JSON ({len(posts)} calls) {no_json}"
 

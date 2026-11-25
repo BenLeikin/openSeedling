@@ -33,6 +33,13 @@
 - The version is in `pyproject.toml` and heads `CHANGELOG.md`; the installer
   commits each update as "openSeedling <version>: <changelog heading>". A
   `REMOVED` file in an update zip lists files the installer deletes.
+- Every request the dashboard makes goes through `request()` in
+  `static/js/store.js`, and every status it receives (from the live stream or
+  a poll) through `offer()` there. Each status carries the controller's
+  revision; the store drops one that is older than what is on screen, and
+  holds statuses back for a moment while a change is on its way, so a slow
+  poll cannot undo what was just clicked. `tests/test_ui.py` checks this in a
+  real browser.
 - The dashboard's scripts are ES modules (`static/js/`, entered through
   `main.js`): each imports what it uses and exports what it offers, so a
   missing or renamed function is an error at load, not a silent global. A

@@ -58,6 +58,15 @@ _subs_lock = threading.Lock()
 # cost six times the SQLite work on a Pi Zero. Two variants at most: a
 # signed-out viewer gets a redacted copy.
 _pub_seq = [0]  # bumped by every publish()
+_BOOT = int(time.time())  # tells this process's revisions from an earlier one's
+
+
+def revision():
+    """The status revision, "<boot>.<publishes so far>". A page uses it to
+    tell an older status from a newer one, whichever arrives last."""
+    return f"{_BOOT}.{_pub_seq[0]}"
+
+
 _status_cache = {}  # authed -> (seq it was built at, SSE text)
 _status_build_lock = threading.Lock()
 
@@ -176,6 +185,14 @@ except Exception as e:  # a missing switch must never stop the app
     log.info(f"switch watchers not armed: {e}")
 
 
+def _report_mtime():
+    """When the stored AI report last changed, or None if there is none."""
+    try:
+        return int(monitor.AI_REPORT_PATH.stat().st_mtime)
+    except OSError:
+        return None
+
+
 def status_payload(authed=None):
     """The dashboard's whole view of the world, as a dict, shared by the polled
     endpoint and the live stream. {"error": "warming up"} until the first
@@ -184,6 +201,7 @@ def status_payload(authed=None):
     `authed` is passed in by the stream: its generator runs after the request
     context is gone, so the session cannot be read there. The flag is captured
     when the stream opens; a login or logout reconnects the stream."""
+    rev = revision()  # read first: a change during the build makes this one stale
     with config.state_lock:
         s = dict(config.state)
         cam = dict(camera_mod.camera)
@@ -228,6 +246,7 @@ def status_payload(authed=None):
     ]
     day = setups_out[0]["day"]
     return dict(
+        rev=rev,
         now=datetime.now(tz).isoformat(),
         brightness=s["brightness"],
         light_override=s.get("override", cfg.get("light_override", "auto")),
@@ -253,6 +272,8 @@ def status_payload(authed=None):
         loop=control.LOOP_SECONDS,
         photo_count=count,
         latest_photo_time=latest_time.isoformat() if latest_time else None,
+        thumbs_version=db.kv_get("thumbs_version") or 0,
+        report={"ts": _report_mtime(), "generating": monitor.report_state["generating"]},
         camera={
             "fails": cam["fails"],
             "last_err": cam["last_err"],

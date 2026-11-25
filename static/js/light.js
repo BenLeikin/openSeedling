@@ -1,4 +1,5 @@
 // openSeedling dashboard: The status object, the schedule curve and the lighting-stage graphics.
+import { request } from './store.js';
 import { ctlTarget } from './setups.js';
 import { aligning, canEdit, cropping, parseRoi } from './photos.js';
 import { camHealth, capMin, capOn, lightBackend, set_camHealth } from './charts.js';
@@ -151,7 +152,7 @@ export function bindSchedDrag() {
     if (S.schedule_mode === 'light2') {
       body[edge === 'on' ? 'light2_start' : 'light2_end'] = hhmm;
       try {
-        const r = await fetch('/api/settings', {
+        const r = await request('/api/settings', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body)
@@ -173,7 +174,7 @@ export function bindSchedDrag() {
       else body.duration_hours = Math.max(0, (S.off - S.on) / 3600000);
     }
     try {
-      const r = await fetch('/api/schedule', {
+      const r = await request('/api/schedule', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
@@ -408,7 +409,7 @@ export async function setLight(mode, brightness, quiet) {
     holdBright(brightness);
   }
   try {
-    const r = await fetch('/api/light', {
+    const r = await request('/api/light', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
@@ -447,7 +448,7 @@ export async function setLight2(mode, brightness, quiet) {
     holdBright(body.light2_bright);
   }
   try {
-    const r = await fetch('/api/settings', {
+    const r = await request('/api/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
@@ -604,7 +605,7 @@ export async function capturePhoto() {
   };
   say('Capturing\u2026 (~5s)');
   try {
-    const r = await fetch('/api/capture', {
+    const r = await request('/api/capture', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: '{}'

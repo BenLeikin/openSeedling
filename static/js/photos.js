@@ -1,4 +1,5 @@
 // openSeedling dashboard: The view crop and alignment guides, the Settings form's fill and save (driven by config.FORM), the timelapse player, the enlarged view, and sign-in.
+import { request } from './store.js';
 import { sensorData, sensorMeta, set_units, tDisp, tFromF, tToF, tUnit } from './charts.js';
 import { esc } from './trays.js';
 import { S } from './light.js';
@@ -57,7 +58,7 @@ export function startCrop() {
   img.src = '/photo/latest?' + Date.now(); // shown until the live frame lands
   // then a fresh full frame from the camera, uncropped: choose from what the
   // camera sees now, in the same mode the photos are taken in
-  fetch('/api/preview', {
+  request('/api/preview', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: '{}'
@@ -101,7 +102,7 @@ export function stopCrop() {
 export async function saveCrop(roiStr) {
   const info = document.getElementById('photoinfo');
   try {
-    const r = await fetch('/api/settings', {
+    const r = await request('/api/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ roi: roiStr })
@@ -154,7 +155,7 @@ export function drawGuides() {
 export async function alignTick() {
   if (!aligning) return;
   try {
-    const r = await fetch('/api/preview', {
+    const r = await request('/api/preview', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: '{}'
@@ -379,7 +380,7 @@ export function loadFrameContext(name) {
       return;
     }
     try {
-      const r = await fetch('/api/frame_context?ts=' + ts);
+      const r = await request('/api/frame_context?ts=' + ts);
       const j = await r.json();
       const d = j.readings || {};
       const bits = [];
@@ -453,7 +454,7 @@ export var playerFps = 4; // player_fps: frames a second in the dashboard player
 export async function loadFrames() {
   if (window._camOn === false) return;
   try {
-    const r = await fetch('/api/photos');
+    const r = await request('/api/photos');
     const j = await r.json();
     const had = frames.length;
     frames = j.names || [];
@@ -611,7 +612,7 @@ export async function doLogin() {
   const err = document.getElementById('loginerr');
   err.textContent = '';
   try {
-    const r = await fetch('/api/login', {
+    const r = await request('/api/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ password: pw.value })
@@ -627,7 +628,7 @@ export async function doLogin() {
 }
 export async function doLogout() {
   try {
-    await fetch('/api/logout', {
+    await request('/api/logout', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: '{}'
@@ -747,7 +748,7 @@ export function start() {
     renderTimer = setInterval(tickRender, 1000);
     info.textContent = 'Starting render...';
     try {
-      const r = await fetch('/api/render', {
+      const r = await request('/api/render', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: '{}'

@@ -1,4 +1,5 @@
 // openSeedling dashboard: The planting map and the planting history.
+import { request } from './store.js';
 import { curSetup, setupsList, trayInSetup } from './setups.js';
 import { canEdit } from './photos.js';
 import { clearCellUI } from './devices.js';
@@ -206,7 +207,7 @@ export async function saveTray(id) {
   const info = document.getElementById('trayinfo');
   trayPending++;
   try {
-    const r = await fetch('/api/trays', {
+    const r = await request('/api/trays', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tray: id, cells: collectTray(id) })
@@ -232,7 +233,7 @@ export async function saveTray(id) {
 export async function trayLayout(body) {
   const info = document.getElementById('trayaddinfo') || document.getElementById('trayinfo');
   try {
-    const r = await fetch('/api/tray_layout', {
+    const r = await request('/api/tray_layout', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
@@ -450,7 +451,7 @@ export function initTrays() {
       trayPending++;
       let done = false;
       try {
-        const r = await fetch('/api/planting_end', {
+        const r = await request('/api/planting_end', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ tray: tr, cell: cid, outcome })
@@ -521,7 +522,7 @@ export function initTrays() {
 export let plantingHistory = [];
 export async function loadPlantings() {
   try {
-    const r = await fetch('/api/plantings');
+    const r = await request('/api/plantings');
     const j = await r.json();
     plantingHistory = j.plantings || [];
   } catch (e) {

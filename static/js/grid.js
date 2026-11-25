@@ -1,4 +1,5 @@
 // openSeedling dashboard: The cell grid overlay, the Settings form's submit handler, and the AI garden report.
+import { offer, onStatus, request } from './store.js';
 import { S, capturePhoto, render, renderPhoto, set_S } from './light.js';
 import { applySetup, set_setupDirty, setupDirty, setupDraft, trayDraft } from './setups.js';
 import {
@@ -131,7 +132,7 @@ export async function saveGrid() {
   gridDirty = true; // pending local edit; block poll-sync until saved
   const info = document.getElementById('gridinfo');
   try {
-    const r = await fetch('/api/grid', {
+    const r = await request('/api/grid', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(grid)
@@ -156,7 +157,7 @@ export async function detectGrid() {
   const info = document.getElementById('gridinfo');
   info.textContent = 'Detecting...';
   try {
-    const r = await fetch('/api/detect_grid', {
+    const r = await request('/api/detect_grid', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: '{}'
@@ -283,7 +284,7 @@ export function handleGrid(j) {
 export async function refresh() {
   let j = null;
   try {
-    const r = await fetch('/api/status');
+    const r = await request('/api/status');
     if (!r.ok && r.status !== 503) throw 0;
     j = await r.json();
   } catch (e) {
@@ -296,10 +297,13 @@ export async function refresh() {
     document.getElementById('phase').textContent = 'Controller starting\u2026';
     return;
   }
-  applyStatus(j);
+  offer(j);
 }
 
-// The whole render: a pushed status and a polled one both go through here.
+onStatus(j => applyStatus(j));
+
+// The whole render: a pushed status and a polled one both come here, through
+// the store, which drops any that is older than what is already shown.
 export function applyStatus(j) {
   try {
     set_S({
@@ -330,7 +334,12 @@ export function applyStatus(j) {
     }
     if (window._camOn) renderPhoto(j);
     renderVideoState(j);
-    loadFrames();
+    // the photo list and the report are fetched when the status says they changed
+    const photosSig = `${j.photo_count}|${j.latest_photo_time}|${j.thumbs_version}|${window._camOn}`;
+    if (photosSig !== lastPhotosSig) {
+      lastPhotosSig = photosSig;
+      loadFrames();
+    }
     applyAuth(j);
     setAiControls(j.settings);
     applySetup(j);
@@ -338,7 +347,11 @@ export function applyStatus(j) {
       const rc = document.getElementById('reportctl');
       if (rc) rc.style.display = canEdit ? '' : 'none';
     }
-    fetchReport();
+    const reportSig = j.report ? `${j.report.ts}|${j.report.generating}|${canEdit}` : null;
+    if (reportSig === null || reportSig !== lastReportStatusSig) {
+      lastReportStatusSig = reportSig;
+      fetchReport();
+    }
     requestAnimationFrame(fitReportHeight);
     handleGrid(j);
     renderSensors(j);
@@ -466,9 +479,12 @@ export function renderReport(j) {
   body.innerHTML = h;
 }
 export let lastReportSig = null;
+let lastPhotosSig = null, // what the status last said about the photos...
+  lastReportStatusSig = null, // ...and about the report
+  reportPoll = null; // the one timer that polls while a report is being written
 export async function fetchReport() {
   try {
-    const r = await fetch('/api/report');
+    const r = await request('/api/report');
     const j = await r.json();
     const sig = `${j.ts}|${j.generating}|${j.ok}|${j.have_key}`;
     if (sig !== lastReportSig) {
@@ -477,7 +493,9 @@ export async function fetchReport() {
       renderReport(j);
       requestAnimationFrame(fitReportHeight);
     }
-    if (j.generating) setTimeout(fetchReport, 4000); // poll faster until it lands
+    // poll until it lands, on one timer however often this is called
+    clearTimeout(reportPoll);
+    if (j.generating) reportPoll = setTimeout(fetchReport, 4000);
   } catch (e) {}
 }
 export async function genReport() {
@@ -486,7 +504,7 @@ export async function genReport() {
   document.getElementById('reportbody').innerHTML =
     '<p class="rmuted">Generating report\u2026 this takes ~20s.</p>';
   try {
-    const r = await fetch('/api/report', {
+    const r = await request('/api/report', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: '{}'
@@ -553,7 +571,7 @@ export async function saveAi() {
   const h = Math.min(23, Math.max(0, parseInt(parts[0], 10) || 0));
   const m = Math.min(59, Math.max(0, parseInt(parts[1], 10) || 0));
   try {
-    await fetch('/api/ai_settings', {
+    await request('/api/ai_settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ai_enabled: en.checked, ai_report_hour: h, ai_report_minute: m })
@@ -563,7 +581,7 @@ export async function saveAi() {
 export async function resetTimelapse(confirmed) {
   const info = document.getElementById('renderinfo');
   try {
-    const r = await fetch('/api/reset_timelapse', {
+    const r = await request('/api/reset_timelapse', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(confirmed ? { confirm: true, clear_readings: true } : {})
@@ -631,7 +649,7 @@ export function start() {
     msg.textContent = 'Planting...';
     msg.className = '';
     try {
-      const r = await fetch('/api/settings', {
+      const r = await request('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)

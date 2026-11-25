@@ -1,4 +1,5 @@
 // openSeedling dashboard: The smart plug, backup, theme, thunderstorm, light calibration and the second light.
+import { request } from './store.js';
 import { ctlTarget } from './setups.js';
 import { canEdit, formDirty, pendingSave } from './photos.js';
 import {
@@ -31,7 +32,7 @@ export async function plugScan() {
     list.innerHTML = '';
   }
   try {
-    const r = await fetch('/api/plug_discover', {
+    const r = await request('/api/plug_discover', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -77,7 +78,7 @@ export async function plugTest() {
   const f = document.getElementById('cfgform');
   if (info) info.textContent = 'connecting\u2026';
   try {
-    const r = await fetch('/api/plug_test', {
+    const r = await request('/api/plug_test', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -157,7 +158,7 @@ export function initPlantings() {
       if (!btn) return;
       btn.blur();
       try {
-        const r = await fetch('/api/planting_restore', {
+        const r = await request('/api/planting_restore', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ id: Number(btn.dataset.id) })
@@ -220,7 +221,7 @@ export async function toggleTheme() {
   themeMode = next;
   applyTheme(next); // applied before the round trip
   try {
-    const r = await fetch('/api/settings', {
+    const r = await request('/api/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ theme: next })
@@ -243,7 +244,7 @@ export async function summonStorm() {
   stormBusy = true;
   if (btn) btn.disabled = true;
   try {
-    const r = await fetch('/api/lightning', {
+    const r = await request('/api/lightning', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ seconds: 20, style: 'storm' })
@@ -294,7 +295,7 @@ export async function startCalibration() {
   const info = document.getElementById('lininfo');
   const btn = document.getElementById('linbtn');
   try {
-    const r = await fetch('/api/light_sweep', {
+    const r = await request('/api/light_sweep', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ linearize: true, light: ctlTarget })

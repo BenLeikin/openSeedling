@@ -522,10 +522,89 @@ def charts(page, base):
     shown = page.evaluate(
         "()=>[...document.querySelectorAll('svg.cmini .hvl')].filter(e=>e.style.display!=='none').length"
     )
-    total = page.evaluate("()=>document.querySelectorAll('svg.cmini').length")
+    # a chart with nothing to plot (swap in use on a machine with none) has no crosshair
+    total = page.evaluate(
+        "()=>[...document.querySelectorAll('svg.cmini')].filter(s=>s.querySelector('.hvl')).length"
+    )
     check(
         shown == total and total > 2,
         f"hovering one chart shows the same moment on all ({shown} of {total})",
+    )
+
+
+def status_order(page, base):
+    """Statuses reach the page by a stream and by polls, in any order; the
+    store shows only what is newer, and fetches the photo list and the report
+    only when a status says they changed."""
+    page.goto(base + "/")
+    page.wait_for_function("document.getElementById('phase').textContent.trim() !== ''")
+    page.wait_for_timeout(1200)
+    shown = page.evaluate(
+        """async () => {
+          const store = await import('/static/js/store.js');
+          const light = await import('/static/js/light.js');
+          const cur = await (await fetch('/api/status')).json();
+          const [boot, n] = cur.rev.split('.').map(Number);
+          store.offer({...cur, rev: `${boot}.${n + 5}`});
+          const afterNewer = light.S.rev;
+          store.offer({...cur, rev: `${boot}.${n + 2}`});
+          const afterOlder = light.S.rev;
+          store.offer({...cur, rev: `${boot + 1}.0`});
+          return [afterNewer, afterOlder, light.S.rev, `${boot}.${n + 5}`, `${boot + 1}.0`];
+        }"""
+    )
+    check(
+        shown[0] == shown[3] and shown[1] == shown[3] and shown[2] == shown[4],
+        f"a status older than the one on screen is dropped; one from a restarted "
+        f"controller is taken ({shown[:3]})",
+    )
+    hits = []
+    page.on(
+        "request", lambda r: hits.append(r.url.split("/api/")[-1]) if "/api/" in r.url else None
+    )
+    offer = """async (change) => {
+          const store = await import('/static/js/store.js');
+          const cur = await (await fetch('/api/status')).json();
+          const boot = Number(cur.rev.split('.')[0]) + 2;
+          window._n = (window._n || 0);
+          for (let i = 0; i < 5; i++) {
+            const j = {...cur, rev: `${boot}.${++window._n}`};
+            if (change) j.report = {ts: 4242 + window._n, generating: false};
+            store.offer(j);
+          }
+        }"""
+    hits.clear()
+    page.evaluate(offer, False)
+    page.wait_for_timeout(700)
+    quiet = [h for h in hits if h.startswith(("photos", "report"))]
+    hits.clear()
+    page.evaluate(offer, True)
+    page.wait_for_timeout(700)
+    changed = [h for h in hits if h.startswith("report")]
+    check(
+        not quiet and len(changed) == 5,
+        f"five unchanged statuses fetch neither the photo list nor the report; a changed "
+        f"report is fetched ({len(quiet)} then {len(changed)})",
+    )
+    held = page.evaluate(
+        """async () => {
+          const store = await import('/static/js/store.js');
+          const light = await import('/static/js/light.js');
+          const cur = await (await fetch('/api/status')).json();
+          const boot = Number(cur.rev.split('.')[0]) + 3;
+          store.offer({...cur, rev: `${boot}.1`});
+          // a change goes out; while it is unanswered a status arrives
+          const sent = store.request('/api/fan', {method: 'POST',
+            headers: {'Content-Type': 'application/json'}, body: JSON.stringify({mode: 'auto'})});
+          store.offer({...cur, rev: `${boot}.2`});
+          const during = light.S.rev;
+          await sent;
+          return [during, light.S.rev, `${boot}.1`, `${boot}.2`];
+        }"""
+    )
+    check(
+        held[0] == held[2] and held[1] == held[3],
+        f"a status that arrives while a change is on its way waits for the reply ({held[:2]})",
     )
 
 
@@ -901,6 +980,7 @@ def main():
                 ("Units", lambda: metric_temperature(page, base, app)),
                 ("Setups", lambda: setups_by_main_save(page, base, app)),
                 ("Charts", lambda: charts(page, base)),
+                ("Status order", lambda: status_order(page, base)),
                 ("Sensors per tray", lambda: tray_sensors(page, base, app)),
                 ("Removing", lambda: remove_asks(page, base, app)),
                 ("Two cameras", lambda: camera_pair(page, base, app)),

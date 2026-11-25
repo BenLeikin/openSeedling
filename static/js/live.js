@@ -1,7 +1,8 @@
 // openSeedling dashboard: Live updates: the event stream, polling fallback, and the light curve.
+import { offer, request } from './store.js';
 import { render } from './light.js';
 import { lightBackend, pollFloat } from './charts.js';
-import { applyStatus, refresh } from './grid.js';
+import { refresh } from './grid.js';
 
 // EventSource pushes a status the moment something changes. The poll stays,
 // slowed to once a minute while the stream is up, in case the stream dies
@@ -34,7 +35,7 @@ export function initStream() {
       streamOk = true;
       setPoll(POLL_SLOW);
     }
-    applyStatus(j);
+    offer(j);
   });
   es.onerror = () => {
     // the browser reconnects on its own; until it does, poll at full speed
@@ -167,7 +168,7 @@ export async function startSweep() {
   const info = document.getElementById('sweepinfo');
   const btn = document.getElementById('sweepbtn');
   if (sweepRunning) {
-    await fetch('/api/light_sweep', {
+    await request('/api/light_sweep', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cancel: true })
@@ -178,7 +179,7 @@ export async function startSweep() {
   try {
     // one request does the whole job: a fine raw sweep, then the calibration
     // built from it and switched on
-    const r = await fetch('/api/light_sweep', {
+    const r = await request('/api/light_sweep', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ linearize: true })
