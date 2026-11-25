@@ -296,17 +296,7 @@ export function render() {
     const ph = document.querySelector('.aphase');
     if (ph) ph.style.setProperty('--lum', (S.brightness / 100).toFixed(2));
   }
-  {
-    // A status poll issued before the mode POST can land after it, carrying the
-    // old override: hold the chosen mode until the server reports it.
-    let m = S.light_override;
-    if (pendingMode != null) {
-      if (m === pendingMode)
-        pendingMode = null; // server agrees; release
-      else m = pendingMode;
-    }
-    showLightMode(m, S.manual_bright, true); // from a status: may release the brightness hold
-  }
+  showLightMode(S.light_override, S.manual_bright);
   document.getElementById('bulb').style.setProperty('--glow', S.brightness / 100);
   const [p, n, stage] = phaseOf();
   document.getElementById('phase').textContent = p;
@@ -325,8 +315,7 @@ export function render() {
 
 export let lightMode = 'auto',
   dragging = false;
-export let pendingMode = null; // mode the user just picked, held until status agrees
-export function showLightMode(mode, bright, fromStatus) {
+export function showLightMode(mode, bright) {
   mode = mode || 'auto';
   lightMode = mode;
   document
@@ -367,47 +356,18 @@ export function showLightMode(mode, bright, fromStatus) {
   const live = mode === 'on';
   wrap.classList.toggle('dim', !live);
   rng.disabled = !live;
-  // Hold the requested value until a status reports it or the hold times out,
-  // so a status built before the change landed does not move the thumb.
-  if (brightHold != null) {
-    // The hold is released only by a status, never by the POST's reply: the
-    // reply echoes the value, and the next status can still carry the old one.
-    if (fromStatus && bright != null && Math.round(bright) === Math.round(brightHold)) {
-      brightHold = null;
-    } else {
-      rng.value = brightHold;
-      if (val) val.textContent = Math.round(brightHold) + '%';
-      return;
-    }
-  }
   if (bright != null && !dragging) {
     rng.value = bright;
     if (val) val.textContent = bright + '%';
   }
 }
-// The brightness the user asked for, held until a status confirms it or the
-// timer runs out.
-export let brightHold = null,
-  brightHoldTimer = null;
-export function holdBright(v) {
-  brightHold = v;
-  clearTimeout(brightHoldTimer);
-  brightHoldTimer = setTimeout(() => {
-    brightHold = null;
-    refresh();
-  }, 6000);
-}
-
 export async function setLight(mode, brightness, quiet) {
   if (ctlTarget === 'second') return setLight2(mode, brightness, quiet);
   const info = document.getElementById('lightinfo');
   if (info && !quiet) info.textContent = '...';
   const body = {};
   if (mode != null) body.mode = mode;
-  if (brightness != null) {
-    body.brightness = brightness;
-    holdBright(brightness);
-  }
+  if (brightness != null) body.brightness = brightness;
   try {
     const r = await request('/api/light', {
       method: 'POST',
@@ -416,12 +376,10 @@ export async function setLight(mode, brightness, quiet) {
     });
     const j = await r.json().catch(() => ({}));
     if (r.ok && j.ok) {
-      if (j.brightness != null) holdBright(j.brightness); // what it accepted
       if (quiet) {
         // mid-drag: leave the slider alone
         lightMode = j.mode;
       } else {
-        pendingMode = j.mode;
         showLightMode(j.mode, j.brightness);
         refresh();
         // the plug is a network round trip made by the control loop, so the
@@ -443,10 +401,7 @@ export async function setLight2(mode, brightness, quiet) {
   const info = document.getElementById('lightinfo');
   const body = {};
   if (mode != null) body.light2_override = mode;
-  if (brightness != null) {
-    body.light2_bright = Math.round(brightness);
-    holdBright(body.light2_bright);
-  }
+  if (brightness != null) body.light2_bright = Math.round(brightness);
   try {
     const r = await request('/api/settings', {
       method: 'POST',
@@ -456,7 +411,6 @@ export async function setLight2(mode, brightness, quiet) {
     const j = await r.json().catch(() => ({}));
     if (r.ok && j.ok !== false) {
       if (mode != null) {
-        pendingMode = mode;
         showLightMode(mode, brightness != null ? body.light2_bright : S.manual_bright);
       }
       if (!quiet) refresh();

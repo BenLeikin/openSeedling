@@ -323,6 +323,7 @@ export function set_buddyOn(v) {
   buddyOn = v;
   return v;
 }
+// the touchscreen summary (screen_buddy.js) walks its buddy across tiles, not cards
 export function set_walkBoxes(v) {
   walkBoxes = v;
   return v;

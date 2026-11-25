@@ -1,5 +1,5 @@
 // openSeedling dashboard: Live updates: the event stream, polling fallback, and the light curve.
-import { offer, request } from './store.js';
+import { notice, offer, request, send } from './store.js';
 import { render } from './light.js';
 import { lightBackend, pollFloat } from './charts.js';
 import { refresh } from './grid.js';
@@ -168,11 +168,8 @@ export async function startSweep() {
   const info = document.getElementById('sweepinfo');
   const btn = document.getElementById('sweepbtn');
   if (sweepRunning) {
-    await request('/api/light_sweep', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cancel: true })
-    });
+    const r = await send('/api/light_sweep', { cancel: true });
+    if (!r.ok) notice(`The calibration was not cancelled. ${r.error}`);
     return;
   }
   if (info) info.textContent = 'starting\u2026';

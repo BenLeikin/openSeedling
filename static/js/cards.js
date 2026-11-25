@@ -1,5 +1,5 @@
 // openSeedling dashboard: Pi health tiles, the light plan and day progress, the fan, focus and USB camera controls, and start-up.
-import { request } from './store.js';
+import { notice, request, send } from './store.js';
 import {
   S,
   dragTimer,
@@ -419,21 +419,8 @@ export function renderHeat(j) {
 export async function setHeat(mode) {
   const info = document.getElementById('heatinfo');
   if (info) info.textContent = '\u2026';
-  try {
-    const r = await request('/api/heat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode })
-    });
-    const j = await r.json().catch(() => ({}));
-    if (r.status === 401 && info) {
-      info.textContent = 'log in first';
-      return;
-    }
-    if (!j.ok && info) info.textContent = j.error || 'failed';
-  } catch (e) {
-    if (info) info.textContent = 'request failed';
-  }
+  const r = await send('/api/heat', { mode });
+  if (!r.ok) notice(`The heat mat was not changed. ${r.error}`);
   setTimeout(refresh, 1500); // the plug takes a moment to answer
 }
 export function pushFanSpeed(v) {
@@ -449,43 +436,23 @@ export function pushFanSpeed(v) {
 export async function sendFanSpeed(v) {
   const mode = (document.querySelector('.fanbtn.on') || { dataset: {} }).dataset.mode || 'auto';
   const body = mode === 'on' ? { speed: v } : { auto_speed: v };
-  try {
-    await request('/api/fan', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-  } catch (e) {}
+  const r = await send('/api/fan', body);
+  if (!r.ok) notice(`The fan speed was not changed. ${r.error}`);
 }
 export async function setFan(mode) {
   const info = document.getElementById('faninfo');
   if (info) info.textContent = '\u2026';
-  try {
-    const r = await request('/api/fan', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode })
-    });
-    const j = await r.json().catch(() => ({}));
-    if (r.status === 401 && info) {
-      info.textContent = 'log in first';
-      return;
-    }
-    if (!j.ok && info) info.textContent = j.error || 'failed';
-  } catch (e) {
-    if (info) info.textContent = 'request failed';
-  }
+  const r = await send('/api/fan', { mode });
+  // in a notice, not in the fan's own line: the status redraws that line
+  if (!r.ok) notice(`The fan was not changed. ${r.error}`);
   refresh();
 }
 export let focusRunning = false;
 export async function startFocusSweep() {
   const info = document.getElementById('focusinfo');
   if (focusRunning) {
-    await request('/api/focus_sweep', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cancel: true })
-    });
+    const r = await send('/api/focus_sweep', { cancel: true });
+    if (!r.ok) notice(`The focus sweep was not cancelled. ${r.error}`);
     return;
   }
   if (info) info.textContent = 'starting\u2026';
@@ -813,11 +780,8 @@ export function initLight() {
           )
         )
           return;
-        await request('/api/settings', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ screen_touch_cal: {} })
-        });
+        const r = await send('/api/settings', { screen_touch_cal: {} });
+        if (!r.ok) notice(`The touch calibration was not cleared. ${r.error}`);
         loadDisplay();
       });
     const ms = document.querySelector('.modepick');

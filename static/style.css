@@ -3623,3 +3623,23 @@ body.onscreen * {
   border-radius: 50%;
   background: radial-gradient(circle, #8fc196 0 5px, transparent 6px);
 }
+
+/* a change that did not go through (store.js notice()) */
+#notice {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  max-width: min(92vw, 520px);
+  padding: 10px 16px;
+  border-radius: 10px;
+  background: #7a1f1f;
+  color: #fff;
+  font-size: 14px;
+  line-height: 1.35;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  z-index: 1000;
+}
+#notice[hidden] {
+  display: none;
+}

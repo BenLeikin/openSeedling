@@ -249,7 +249,9 @@ def status_payload(authed=None):
         rev=rev,
         now=datetime.now(tz).isoformat(),
         brightness=s["brightness"],
-        light_override=s.get("override", cfg.get("light_override", "auto")),
+        # the setting, not what the control loop last applied: a status sent
+        # just after a change must name the mode that was asked for
+        light_override=cfg.get("light_override", "auto"),
         manual_bright=cfg.get("manual_bright", 100),
         on=s["on"].isoformat(),
         off=s["off"].isoformat(),

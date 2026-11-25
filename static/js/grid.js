@@ -1,5 +1,5 @@
 // openSeedling dashboard: The cell grid overlay, the Settings form's submit handler, and the AI garden report.
-import { offer, onStatus, request } from './store.js';
+import { notice, offer, onStatus, request, send } from './store.js';
 import { S, capturePhoto, render, renderPhoto, set_S } from './light.js';
 import { applySetup, set_setupDirty, setupDirty, setupDraft, trayDraft } from './setups.js';
 import {
@@ -570,13 +570,12 @@ export async function saveAi() {
   const parts = (t.value || '08:00').split(':');
   const h = Math.min(23, Math.max(0, parseInt(parts[0], 10) || 0));
   const m = Math.min(59, Math.max(0, parseInt(parts[1], 10) || 0));
-  try {
-    await request('/api/ai_settings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ai_enabled: en.checked, ai_report_hour: h, ai_report_minute: m })
-    });
-  } catch (e) {}
+  const r = await send('/api/ai_settings', {
+    ai_enabled: en.checked,
+    ai_report_hour: h,
+    ai_report_minute: m
+  });
+  if (!r.ok) notice(`The report settings were not saved. ${r.error}`);
 }
 export async function resetTimelapse(confirmed) {
   const info = document.getElementById('renderinfo');

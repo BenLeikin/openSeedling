@@ -1,5 +1,5 @@
 // openSeedling dashboard: Sensor readouts and units, and the chart grid.
-import { request } from './store.js';
+import { notice, request } from './store.js';
 import { S, agoStr } from './light.js';
 import { inSetup, sensorTrays, trayInSetup } from './setups.js';
 import { set_playerFps } from './photos.js';
@@ -1214,7 +1214,12 @@ export async function waterAct(tray, body, msg) {
       if (info) info.textContent = 'log in to run the pump';
       return;
     }
-    if (!j.ok && info) info.textContent = j.error || 'HTTP ' + r.status;
+    if (!j.ok) {
+      // in a notice as well: the status redraws the pump's own line
+      pumpActive = false;
+      notice(`The pump did not run. ${j.error || 'The controller answered ' + r.status + '.'}`);
+      if (info) info.textContent = j.error || 'HTTP ' + r.status;
+    }
     // progress/result arrives via the status poll (running/last) + live float
   } catch (e) {
     if (info) info.textContent = 'request failed';

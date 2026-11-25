@@ -1,4 +1,5 @@
-// openSeedling dashboard: which status to show, and every request to the controller.
+// openSeedling dashboard: which status to show, every request to the controller,
+// and saying so when a change did not go through.
 //
 // A status arrives by the live stream or by a poll, and a slow poll can land
 // after a newer push, or after the reply to a change made on this page. Each
@@ -71,4 +72,45 @@ export async function request(url, options = {}) {
   } finally {
     settle();
   }
+}
+
+// POST a change and say how it went: {ok, data, error}. `error` is a sentence
+// ready to show. A reply of {ok: false} counts as a failure, like any 4xx.
+export async function send(url, body) {
+  try {
+    const resp = await request(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {})
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (resp.status === 401) return { ok: false, data, error: 'Log in to change this.' };
+    if (!resp.ok || data.ok === false) {
+      const first = data.errors && Object.values(data.errors)[0];
+      const why = first || data.error || `The controller answered ${resp.status}.`;
+      return { ok: false, data, error: String(why) };
+    }
+    return { ok: true, data, error: '' };
+  } catch (e) {
+    return { ok: false, data: {}, error: 'The controller did not answer.' };
+  }
+}
+
+// A line at the bottom of the page for a change that failed. It stays until
+// read (eight seconds), whatever the next status redraws.
+let noticeTimer = null;
+export function notice(text) {
+  let el = document.getElementById('notice');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'notice';
+    el.setAttribute('role', 'alert');
+    document.body.appendChild(el);
+  }
+  el.textContent = text;
+  el.hidden = false;
+  clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(() => {
+    el.hidden = true;
+  }, 8000);
 }

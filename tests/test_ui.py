@@ -608,6 +608,52 @@ def status_order(page, base):
     )
 
 
+def light_and_notices(page, base, app):
+    """The light's mode stays where it was put when an older status turns up
+    late, and a change the controller refuses is said on the page."""
+    page.goto(base + "/")
+    page.wait_for_function("document.getElementById('phase').textContent.trim() !== ''")
+    page.wait_for_timeout(1000)
+    page.click("#lcon")
+    # the button turns on when the controller has answered
+    page.wait_for_function(
+        "document.getElementById('lcon').classList.contains('on')", timeout=30000
+    )
+    late = page.evaluate(
+        """async () => {
+          const store = await import('/static/js/store.js');
+          const cur = await (await fetch('/api/status')).json();
+          const [boot, n] = cur.rev.split('.').map(Number);
+          // a status built before the click, arriving after it
+          store.offer({...cur, rev: `${boot}.${Math.max(0, n - 1000)}`, light_override: 'auto'});
+          return document.getElementById('lcon').classList.contains('on');
+        }"""
+    )
+    page.wait_for_timeout(1500)
+    still = page.evaluate("()=>document.getElementById('lcon').classList.contains('on')")
+    check(
+        late and still and saved(app).get("light_override") == "on",
+        f"the light's mode is not put back by a status older than the click "
+        f"({late}, {still}, saved {saved(app).get('light_override')})",
+    )
+    page.click("#lcauto")
+    page.wait_for_timeout(600)
+    shown = page.evaluate(
+        """async () => {
+          const cards = await import('/static/js/cards.js');
+          await cards.setFan('sideways');
+          await new Promise(r => setTimeout(r, 1500));
+          const el = document.getElementById('notice');
+          return el && !el.hidden ? el.textContent : '';
+        }"""
+    )
+    check(
+        "The fan was not changed." in shown,
+        f"a change the controller refuses is said in a notice that a redraw does not "
+        f"wipe ({shown!r})",
+    )
+
+
 def buddies(pw, base):
     """Little Buddy's colors hold in both themes: each sprite's own leg colour
     (not the shared leaf green), dark faces on the dark theme, a seven-spot
@@ -981,6 +1027,7 @@ def main():
                 ("Setups", lambda: setups_by_main_save(page, base, app)),
                 ("Charts", lambda: charts(page, base)),
                 ("Status order", lambda: status_order(page, base)),
+                ("Light and notices", lambda: light_and_notices(page, base, app)),
                 ("Sensors per tray", lambda: tray_sensors(page, base, app)),
                 ("Removing", lambda: remove_asks(page, base, app)),
                 ("Two cameras", lambda: camera_pair(page, base, app)),
