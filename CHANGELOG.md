@@ -19,10 +19,20 @@ the 4-17 baseline. The installer commits each one with the heading below.
 - With the light off, the control loop no longer pushes a status to every open dashboard on each pass.
 - A dashboard polling during a restart shows "Controller starting" instead of empty readings.
 - `update.sh` and `deploy.sh` find tracebacks in a long log and check the port set in `.env`.
+- A pump run is put on record before the pump starts, so a restart part way through still counts it against the daily limit and the cooldown.
+- Failed fills are kept per tray: a good fill on one tray no longer clears another tray's alert.
+- A fill on a tray with no float is refused even when forced; it used to run for a moment and report a float fault.
+- A light calibration sweep whose result cannot be saved hands the light back to the schedule instead of holding it until a restart.
+- A daily report that fails is not run again every minute for the rest of the day.
+- Alerts go to ntfy as well as Discord, and one that could not be sent is sent on the next pass.
+- A light sensor reading zero in the dark is no longer reported as stuck.
+- Settings in a hand-edited `config.json` are checked at start-up; an invalid one falls back to its default with an error in the log. NaN and infinity are refused wherever a number is expected.
+- `setup.sh` runs without a terminal where sudo needs no password, and a change to `requirements-dev.txt` no longer triggers it on the Pi.
 
 ### Security
 - Request bodies over 1 MB are refused.
 - Light-plan advice is escaped before it is shown (it can contain a setup's name).
+- The Discord webhook URL and ntfy topic are kept out of the log when a send fails.
 
 ### Added
 - `scripts/deploy.sh`: push `main` and update the Pi from a development checkout, with a health check and rollback.
