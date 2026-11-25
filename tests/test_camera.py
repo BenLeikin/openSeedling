@@ -342,7 +342,7 @@ def test_timelapse_sharp():
     ns = {"settings": {"timelapse_speed_pct": 33}, "_file_keys": {"timelapse_speed_pct"}}
     exec(mig, ns)
     assert ns["settings"] == {"video_fps": 7.92}, (
-        "update 24's shared percentage becomes the video speed (33% of 24 = 7.92 frames/s)"
+        "an older config's shared speed percentage becomes the video speed (33% of 24 = 7.92 frames/s)"
     )
     started = []
     real_sr = camera_mod.start_render
@@ -361,7 +361,7 @@ def test_timelapse_sharp():
         if not had_video:
             camera_mod.VIDEO_PATH.unlink(missing_ok=True)
     assert r1["ok"] and r2["ok"] and started == [1] and st_.get("video_fps") == 8.0, (
-        "a new video speed re-renders the video (it used to wait for a manual Render); an "
+        "a new video speed re-renders the video; an "
         "unchanged one does not; the status says what speed the video has"
     )
     assert (
@@ -776,10 +776,7 @@ def test_two_cameras():
     ), "Settings, Camera has camera 2, a camera picker by port and Align cameras"
     ids = re.findall(r'\bid="([^"{}]+)"', html)
     dups = sorted({i for i in ids if ids.count(i) > 1})
-    assert not dups, (
-        f"no two elements on the dashboard share an id (a second Align button once took the "
-        f"camera card's id, so it did nothing and hijacked the other) ({dups})"
-    )
+    assert not dups, f"no two elements on the dashboard share an id ({dups})"
     r = c.get("/api/cameras").get_json()
     assert isinstance(r.get("cameras"), list), "the camera list answers (empty with no cameras)"
     with config.settings_lock:

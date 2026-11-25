@@ -115,7 +115,7 @@ def test_heat_mat():
     cfg86 = dict(base, heat_target_f=86, heat_max_f=95)
     t86 = (86 - 32) * 5 / 9
 
-    def old_pi(meas, air, t, stc):  # update 21: Kp 0.6, Ti 1 h, air + 6.4C
+    def old_pi(meas, air, t, stc):  # the first tuning: Kp 0.6, Ti 1 h, air + 6.4C
         if stc.get("w") is None or t >= stc["w"] + 900:
             e = t86 - meas
             ff = (t86 - air) / 6.4
@@ -134,7 +134,7 @@ def test_heat_mat():
     lo0, hi0, mean0 = simulate(old_pi)
     lo1, hi1, mean1 = simulate(auto)
     assert (hi0 - lo0) * 1.8 > 2.0 and (hi1 - lo1) * 1.8 < 1.0 and abs(mean1 - t86) * 1.8 < 0.3, (
-        f"on a model of the rig that reproduces update 21's swing ({(hi0 - lo0) * 1.8:.1f}F), the "
+        f"on a model of the rig that reproduces the first tuning's swing ({(hi0 - lo0) * 1.8:.1f}F), the "
         f"retuned Auto holds {(hi1 - lo1) * 1.8:.1f}F peak to peak, mean {(mean1 - t86) * 1.8:+.2f}F"
     )
 

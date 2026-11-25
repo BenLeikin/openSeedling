@@ -35,8 +35,8 @@ def _refuses(fn, value):
 
 
 def test_unsaved_settings():
-    """An edited setting used to revert on the next status (every few seconds,
-    from the live readings) as soon as its field lost focus."""
+    """An edited setting is not overwritten by the next status while it is
+    unsaved, whether or not its field still has focus."""
     js = page_js()
     fh = js_fn(js, "formHolds")
     ff = js_fn(js, "fillForm")
@@ -47,10 +47,7 @@ def test_unsaved_settings():
         and "body.tray_sensors=trayDraft" in sub2.group(0)
         and ("setupDirty=false;" in sub2.group(0) or "set_setupDirty(false);" in sub2.group(0))
         and "if(k==='setups')return 'Setups:';" in js
-    ), (
-        "the main Save also saves pending Setups edits (a daily light target changed there was "
-        "silently dropped before)"
-    )
+    ), "the main Save also saves pending Setups edits"
     assert (
         "f.addEventListener('input',markDirty);f.addEventListener('change',markDirty);" in js
         and fh
@@ -210,7 +207,7 @@ def test_config_safety():
         loop
         and "last_shot = _capture_tick(last_shot)" in loop.group(0)
         and 'log.exception("capture loop error")' in loop.group(0)
-    ), "one failed capture tick is logged and the timelapse carries on (the thread used to die)"
+    ), "one failed capture tick is logged and the timelapse carries on"
 
     # 4. a photo is the last whole frame, written whole
     def frame(n):

@@ -68,7 +68,7 @@ def test_charts():
         and "Math.round(r.width)||320" not in body
     ), (
         "a chart is drawn at its real on-screen size and redrawn when that changes, never "
-        "at a fallback size stretched to fit (which squashed the text)"
+        "at a fallback size stretched to fit"
     )
     lay = js_fn(js, "layoutChartRows")
     assert (
@@ -81,7 +81,7 @@ def test_charts():
         and "svg.cmini .cgl{" in css
     ), (
         "chart rows fill the width with equal-size charts, balanced (4 across 3 slots go 2+2), "
-        "recomputed on resize; the SVG gridline class no longer collides with the grid container"
+        "recomputed on resize; the SVG gridline class does not collide with the grid container"
     )
     assert (
         'data-h="6"' in html
@@ -107,7 +107,7 @@ def test_phone_layout():
         "page stays the width of the screen"
     )
     assert "filter(v=>v&&(v.seed||v.equipment||v.planted||v.sprouted||v.archived)).length" in js, (
-        "a cleared cell no longer counts as filled in the tray's count"
+        "a cleared cell does not count as filled in the tray's count"
     )
 
 
