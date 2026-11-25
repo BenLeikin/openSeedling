@@ -47,6 +47,9 @@ if __name__ == "__main__":
     log.info(f"Dashboard at http://0.0.0.0:{config.HTTP_PORT}")
     if config.TRUST_LOCALHOST:
         log.info(f"touchscreen listener at http://127.0.0.1:{config.SCREEN_PORT}")
+    proxy = config.proxy_options()
+    if proxy:
+        log.info(f"trusting forwarded headers from the proxy at {proxy['trusted_proxy']}")
     # One process only: the loops above own the PWM, the pumps and the I2C bus,
     # and a second worker would be a second controller on the same hardware.
     try:
@@ -59,6 +62,7 @@ if __name__ == "__main__":
             channel_timeout=120,
             max_request_body_size=auth.MAX_BODY_BYTES,
             ident="OpenSeedling",
+            **proxy,
         )
     except ImportError:
         log.info("waitress not installed; falling back to the Flask dev server")

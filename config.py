@@ -2,6 +2,7 @@
 validators, and the shared runtime state and locks."""
 
 import copy
+import ipaddress
 import json
 import math
 import os
@@ -253,6 +254,39 @@ def listen_on():
     if TRUST_LOCALHOST:
         listen.append(f"127.0.0.1:{SCREEN_PORT}")
     return " ".join(listen)
+
+
+# The address of a reverse proxy in front of the dashboard (the usual way to
+# give it HTTPS), in GROWLIGHT_TRUSTED_PROXY. Requests from that address are
+# taken to come from the client named in X-Forwarded-For, over the scheme in
+# X-Forwarded-Proto: the login back-off then counts per browser, and the
+# session cookie is marked Secure. From any other address those headers are
+# dropped before the app sees them.
+TRUSTED_PROXY = os.environ.get("GROWLIGHT_TRUSTED_PROXY", "").strip()
+
+
+def proxy_options():
+    """waitress's settings for TRUSTED_PROXY; none without one.
+
+    Only a single IP address is accepted. A name, a network or "*" would let
+    anyone who can send from there choose the address their logins are counted
+    under."""
+    if not TRUSTED_PROXY:
+        return {}
+    try:
+        address = str(ipaddress.ip_address(TRUSTED_PROXY))
+    except ValueError:
+        log.error(
+            f"GROWLIGHT_TRUSTED_PROXY={TRUSTED_PROXY!r} is not an IP address; "
+            "forwarded headers are not trusted"
+        )
+        return {}
+    return {
+        "trusted_proxy": address,
+        "trusted_proxy_count": 1,
+        "trusted_proxy_headers": {"x-forwarded-for", "x-forwarded-proto"},
+        "clear_untrusted_proxy_headers": True,
+    }
 
 
 CONFIG_PATH = Path(__file__).with_name("config.json")

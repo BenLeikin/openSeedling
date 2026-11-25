@@ -58,7 +58,8 @@ read by the systemd unit:
 | `ANTHROPIC_API_KEY` | | Enables the daily AI report |
 | `DISCORD_WEBHOOK` | | Enables threshold alerts |
 | `GROWLIGHT_LOG_LEVEL` | `info` | `debug`, `info`, `warning`, `error` |
-| `GROWLIGHT_LOG_FILE` | | Adds a rotating log file |
+| `GROWLIGHT_LOG_FILE` | | Adds a rotating log file (in the app folder: the service cannot write elsewhere) |
+| `GROWLIGHT_TRUSTED_PROXY` | | IP address of a reverse proxy whose `X-Forwarded-For` and `X-Forwarded-Proto` are believed ([install.md](install.md#reverse-proxy)) |
 
 `deploy/env.example` documents every key. Re-running setup keeps any key it does
 not ask about.

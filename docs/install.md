@@ -148,6 +148,25 @@ A separate box runs nginx and proxies the dashboard to the public site over HTTP
 ```nginx
 location / {
     proxy_pass http://grow:5000;
+    proxy_set_header X-Forwarded-For $remote_addr;
     proxy_set_header X-Forwarded-Proto $scheme;
 }
 ```
+
+Tell the dashboard which address the proxy calls from, in `.env` on the Pi,
+and restart the service:
+
+```
+GROWLIGHT_TRUSTED_PROXY=10.0.0.5
+```
+
+Those two headers are believed from that one address and dropped from every
+other. With them the session cookie is marked Secure, so it is never sent over
+plain http, and a wrong password makes only that browser wait; without the
+setting every visitor through the proxy shares one wait. Set a password
+(`scripts/set_password.py`) before the dashboard is reachable from outside.
+
+Proxy the main port only, never the touchscreen's (5001): requests there are
+signed in without a password. The main port still answers plain http on your
+own network; to close that, allow only the proxy's address to reach it in the
+Pi's firewall.

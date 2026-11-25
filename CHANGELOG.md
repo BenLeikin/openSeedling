@@ -49,6 +49,7 @@ the 4-17 baseline. The installer commits each one with the heading below.
 - The service runs sandboxed (`deploy/growlight.service`): it cannot use sudo, the filesystem outside the app folder is read-only, home folders are hidden from it, and its files are created readable by its user only. `deploy.sh` puts the previous unit back when it rolls back.
 - With a password set, full-size timelapse frames (`/frame/<name>`) need a login, and signed-out viewers may hold 2 of the 6 live-update connections.
 - A new photo is cropped or flattened once however many dashboards ask for it at the same moment; each request used to start its own image job.
+- `GROWLIGHT_TRUSTED_PROXY` names the reverse proxy in front of the dashboard. Its `X-Forwarded-For` and `X-Forwarded-Proto` are believed, so behind HTTPS the session cookie is marked Secure and the login back-off counts per browser. The cookie was never marked Secure behind a proxy before: the web server drops those headers from addresses it was not told to trust.
 - Request bodies over 1 MB are refused.
 - Light-plan advice is escaped before it is shown (it can contain a setup's name).
 - The Discord webhook URL and ntfy topic are kept out of the log when a send fails.

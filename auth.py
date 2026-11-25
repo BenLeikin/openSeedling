@@ -81,7 +81,8 @@ class LoginThrottle:
 
     Refusing costs nothing and holds no server thread, so one client guessing
     does not keep anyone else from signing in. Behind a reverse proxy every
-    client has the proxy's address and shares one back-off.
+    client has the proxy's address and shares one back-off, unless the proxy
+    is named in GROWLIGHT_TRUSTED_PROXY.
     """
 
     BASE_S = 1.0

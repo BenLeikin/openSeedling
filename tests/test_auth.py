@@ -262,3 +262,97 @@ def test_viewers_of_a_new_photo_share_one_image_job():
         assert r.status_code == 500 and b"out of memory" in r.data, "a failed job says why"
     finally:
         tools.imgtool = real
+
+
+def test_only_a_single_address_can_be_the_trusted_proxy():
+    was = config.TRUSTED_PROXY
+    try:
+        config.TRUSTED_PROXY = ""
+        assert config.proxy_options() == {}
+        for bad in ("*", "10.0.0.0/8", "proxy.lan", "10.0.0.5, 10.0.0.6"):
+            config.TRUSTED_PROXY = bad
+            assert config.proxy_options() == {}, f"{bad!r} is not one address"
+        config.TRUSTED_PROXY = "10.0.0.5"
+        opts = config.proxy_options()
+        assert opts["trusted_proxy"] == "10.0.0.5" and opts["trusted_proxy_count"] == 1
+        assert opts["trusted_proxy_headers"] == {"x-forwarded-for", "x-forwarded-proto"}
+    finally:
+        config.TRUSTED_PROXY = was
+
+
+def test_forwarded_headers_count_from_the_trusted_proxy_only():
+    """Against the real web server, as a reverse proxy on 127.0.0.1 would call it."""
+    import json
+    import urllib.error
+    import urllib.request
+
+    try:
+        from waitress import create_server
+    except ImportError:
+        pytest.skip("forwarded headers on the real web server (waitress not installed here)")
+
+    def login(port, password, **headers):
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/login",
+            data=json.dumps({"password": password}).encode(),
+            headers={"Content-Type": "application/json", **headers},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return r.status, r.headers.get("Set-Cookie", "")
+        except urllib.error.HTTPError as e:
+            return e.code, ""
+
+    def fan(port, **headers):
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/fan",
+            data=b'{"mode": "auto"}',
+            headers={"Content-Type": "application/json", **headers},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return r.status
+        except urllib.error.HTTPError as e:
+            return e.code
+
+    was = config.TRUSTED_PROXY, config.TRUST_LOCALHOST, config.SCREEN_PORT
+    config.TRUSTED_PROXY = "127.0.0.1"
+    behind = create_server(routes.app, listen="127.0.0.1:0 127.0.0.1:0", **config.proxy_options())
+    direct = create_server(routes.app, listen="127.0.0.1:0")
+    port, screen = (p for _, p in behind.effective_listen)
+    for server in (behind, direct):
+        threading.Thread(target=server.run, daemon=True).start()
+    set_password(True)
+    try:
+        # through the proxy: each browser has its own back-off
+        a = {"X-Forwarded-For": "203.0.113.9", "X-Forwarded-Proto": "https"}
+        b = {"X-Forwarded-For": "203.0.113.10", "X-Forwarded-Proto": "https"}
+        assert login(port, "wrong", **a)[0] == 401
+        assert login(port, "pw", **a)[0] == 429, "the same browser has to wait"
+        status, cookie = login(port, "pw", **b)
+        assert status == 200, "another browser behind the same proxy does not"
+        assert "Secure" in cookie, "over HTTPS the session cookie is marked Secure"
+        # what the browser itself put in the header is not the address used
+        spoof = {"X-Forwarded-For": "198.51.100.1, 203.0.113.9", "X-Forwarded-Proto": "https"}
+        assert login(port, "pw", **spoof)[0] == 429, "the proxy's own entry is the one that counts"
+
+        # the screen's listener stays the screen's: a forwarded request is not it
+        config.TRUST_LOCALHOST, config.SCREEN_PORT = True, screen
+        assert fan(screen) == 200
+        assert fan(screen, **{"X-Forwarded-For": "203.0.113.9"}) == 401
+        assert fan(screen, **{"X-Forwarded-Proto": "https"}) == 401
+        config.TRUST_LOCALHOST = False
+
+        # no trusted proxy: the headers are dropped
+        auth.logins.clear()
+        direct_port = direct.effective_port
+        assert login(direct_port, "wrong", **a)[0] == 401
+        assert login(direct_port, "pw", **b)[0] == 429, "a made-up address is not believed"
+        auth.logins.clear()
+        status, cookie = login(direct_port, "pw", **{"X-Forwarded-Proto": "https"})
+        assert status == 200 and "Secure" not in cookie, "nor is a made-up scheme"
+    finally:
+        config.TRUSTED_PROXY, config.TRUST_LOCALHOST, config.SCREEN_PORT = was
+        set_password(False)
+        behind.close()
+        direct.close()

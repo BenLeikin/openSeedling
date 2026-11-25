@@ -493,12 +493,15 @@ password, delete `.secret` in the app folder and restart the service.
 
 A wrong password makes that client wait before its next try: 1 s, doubling with
 each failure in a row up to 60 s. Other clients are not held up. Behind a
-reverse proxy every client has the proxy's address, so they share one wait.
+reverse proxy every client has the proxy's address, so they share one wait
+unless the proxy is named in `GROWLIGHT_TRUSTED_PROXY`
+([install.md](install.md#reverse-proxy)).
 
 `cookie_secure` defaults to `"auto"`: the session cookie is marked Secure when the
-request arrived over HTTPS, directly or through a proxy that sets
-`X-Forwarded-Proto: https`. Set `true` to force it (only if every request is
-HTTPS, or login silently fails over http) or `false` to never set it.
+request arrived over HTTPS, which the dashboard knows from the reverse proxy
+named in `GROWLIGHT_TRUSTED_PROXY` (`X-Forwarded-Proto: https`). Set `true` to
+force it (only if every request is HTTPS, or login silently fails over http) or
+`false` to never set it.
 
 ## Safeguards against a bad day
 

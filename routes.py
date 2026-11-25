@@ -80,16 +80,16 @@ class _SessionInterface(SecureCookieSessionInterface):
     A Secure cookie sent over plain http is dropped by the browser, so a fixed
     True breaks login on a LAN install at http://<pi>:5000, and a fixed False
     sends the session in clear behind HTTPS. "auto" marks it Secure when the
-    request arrived over HTTPS, directly or via a proxy that sets
-    X-Forwarded-Proto. An explicit true/false in config.json wins."""
+    request arrived over HTTPS: the reverse proxy named in
+    GROWLIGHT_TRUSTED_PROXY said so in X-Forwarded-Proto. The header counts
+    from that proxy only; the web server drops it from anyone else. An
+    explicit true/false in config.json wins."""
 
     def get_cookie_secure(self, app):
         mode = config.settings.get("cookie_secure", "auto")
         if mode != "auto":
             return bool(mode)
-        if not has_request_context():
-            return False
-        return request.is_secure or request.headers.get("X-Forwarded-Proto", "").lower() == "https"
+        return has_request_context() and request.is_secure
 
 
 app.session_interface = _SessionInterface()
