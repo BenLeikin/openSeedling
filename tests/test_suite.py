@@ -705,6 +705,66 @@ def _watering():
         with config.settings_lock:
             config.settings.update(saved)
 
+    # the fill loop on its own: how each kind of fill ends
+    def fill_ends(reads, cap=5.0, at=0.0, limited=False, force=False, reservoir="ok"):
+        seq = iter(reads)
+        real_res = water.reservoir_state
+        water.reservoir_state = lambda: reservoir
+        try:
+            run = types.SimpleNamespace(elapsed=lambda: at)
+            return water._fill(run, lambda: next(seq), cap, limited, force)
+        finally:
+            water.reservoir_state = real_res
+
+    ends = {
+        "steady full": fill_ends([1, 0, 0, 0, 0]),
+        "slosh, then full": fill_ends([0, 0, 1, 0, 0, 0, 0]),
+        "float gone": fill_ends([1, None, None, None, None]),
+        "time up": fill_ends([1], at=5.0),
+        "budget up": fill_ends([1], at=5.0, limited=True),
+        "reservoir empty": fill_ends([1], reservoir="empty"),
+        "reservoir empty, forced": fill_ends([0, 0, 0, 0], reservoir="empty", force=True),
+    }
+    check(
+        ends
+        == {
+            "steady full": water.FULL,
+            "slosh, then full": water.FULL,
+            "float gone": water.FLOAT_LOST,
+            "time up": water.TIME_CAP,
+            "budget up": water.DAILY_CAP,
+            "reservoir empty": water.RESERVOIR,
+            "reservoir empty, forced": water.FULL,
+        },
+        f"the fill loop ends for the right reason in each case ({ends})",
+    )
+
+    # and what each ending means for the tray
+    real_post = water.schedule_postfill
+    water.schedule_postfill = lambda tray, tripped=True: None
+    policy = {}
+    try:
+        for outcome in water.FILL_TEXT:
+            water.fill_failures.clear()
+            with config.settings_lock:
+                config.settings.update(auto_water=True, auto_water_trays=["1", "2"])
+            water._after_fill("1", outcome, 3.0)
+            policy[outcome] = ("1" in water.fill_failures, water.armed_trays(config.settings))
+    finally:
+        water.schedule_postfill = real_post
+        water.fill_failures.clear()
+        with config.settings_lock:
+            config.settings.update(auto_water=True, auto_water_trays=["1", "2"])
+    faults = {o for o, (failed, _) in policy.items() if failed}
+    check(
+        faults == set(water.FILL_FAULTS) == {water.TIME_CAP, water.RESERVOIR, water.FLOAT_LOST}
+        and all(
+            armed == (["2"] if o in faults else ["1", "2"]) for o, (_, armed) in policy.items()
+        ),
+        f"only a fault raises the tray's alert and disarms it, and only that tray "
+        f"({sorted(faults)})",
+    )
+
     # failed fills are kept per tray
     import alerts
 

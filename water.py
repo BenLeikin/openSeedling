@@ -1,6 +1,7 @@
 """Watering: pump runs and fills, the reservoir, probe filtering and
 moisture, auto-water decisions, post-fill checks and pump persistence."""
 
+import contextlib
 import re
 import time
 
@@ -169,186 +170,217 @@ def pump_refusal(tray, seconds=None, force=False):
         return _start_refusal(tray, force, daily_cap, seconds, fl)
 
 
-def _claim(st, budget):
-    """Mark a tray's pump as starting. Call with pump_lock held, then save.
+def _begin(tray, force, daily_cap, seconds=None, fl=None, fill_cap=None):
+    """Check that a run may start and, if so, put it on record.
 
-    The cooldown starts and the run's longest possible time is reserved before
-    the pump turns on, so a process killed part way through a run comes back
-    knowing it happened.
+    Returns (why_not, budget): a refusal, or None and the longest the run may
+    last. The check and the claim happen under one lock, so two callers
+    cannot both start. The cooldown starts and the budget is reserved and
+    saved before the pump turns on: a process killed part way through a run
+    comes back knowing it happened.
     """
-    st["running"] = True
-    st["last_run"] = time.time()
-    st["reserved"] = float(budget)
+    with hardware.pump_lock:
+        why = _start_refusal(tray, force, daily_cap, seconds, fl)
+        if why:
+            return why, 0.0
+        st = hardware.pump_state[tray]
+        if seconds is not None:
+            budget = seconds
+        else:
+            budget = fill_cap if force else min(fill_cap, daily_cap - st["today_seconds"])
+        st.update(running=True, last_run=time.time(), reserved=float(budget))
+    save_persistent_state()
+    return None, budget
+
+
+class _PumpRun:
+    """How long a pump has been on; fixed once the run ends."""
+
+    def __init__(self):
+        self.started = None
+        self.seconds = None
+
+    def elapsed(self):
+        if self.seconds is not None:
+            return self.seconds
+        # monotonic: a clock step (NTP at boot) must not stretch or cut a run
+        return 0.0 if self.started is None else time.monotonic() - self.started
+
+
+@contextlib.contextmanager
+def _pump_on(tray):
+    """The pump is on inside this block and off after it, whatever happens
+    inside. On the way out the run joins the day's total and its reservation
+    is dropped. Only for a run that _begin has accepted."""
+    st = hardware.pump_state[tray]
+    run = _PumpRun()
+    try:
+        hardware._pumps[tray].on()
+        run.started = time.monotonic()
+        yield run
+    finally:
+        hardware._pumps[tray].off()
+        run.seconds = run.elapsed()
+        with hardware.pump_lock:
+            st.update(running=False, reserved=0.0, last_run=time.time())
+            st["today_seconds"] += run.seconds
+
+
+def _record_run(tray, detail, event):
+    """Show a finished run on the dashboard and in the event log."""
+    with hardware.pump_lock:
+        hardware.pump_state[tray]["last_detail"] = detail
+    try:
+        db.log_event("pump", event)
+    except Exception:
+        pass
+    status_mod.publish("pump")
 
 
 def run_pump(tray, seconds, reason="manual", force=False):
-    """Run one tray's pump for `seconds`, clamped to the hard cap. Safety:
-    refuses if that pump is absent, if any pump is running (one at a time, the
-    two share a supply), or (unless forced) if the tray's daily cap would be
-    exceeded. Blocks for the duration, so call it in a thread.
-    Returns (ok, message). Logs every run as a pump event."""
+    """Run one tray's pump for `seconds`, at most pump_max_seconds.
+
+    Refused if that pump is absent, if any pump is running (they share a
+    supply), or, unless forced, if the reservoir is empty or the tray's daily
+    limit would be passed. Blocks for the run, so call it in a thread.
+    Returns (ok, message)."""
     tray = str(tray)
     with config.settings_lock:
         cap = float(config.settings.get("pump_max_seconds", 20))
         daily_cap = float(config.settings.get("pump_daily_max_seconds", 180))
-    secs = max(0.0, min(float(seconds), cap))
-    with hardware.pump_lock:
-        why = _start_refusal(tray, force, daily_cap, secs)
-        if why:
-            return False, why
-        st = hardware.pump_state[tray]
-        _claim(st, secs)
-    save_persistent_state()
-    elapsed = 0.0
-    try:
-        hardware._pumps[tray].on()
-        t0 = time.monotonic()  # a clock step (NTP at boot) must not stretch or cut a run
+    why, secs = _begin(tray, force, daily_cap, seconds=max(0.0, min(float(seconds), cap)))
+    if why:
+        return False, why
+    with _pump_on(tray) as run:
         hardware.SHUTTING_DOWN.wait(secs)  # a shutdown ends the run early
-        elapsed = time.monotonic() - t0
-    finally:
-        hardware._pumps[tray].off()
-        with hardware.pump_lock:
-            st["running"] = False
-            st["reserved"] = 0.0
-            st["last_run"] = time.time()
-            st["today_seconds"] += elapsed
-            st["last_detail"] = f"{reason} {elapsed:.1f}s"
     save_persistent_state()
-    try:
-        db.log_event("pump", f"tray {tray}: {reason} {elapsed:.1f}s")
-    except Exception:
-        pass
-    status_mod.publish("pump")
-    return True, f"ran {elapsed:.1f}s"
+    ran = f"{reason} {run.seconds:.1f}s"
+    _record_run(tray, ran, f"tray {tray}: {ran}")
+    return True, f"ran {run.seconds:.1f}s"
+
+
+# How a fill can end.
+FULL = "full"  # the float tripped
+TIME_CAP = "time_cap"  # fill_max_seconds passed and it never did
+DAILY_CAP = "daily_cap"  # the day's pump budget ran out first
+RESERVOIR = "reservoir"  # the reservoir ran empty
+FLOAT_LOST = "float_lost"  # the float stopped answering
+SHUTDOWN = "shutdown"  # the service is stopping
+
+# outcome -> (what the dashboard and event log show, what the caller is told)
+FILL_TEXT = {
+    FULL: ("full at {s:.1f}s", "filled in {s:.1f}s"),
+    TIME_CAP: (
+        "STOPPED at {s:.1f}s cap, no float trip",
+        "ran to {s:.1f}s cap without float trip (source empty?)",
+    ),
+    DAILY_CAP: (
+        "STOPPED at {s:.1f}s, daily pump limit reached",
+        "stopped at {s:.1f}s, daily pump limit reached",
+    ),
+    RESERVOIR: (
+        "STOPPED at {s:.1f}s, reservoir ran empty",
+        "stopped at {s:.1f}s, reservoir empty",
+    ),
+    FLOAT_LOST: (
+        "STOPPED at {s:.1f}s, float sensor stopped answering",
+        "stopped at {s:.1f}s, float sensor lost",
+    ),
+    SHUTDOWN: (
+        "STOPPED at {s:.1f}s, service shutting down",
+        "stopped at {s:.1f}s, service shutting down",
+    ),
+}
+# The outcomes that mean something is wrong with the tray's plumbing or
+# sensors, with the alert for each. Running out of the day's budget is not
+# one: the float had less than a full fill's time to trip. Nor is a shutdown.
+FILL_FAULTS = {
+    TIME_CAP: "Tray {tray} fill ran to the {s:.1f}s cap without the float tripping. "
+    "Likely causes: source empty, tube off, or float stuck.",
+    RESERVOIR: "Tray {tray} fill stopped at {s:.1f}s: the reservoir ran empty. "
+    "Refill it before watering again.",
+    FLOAT_LOST: "Tray {tray} fill stopped at {s:.1f}s: the float switch stopped answering. "
+    "Check its wiring.",
+}
+FLOAT_CONFIRM_READS = 4  # about 0.4 s of steady "full", so slosh does not end a fill
+
+
+def _fill(run, read_float, run_cap, budget_limited, force):
+    """With the pump on, wait for the fill to end; returns how it ended."""
+    steady = 0
+    while True:
+        if run.elapsed() >= run_cap:
+            return DAILY_CAP if budget_limited else TIME_CAP
+        if hardware.SHUTTING_DOWN.is_set():
+            return SHUTDOWN
+        if not force and reservoir_state() == "empty":
+            return RESERVOIR
+        level = read_float()
+        if level is None or level < 1:  # reads full, or does not read at all
+            steady += 1
+            if steady >= FLOAT_CONFIRM_READS:
+                return FLOAT_LOST if level is None else FULL
+        else:
+            steady = 0
+        time.sleep(0.1)
+
+
+def _disarm(tray):
+    """Take a tray out of auto-watering. True if it was armed."""
+    with config.settings_lock:
+        armed = armed_trays(config.settings)
+        if tray not in armed:
+            return False
+        left = [t for t in armed if t != tray]
+        config.settings["auto_water_trays"] = left
+        config.settings["auto_water"] = bool(left)
+        try:
+            config.save_config()
+        except Exception as e:
+            log.warning(f"auto_water disable not persisted ({e})")
+    return True
+
+
+def _after_fill(tray, outcome, seconds):
+    """What a finished fill means for its tray.
+
+    A full tray clears the tray's alert and starts the check on its probe. A
+    fault raises the alert and takes the tray out of auto-watering, which must
+    not keep trying a fill that cannot complete; other trays stay armed.
+    """
+    if outcome == FULL:
+        fill_failures.pop(tray, None)
+        schedule_postfill(tray, tripped=True)  # judge the probe once water wicks
+    elif outcome in FILL_FAULTS:
+        msg = FILL_FAULTS[outcome].format(tray=tray, s=seconds)
+        if _disarm(tray):
+            msg += f" Auto-watering has been switched off for tray {tray}."
+        fill_failures[tray] = msg
+    save_persistent_state()
 
 
 def run_pump_until_full(tray, reason="fill", force=False):
-    """Run the pump until the float reads full, then stop. A hard time cap is
-    the backstop: if the float never trips within fill_max_seconds the pump
-    stops anyway and the run is flagged, because that means the source is empty,
-    the tube is off, or the float failed. Float reading None (sensor lost) is
-    treated as 'stop' (fail-safe). Blocks; call in a thread. Logs the run."""
+    """Run the pump until the tray's float reads full.
+
+    fill_max_seconds is the backstop: a float that never trips means the
+    source is empty, the tube is off or the float has failed. A float that
+    stops answering ends the fill too. Blocks; call it in a thread.
+    Returns (ok, message), ok only when the tray filled."""
     tray = str(tray)
     with config.settings_lock:
         cap = float(config.settings.get("fill_max_seconds", 60))
         daily_cap = float(config.settings.get("pump_daily_max_seconds", 180))
-        fl = setups_mod.tray_float(config.settings, tray)  # the float in this tray
-
-    def read_fl():
-        return sensors.read_float(fl) if fl is not None else None
-
-    with hardware.pump_lock:
-        why = _start_refusal(tray, force, daily_cap, fl=fl)
-        if why:
-            return False, why
-        st = hardware.pump_state[tray]
-        remaining = daily_cap - st["today_seconds"]
-        run_cap = cap if force else min(cap, remaining)
-        _claim(st, run_cap)
-    save_persistent_state()
-    elapsed = 0.0
-    tripped = False
-    # Running out of today's budget is not a failed fill: the float had less
-    # than a full fill's time to trip, so it says nothing about the plumbing.
-    stop_why = "cap" if run_cap >= cap else "daily_cap"
-    confirm = 0  # consecutive "full" reads needed
-    CONFIRM_NEEDED = 4  # ~0.4s steady, rejects slosh/bobble
-    try:
-        hardware._pumps[tray].on()
-        t0 = time.monotonic()  # a clock step (NTP at boot) must not stretch or cut a run
-        while True:
-            elapsed = time.monotonic() - t0
-            if elapsed >= run_cap:
-                break  # cap hit, float never stayed full
-            if hardware.SHUTTING_DOWN.is_set():
-                stop_why = "shutdown"
-                break
-            if not force and reservoir_state() == "empty":
-                stop_why = "reservoir"  # ran the source dry mid-fill
-                break
-            fv = read_fl()
-            if fv is None or fv < 1:  # full (open) or sensor lost
-                confirm += 1
-                if confirm >= CONFIRM_NEEDED:
-                    tripped = fv is not None and fv < 1
-                    if not tripped:
-                        stop_why = "float_lost"
-                    break  # full held steady -> stop
-            else:
-                confirm = 0  # a not-full read resets the count
-            time.sleep(0.1)  # poll the float ~10x/sec
-    finally:
-        hardware._pumps[tray].off()
-        with hardware.pump_lock:
-            st["running"] = False
-            st["reserved"] = 0.0
-            st["last_run"] = time.time()
-            st["today_seconds"] += elapsed
-            if tripped:
-                detail = f"tray {tray} {reason}: full at {elapsed:.1f}s"
-            elif stop_why == "reservoir":
-                detail = f"tray {tray} {reason}: STOPPED at {elapsed:.1f}s, reservoir ran empty"
-            elif stop_why == "float_lost":
-                detail = (
-                    f"tray {tray} {reason}: STOPPED at {elapsed:.1f}s, "
-                    "float sensor stopped answering"
-                )
-            elif stop_why == "shutdown":
-                detail = f"tray {tray} {reason}: STOPPED at {elapsed:.1f}s, service shutting down"
-            elif stop_why == "daily_cap":
-                detail = (
-                    f"tray {tray} {reason}: STOPPED at {elapsed:.1f}s, daily pump limit reached"
-                )
-            else:
-                detail = f"tray {tray} {reason}: STOPPED at {elapsed:.1f}s cap, no float trip"
-            st["last_detail"] = detail
-    try:
-        db.log_event("pump", detail)
-    except Exception:
-        pass
-    status_mod.publish("pump")
-    if tripped:
-        fill_failures.pop(tray, None)  # a good fill resolves this tray's alert
-        save_persistent_state()
-        schedule_postfill(tray, tripped=True)  # judge the probe once water wicks
-        return True, f"filled in {elapsed:.1f}s"
-    if stop_why == "shutdown":
-        # Not a failed fill: no alert, and auto-watering stays as it was, so
-        # the service comes back up the way it went down.
-        save_persistent_state()
-        return False, f"stopped at {elapsed:.1f}s, service shutting down"
-    if stop_why == "daily_cap":
-        save_persistent_state()
-        return False, f"stopped at {elapsed:.1f}s, daily pump limit reached"
-    msg = {
-        "reservoir": f"Tray {tray} fill stopped at {elapsed:.1f}s: the "
-        "reservoir ran empty. Refill it before watering again.",
-        "float_lost": f"Tray {tray} fill stopped at {elapsed:.1f}s: the float "
-        "switch stopped answering. Check its wiring.",
-    }.get(
-        stop_why,
-        f"Tray {tray} fill ran to the {elapsed:.1f}s cap "
-        "without the float tripping. Likely causes: source "
-        "empty, tube off, or float stuck.",
-    )
-    # a fill that can't complete means auto-watering must not keep trying
-    # this tray; the others keep their own arming
-    with config.settings_lock:
-        if tray in armed_trays(config.settings):
-            left = [t for t in armed_trays(config.settings) if t != tray]
-            config.settings["auto_water_trays"] = left
-            config.settings["auto_water"] = bool(left)
-            msg += f" Auto-watering has been switched off for tray {tray}."
-            try:
-                config.save_config()
-            except Exception as e:
-                log.warning(f"auto_water disable not persisted ({e})")
-    fill_failures[tray] = msg
-    save_persistent_state()
-    return False, {
-        "reservoir": f"stopped at {elapsed:.1f}s, reservoir empty",
-        "float_lost": f"stopped at {elapsed:.1f}s, float sensor lost",
-    }.get(stop_why, f"ran to {elapsed:.1f}s cap without float trip (source empty?)")
+        fl = setups_mod.tray_float(config.settings, tray)
+    why, run_cap = _begin(tray, force, daily_cap, fl=fl, fill_cap=cap)
+    if why:
+        return False, why
+    with _pump_on(tray) as run:
+        outcome = _fill(run, lambda: sensors.read_float(fl), run_cap, run_cap < cap, force)
+    shown, told = (t.format(s=run.seconds) for t in FILL_TEXT[outcome])
+    detail = f"tray {tray} {reason}: {shown}"
+    _record_run(tray, detail, detail)
+    _after_fill(tray, outcome, run.seconds)
+    return outcome == FULL, told
 
 
 PROBE_DEFAULT_CAL = {"wet": 1.25, "dry": 2.95}  # typical HW-390 on 3.3V; used
