@@ -163,7 +163,7 @@ export function renderLightPlan(j) {
               : `More light than needed \u00b7 ${p.full_day.toFixed(1)} mol${when}`;
   }
   const ul = document.getElementById('lpadvice');
-  if (ul) ul.innerHTML = (p.advice || []).map(a => `<li>${a}</li>`).join('');
+  if (ul) ul.innerHTML = (p.advice || []).map(a => `<li>${esc(a)}</li>`).join('');
 }
 // Daily light through today (solid) and yesterday (dashed) against the target:
 // the band the day should end in, and the wedge where the total should be by
