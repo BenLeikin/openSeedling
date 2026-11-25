@@ -325,10 +325,15 @@ config_broken = ""
 
 def atomic_write_text(path, text):
     """Write a file so that it holds either the old contents or the new, never
-    half of either, through a power cut or a full disk mid-write."""
+    half of either, through a power cut or a full disk mid-write.
+
+    The file is readable by its owner only: what goes through here is the
+    settings (with the password hash and the location) and the session key."""
     path = Path(path)
     tmp = path.with_name(path.name + ".tmp")
-    with open(tmp, "w") as f:
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        os.fchmod(fd, 0o600)  # a leftover .tmp keeps the mode it was made with
         f.write(text)
         f.flush()
         os.fsync(f.fileno())

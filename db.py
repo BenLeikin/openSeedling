@@ -68,6 +68,10 @@ def _c():
 @_locked
 def init():
     c = _c()
+    try:
+        DB_PATH.chmod(0o600)  # readings and the planting history are the owner's
+    except OSError:
+        pass
     c.executescript("""
         CREATE TABLE IF NOT EXISTS readings (
             ts     INTEGER NOT NULL,

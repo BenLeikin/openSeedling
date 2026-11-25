@@ -59,7 +59,6 @@ def _load_secret():
     s = secrets.token_hex(32)
     try:
         config.atomic_write_text(SECRET_PATH, s)
-        SECRET_PATH.chmod(0o600)
         log.info(f"new session secret written to {SECRET_PATH}")
     except Exception:
         pass

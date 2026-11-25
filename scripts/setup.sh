@@ -145,6 +145,7 @@ provision() {
   [[ "$MODE" == apply ]] && preflight
   step_packages
   step_env
+  step_private
   step_boot
   step_modules
   step_groups
@@ -340,6 +341,29 @@ step_env() {
   mv "$ENV_FILE.tmp" "$ENV_FILE"
   umask 022
   echo "    saved to $ENV_FILE (mode 600)"
+}
+
+# --------------------------------------------------------------------------
+# The settings hold the password hash and the location, and the database the
+# readings and planting history: for the install user only.
+step_private() {
+  step "Private files (mode 600)"
+  local f perm open=0
+  for f in "$APP_DIR"/config.json "$APP_DIR"/config.json.bak "$APP_DIR"/growlight.db* \
+           "$APP_DIR"/.secret "$APP_DIR"/.anthropic_key "$APP_DIR"/.discord_webhook; do
+    [[ -f "$f" ]] || continue
+    perm="$(stat -c %a "$f")"
+    [[ "$perm" == 600 ]] && continue
+    open=1
+    if [[ "$MODE" == check ]]; then
+      drift "${f##*/} mode $perm, want 600"
+    else
+      chmod 600 "$f"
+      echo "    ${f##*/}: mode $perm -> 600"
+    fi
+  done
+  [[ $open -eq 0 ]] && ok "settings, database and keys are mode 600"
+  return 0
 }
 
 # --------------------------------------------------------------------------

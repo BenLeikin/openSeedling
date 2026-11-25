@@ -39,9 +39,13 @@ def load_config():
 
 
 def save_config(cfg):
-    # atomic write so a crash mid-write can't truncate config.json
+    # atomic write so a crash mid-write can't truncate config.json; readable by
+    # its owner only, since it holds the password hash
     tmp = CONFIG.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(cfg, indent=2))
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        os.fchmod(fd, 0o600)
+        f.write(json.dumps(cfg, indent=2))
     os.replace(tmp, CONFIG)
 
 
