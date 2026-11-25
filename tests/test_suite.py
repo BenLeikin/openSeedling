@@ -631,6 +631,74 @@ def _sec3():
     ok, why, detail, _ = fill(lambda res: None, cap=1)
     check(not ok and "cap" in detail, f"fill stops at the time cap ({detail})")
 
+    # the daily budget: 0.5 s left of it for tray 1, none used by tray 2
+    for st in hardware.pump_state.values():
+        st.update(running=False, today_seconds=0, day=config._today_str(), last_run=0.0)
+    with config.settings_lock:
+        saved = {k: config.settings.get(k) for k in ("pump_daily_max_seconds", "probe_cal")}
+        config.settings.update(
+            fill_max_seconds=3,
+            pump_daily_max_seconds=100,
+            auto_water=True,
+            auto_water_trays=["1", "2"],
+            moisture_threshold_pct=30,
+            probe_cal={"1": {"wet": 1.0, "dry": 2.6}, "2": {"wet": 1.0, "dry": 2.6}},
+        )
+    hardware.pump_state["1"]["today_seconds"] = 99.5
+    floats["1"].is_pressed = True
+    water.fill_failure["msg"] = ""
+    pumped = []
+    real = (
+        water.reservoir_state,
+        water.probe_volts_filtered,
+        sensors.probe_spread,
+        water.auto_water_blockers,
+        sensors.read_float,
+        water.run_pump_until_full,
+    )
+    water.reservoir_state = lambda: "ok"
+    try:
+        ok, why = water.run_pump_until_full("1", "auto")
+        detail = hardware.pump_state["1"]["last_detail"]
+        check(
+            not ok
+            and "daily pump limit" in why
+            and "daily pump limit" in detail
+            and not water.fill_failure["msg"]
+            and water.armed_trays(config.settings) == ["1", "2"],
+            f"a fill cut short by the daily limit is not a failed fill: no alert, "
+            f"and the tray stays armed ({detail})",
+        )
+        r = c.post("/api/pump", json={"tray": "1", "seconds": 2}).get_json()
+        check(
+            r.get("ok") is False and "daily pump limit" in r.get("error", ""),
+            f"a pump run that would be refused says so in the reply ({r.get('error')})",
+        )
+        water.probe_volts_filtered = lambda ch, snap=None: (2.5, time.time())
+        sensors.probe_spread = lambda ch, samples=10, delay=0.2: (2.5, 0.001)
+        water.auto_water_blockers = lambda cfg=None: {}
+        sensors.read_float = lambda ch="1": 1.0
+        water.run_pump_until_full = lambda tray, reason="fill", force=False: (
+            pumped.append(tray),
+            (True, "ok"),
+        )[1]
+        water.auto_water_pass()
+        check(
+            pumped == ["2"],
+            f"a tray at its daily limit does not stop auto-watering the next one ({pumped})",
+        )
+    finally:
+        (
+            water.reservoir_state,
+            water.probe_volts_filtered,
+            sensors.probe_spread,
+            water.auto_water_blockers,
+            sensors.read_float,
+            water.run_pump_until_full,
+        ) = real
+        with config.settings_lock:
+            config.settings.update(saved)
+
     ok, why, detail, _ = fill(lambda res: floats.pop("1", None))
     check(
         not ok and "float sensor stopped answering" in detail,
