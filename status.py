@@ -46,12 +46,16 @@ def public_settings(cfg, authed=True):
 # connected, so the count is capped well below the pool: a browser left open
 # on a dozen tabs must not starve the controller of threads.
 STREAM_MAX = 6  # of waitress's 16 threads
+# How many of those signed-out viewers may hold while a password is set, so
+# the rest stay free for whoever signs in.
+STREAM_VISITORS_MAX = 2
 STREAM_QUEUE = 8  # events buffered per subscriber before it is culled
 # Seconds between heartbeats. Also how quickly a closed tab frees its slot:
 # the failed write is what shows the peer is gone.
 STREAM_HEARTBEAT = 10.0
 
 _subs = set()
+_visitor_subs = set()  # the signed-out viewers' queues among _subs
 _subs_lock = threading.Lock()
 
 # One rendered status per change, shared by every open tab, so six tabs do not

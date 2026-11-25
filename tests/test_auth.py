@@ -6,7 +6,7 @@ import time
 import pytest
 from werkzeug.security import generate_password_hash
 
-from harness import auth, config, routes, set_password
+from harness import auth, c, config, photos_mod, routes, set_password, status_mod, tools
 
 
 class Clock:
@@ -168,3 +168,97 @@ def test_changing_the_password_signs_everyone_out():
         )
     finally:
         set_password(False)
+
+
+def test_signed_out_viewers_leave_live_streams_for_whoever_signs_in():
+    set_password(True)
+    opened = []
+
+    def open_stream(client):
+        r = client.get("/api/stream", buffered=False)
+        if r.status_code == 200:
+            it = iter(r.response)
+            next(it)
+            opened.append(r)
+        return r.status_code
+
+    try:
+        visitors = [open_stream(routes.app.test_client()) for _ in range(4)]
+        assert visitors == [200] * status_mod.STREAM_VISITORS_MAX + [503] * (
+            4 - status_mod.STREAM_VISITORS_MAX
+        )
+        owner = routes.app.test_client()
+        owner.post("/api/login", json={"password": "pw"})
+        left = status_mod.STREAM_MAX - status_mod.STREAM_VISITORS_MAX
+        assert [open_stream(owner) for _ in range(left)] == [200] * left
+        assert open_stream(owner) == 503, "the total is still capped"
+
+        set_password(False)  # no password: nobody is a visitor
+        for r in opened:
+            r.close()
+        opened.clear()
+        with status_mod._subs_lock:
+            assert not status_mod._subs and not status_mod._visitor_subs, (
+                "closed streams are let go"
+            )
+        everyone = routes.app.test_client()
+        assert [open_stream(everyone) for _ in range(status_mod.STREAM_MAX)] == (
+            [200] * status_mod.STREAM_MAX
+        )
+    finally:
+        for r in opened:
+            r.close()
+        set_password(False)
+
+
+def test_full_size_frames_need_a_login():
+    (photos_mod.TIMELAPSE_DIR / "20260101_120000.jpg").write_bytes(b"\xff\xd8\xff\xd9")
+    with config.settings_lock:
+        config.settings.update(timelapse_flatten=False, roi="")
+    assert c.get("/frame/20260101_120000.jpg").status_code == 200, "no password: open"
+    set_password(True)
+    try:
+        anon = routes.app.test_client()
+        assert anon.get("/frame/20260101_120000.jpg").status_code == 401
+        assert anon.get("/photo/latest").status_code == 200, "the photo itself stays public"
+    finally:
+        set_password(False)
+
+
+def test_viewers_of_a_new_photo_share_one_image_job():
+    photo = photos_mod.TIMELAPSE_DIR / "20260101_120000.jpg"
+    photo.write_bytes(b"\xff\xd8\xff\xd9")
+    with config.settings_lock:
+        config.settings["roi"] = "0.1,0.1,0.5,0.5"
+    jobs = []
+    real = tools.imgtool
+
+    def slow(args, *a, **k):
+        jobs.append(args[0])
+        time.sleep(0.2)
+        return tools.Result(0, b"jpeg-bytes", b"", "")
+
+    tools.imgtool = slow
+    replies = []
+    try:
+        threads = [
+            threading.Thread(
+                target=lambda: replies.append(routes.app.test_client().get("/photo/cropped.jpg"))
+            )
+            for _ in range(8)
+        ]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+        assert [r.status_code for r in replies] == [200] * 8
+        assert {r.data for r in replies} == {b"jpeg-bytes"}
+        assert jobs == ["crop"], f"eight viewers, one crop ({len(jobs)} ran)"
+
+        tools.imgtool = lambda *a, **k: tools.Result(1, b"", b"", "out of memory")
+        with config.settings_lock:
+            config.settings["roi"] = "0.2,0.2,0.5,0.5"
+        r = c.get("/photo/cropped.jpg")
+        assert r.status_code == 500 and b"out of memory" in r.data, "a failed job says why"
+    finally:
+        tools.imgtool = real

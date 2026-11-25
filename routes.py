@@ -270,14 +270,20 @@ def api_stream():
 
     The browser reconnects on its own if this drops, and the dashboard keeps a
     slow poll running, so a stream that dies quietly does not freeze the page.
-    Returns 503 when STREAM_MAX streams are already open.
+    Returns 503 when STREAM_MAX streams are already open, or when a signed-out
+    viewer asks and STREAM_VISITORS_MAX of them are.
     """
     authed = auth.is_authed()  # read while the request context still exists
     with status_mod._subs_lock:
-        if len(status_mod._subs) >= status_mod.STREAM_MAX:
+        visitors = len(status_mod._subs & status_mod._visitor_subs)
+        if len(status_mod._subs) >= status_mod.STREAM_MAX or (
+            not authed and visitors >= status_mod.STREAM_VISITORS_MAX
+        ):
             return jsonify(error="too many live connections"), 503
         q = queue.Queue(maxsize=status_mod.STREAM_QUEUE)
         status_mod._subs.add(q)
+        if not authed:
+            status_mod._visitor_subs.add(q)
 
     def gen():
         try:
@@ -308,6 +314,7 @@ def api_stream():
         finally:
             with status_mod._subs_lock:
                 status_mod._subs.discard(q)
+                status_mod._visitor_subs.discard(q)
 
     # No "Connection" header: it is hop-by-hop, PEP 3333 forbids a WSGI
     # application from setting it, and waitress refuses the response.

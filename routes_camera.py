@@ -60,10 +60,12 @@ def thumb(name):
 
 
 @bp.route("/frame/<name>")
-@auth.public
 def frame(name):
     """One stored photo at full resolution, framed like its thumbnail: the
-    timelapse player shows this once it stops on a frame."""
+    timelapse player shows this once it stops on a frame.
+
+    Each frame is a full-size warp, so it needs a login; a signed-out viewer
+    keeps the thumbnail."""
     if Path(name).name != name or not name.endswith(".jpg") or name.startswith((".", "_")):
         return ("no such photo", 404)
     path = photos_mod.TIMELAPSE_DIR / name
@@ -583,23 +585,13 @@ def cropped_image():
     if not roi:
         return ("no crop set", 404)  # the page falls back to the full frame
     key = (str(latest), latest.stat().st_mtime, roi)
-    with photos_mod._rect_lock:
-        if photos_mod._crop_cache["key"] == key:
-            return Response(
-                photos_mod._crop_cache["bytes"],
-                mimetype="image/jpeg",
-                headers={"Cache-Control": "no-store"},
-            )
     try:
-        r = tools.imgtool(["crop", latest, "-", json.dumps(list(roi)), "--q", 88])
-        if r.returncode != 0 or not r.stdout:
-            return (r.error or "crop failed: no image returned", 500)
-        data = r.stdout
-        with photos_mod._rect_lock:
-            photos_mod._crop_cache.update(key=key, bytes=data)
-        return Response(data, mimetype="image/jpeg", headers={"Cache-Control": "no-store"})
+        data = photos_mod.latest_view(
+            photos_mod._crop_cache, key, ["crop", latest, "-", json.dumps(list(roi)), "--q", 88]
+        )
     except Exception as e:
         return (f"crop failed: {e}", 500)
+    return Response(data, mimetype="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
 @bp.route("/rectified.jpg")
@@ -625,16 +617,11 @@ def rectified_image():
         latest.stat().st_mtime,
         json.dumps([corners, grid.get("rows"), grid.get("cols")]),
     )
-    with photos_mod._rect_lock:
-        if photos_mod._rect_cache["key"] == key:
-            return Response(
-                photos_mod._rect_cache["bytes"],
-                mimetype="image/jpeg",
-                headers={"Cache-Control": "no-store"},
-            )
     try:
         # photos are stored already rotated
-        r = tools.imgtool(
+        data = photos_mod.latest_view(
+            photos_mod._rect_cache,
+            key,
             [
                 "rectify",
                 latest,
@@ -644,13 +631,8 @@ def rectified_image():
                 int(grid.get("rows", 4)),
                 "--q",
                 85,
-            ]
+            ],
         )
-        if r.returncode != 0 or not r.stdout:
-            return (r.error or "rectify failed: no image returned", 500)
-        data = r.stdout
-        with photos_mod._rect_lock:
-            photos_mod._rect_cache.update(key=key, bytes=data)
-        return Response(data, mimetype="image/jpeg", headers={"Cache-Control": "no-store"})
     except Exception as e:
         return (f"rectify failed: {e}", 500)
+    return Response(data, mimetype="image/jpeg", headers={"Cache-Control": "no-store"})

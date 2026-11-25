@@ -180,7 +180,6 @@ def test_routes_are_guarded_unless_marked_public():
         "/api/status",
         "/api/stream",
         "/favicon.ico",
-        "/frame/<name>",
         "/photo/cropped.jpg",
         "/photo/latest",
         "/preview.jpg",

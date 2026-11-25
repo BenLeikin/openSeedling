@@ -320,3 +320,26 @@ _rect_cache = {"key": None, "bytes": None}
 _rect_lock = threading.Lock()
 
 _crop_cache = {"key": None, "bytes": None}
+
+_view_job = threading.Lock()  # one crop or warp of the latest photo at a time
+
+
+def latest_view(cache, key, args):
+    """JPEG bytes for one view of the latest photo, made once per key.
+
+    `args` is the imgtool job that makes it. Requests that arrive while the
+    job runs wait for it and take its result, so a page of viewers costs one
+    job per new photo. Raises ValueError if the job fails."""
+    with _rect_lock:
+        if cache["key"] == key:
+            return cache["bytes"]
+    with _view_job:
+        with _rect_lock:
+            if cache["key"] == key:  # made while this call waited
+                return cache["bytes"]
+        r = tools.imgtool(args)
+        if not r.ok or not r.stdout:
+            raise ValueError(r.error or "no image returned")
+        with _rect_lock:
+            cache.update(key=key, bytes=r.stdout)
+        return r.stdout

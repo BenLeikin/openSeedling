@@ -410,7 +410,7 @@ export function showFrame() {
 export var sharpTimer = null;
 export function loadSharpFrame() {
   clearTimeout(sharpTimer);
-  if (ptimer || !frames.length) return;
+  if (ptimer || !frames.length || !canEdit) return; // /frame/ needs a login
   const name = frames[fidx];
   sharpTimer = setTimeout(() => {
     if (ptimer || frames[fidx] !== name) return;
@@ -589,7 +589,7 @@ export function enlargeFrame() {
   openLightbox(
     v.src,
     document.getElementById('pframe').textContent,
-    '/frame/' + encodeURIComponent(frames[fidx])
+    canEdit ? '/frame/' + encodeURIComponent(frames[fidx]) : null
   );
 }
 
