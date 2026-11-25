@@ -383,9 +383,10 @@ and sensor smoothing), **Camera**, **Setups**, **Trays**, **Alerts**, and
   checked by what happens on screen, not by how the code is written. Without
   Playwright it skips and exits 0.
 - `ruff check .` lints the Python with the rules in `ruff.toml`; `ruff format`
-  formats it. Prettier formats the JavaScript and CSS (`.prettierrc.json`).
+  formats it. `mypy` type-checks the modules listed in `pyproject.toml`: the
+  ones with no hardware or web framework in them, which are fully annotated. Prettier formats the JavaScript and CSS (`.prettierrc.json`).
   `pip install -r requirements-dev.txt` and `npm install` bring the tools;
-  `pre-commit install` runs all four on every commit
+  `pre-commit install` runs them on every commit
   (`.pre-commit-config.yaml`), and `.gitlab-ci.yml` runs them with the test
   suite on every push.
 - The version is in `pyproject.toml` and heads `CHANGELOG.md`; the installer

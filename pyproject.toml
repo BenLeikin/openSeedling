@@ -12,3 +12,12 @@ license = { file = "LICENSE" }
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+
+[tool.mypy]
+# The modules with no hardware or web framework in them are fully annotated
+# and checked strictly. The rest of the app is not annotated yet, so what
+# these import from it is taken on trust.
+python_version = "3.11"
+files = ["alerts.py", "events.py", "quality.py", "units.py"]
+strict = true
+follow_imports = "silent"

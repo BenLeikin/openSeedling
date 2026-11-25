@@ -12,13 +12,15 @@ worse than one that flags it, because it hides the fault that needs fixing.
 """
 
 import statistics
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 # ---------------------------------------------------------------- bounds ----
 # Physically possible ranges. A value outside these is a wiring or driver
 # fault, not a measurement: a probe reading the ADC supply rail means the
 # signal is gone, not that the soil is dry. Keyed by sensor prefix, checked
 # longest-prefix first so "temp:soil" can differ from "temp:air".
-BOUNDS = {
+BOUNDS: dict[str, tuple[float, float]] = {
     "probe:": (0.05, 3.25),  # volts on a 3.3V rail; rail or 0 = fault
     "temp:soil": (-5.0, 70.0),  # Celsius
     "temp:air": (-20.0, 60.0),
@@ -31,7 +33,7 @@ BOUNDS = {
 }
 
 
-def bounds_for(sensor):
+def bounds_for(sensor: str) -> tuple[float, float] | None:
     match = None
     for prefix, rng in BOUNDS.items():
         if sensor.startswith(prefix):
@@ -40,7 +42,7 @@ def bounds_for(sensor):
     return match[1] if match else None
 
 
-def check_bounds(sensor, value):
+def check_bounds(sensor: str, value: Any) -> str | None:
     """None if plausible, else a short reason string."""
     rng = bounds_for(sensor)
     if rng is None:
@@ -60,7 +62,9 @@ def check_bounds(sensor, value):
 
 
 # ------------------------------------------------------ spike vs step ----
-def spike_or_step(values, jump=0.08, confirm=3, window=9):
+def spike_or_step(
+    values: Sequence[float], jump: float = 0.08, confirm: int = 3, window: int = 9
+) -> tuple[float | None, str]:
     """Discriminate a transient from a genuine level change.
 
     `values` newest-first. Returns (accepted_value, verdict) where verdict is
@@ -121,7 +125,7 @@ def spike_or_step(values, jump=0.08, confirm=3, window=9):
 
 
 # ---------------------------------------------------------- stuck value ----
-def stuck_run(values, epsilon=1e-4):
+def stuck_run(values: Sequence[float], epsilon: float = 1e-4) -> int:
     """How many of the newest readings are identical (within epsilon).
 
     A sensor reporting the same number forever is broken in a way the
@@ -140,7 +144,9 @@ def stuck_run(values, epsilon=1e-4):
     return n
 
 
-def check_stuck(values, cadence_s, min_run=12, min_hours=2.0):
+def check_stuck(
+    values: Sequence[float], cadence_s: float, min_run: int = 12, min_hours: float = 2.0
+) -> str | None:
     """None, or a reason string when a sensor has flatlined.
 
     Requires BOTH a run of identical values and enough elapsed time, so a
@@ -157,7 +163,9 @@ def check_stuck(values, cadence_s, min_run=12, min_hours=2.0):
 
 
 # --------------------------------------------------- cross-sensor checks ----
-def contradictions(snap, cfg=None, pumped_recently=False):
+def contradictions(
+    snap: Mapping[str, Any], cfg: Mapping[str, Any] | None = None, pumped_recently: bool = False
+) -> list[tuple[str, str]]:
     """Advisory cross-sensor sanity checks -> list of (subject, message).
 
     These catch faults no single-sensor test can, but they can also accuse the
@@ -222,7 +230,9 @@ def contradictions(snap, cfg=None, pumped_recently=False):
 
 
 # ------------------------------------------------ post-fill recovery ----
-def postfill_verdict(volts, cal, tolerance=0.15):
+def postfill_verdict(
+    volts: float | None, cal: Mapping[str, Any], tolerance: float = 0.15
+) -> tuple[bool | None, str]:
     """After a fill the probe should return near its wet anchor.
 
     Drift here is the early warning for a probe degrading or a calibration
@@ -249,7 +259,15 @@ def postfill_verdict(volts, cal, tolerance=0.15):
 
 
 # --------------------------------------------------------- health score ----
-def health(values, *, age_s=None, cadence_s=300, rejects=0, verdict="steady", noise_ref=None):
+def health(
+    values: Sequence[float],
+    *,
+    age_s: float | None = None,
+    cadence_s: float = 300,
+    rejects: int = 0,
+    verdict: str = "steady",
+    noise_ref: float | None = None,
+) -> tuple[int, str, list[str]]:
     """Per-sensor health -> (score 0-100, grade, reasons).
 
     Deliberately simple and explainable: each fault subtracts a fixed amount

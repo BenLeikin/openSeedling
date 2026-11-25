@@ -6,20 +6,22 @@ Nothing here imports the rest of the app, so the lower layers (hardware,
 light, watering) can announce a change without importing the web side.
 """
 
-_listeners = []
+from collections.abc import Callable
+
+_listeners: list[Callable[[str], object]] = []
 
 
-def subscribe(fn):
+def subscribe(fn: Callable[[str], object]) -> None:
     """Have fn(reason) called on every publish."""
     _listeners.append(fn)
 
 
-def unsubscribe(fn):
+def unsubscribe(fn: Callable[[str], object]) -> None:
     if fn in _listeners:
         _listeners.remove(fn)
 
 
-def publish(reason="update"):
+def publish(reason: str = "update") -> None:
     """Tell every subscriber that the status changed, and why."""
     for fn in list(_listeners):
         fn(reason)

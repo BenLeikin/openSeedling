@@ -13,14 +13,19 @@ across a restart, so a restart does not announce every standing problem again.
 """
 
 import time
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
+from typing import Any
 
 WARNING, ERROR, GOOD = "warning", "error", "good"  # the levels a notice can have
 
 # rule key -> {"active": bool, "since": ts, "last_sent": ts}
-_state = {}
+_state: dict[str, Any] = {}
 
-DEFAULTS = {
+# what check_all returns for each notice: (action, key, title, message, level)
+Notice = tuple[str, str, str, str, str]
+
+DEFAULTS: dict[str, Any] = {
     "sustain_seconds": 600,  # how long a condition must hold before firing
     "cooldown_seconds": 86400,  # a day between reminders while still active
     "soil_temp_high_f": 0,  # 0 disables
@@ -32,13 +37,20 @@ DEFAULTS = {
 }
 
 
-def _rule(key):
-    return _state.setdefault(
-        key, {"active": False, "since": 0.0, "last_sent": 0.0, "clear_since": 0.0}
-    )
+def _rule(key: str) -> dict[str, Any]:
+    blank = {"active": False, "since": 0.0, "last_sent": 0.0, "clear_since": 0.0}
+    rule: dict[str, Any] = _state.setdefault(key, blank)
+    return rule
 
 
-def evaluate(key, condition, now=None, release=None, hold=None, clear_hold=0.0):
+def evaluate(
+    key: str,
+    condition: bool,
+    now: float | None = None,
+    release: bool | None = None,
+    hold: float | None = None,
+    clear_hold: float = 0.0,
+) -> str | None:
     """Feed a rule its current truth value; get back what to do about it.
 
     Returns "fire" the first time a condition has held for long enough,
@@ -90,7 +102,7 @@ def evaluate(key, condition, now=None, release=None, hold=None, clear_hold=0.0):
     return None
 
 
-def snapshot():
+def snapshot() -> dict[str, dict[str, Any]]:
     """The rule states worth keeping across a restart: rules that are active,
     and rules part way through their sustain period."""
     return {
@@ -100,7 +112,7 @@ def snapshot():
     }
 
 
-def restore(saved):
+def restore(saved: object) -> None:
     """Take up rule states from an earlier snapshot(). Anything malformed is
     skipped: that rule starts fresh, which at worst repeats one notice."""
     if not isinstance(saved, dict):
@@ -119,11 +131,11 @@ def restore(saved):
             continue
 
 
-def configure(cfg):
+def configure(cfg: Mapping[str, Any] | None) -> None:
     _state["_cfg"] = {**DEFAULTS, **(cfg or {})}
 
 
-def reset():
+def reset() -> None:
     _state.clear()
 
 
@@ -154,7 +166,9 @@ TEMP_MARGIN_F = 2.0  # clear a temperature rule this far past its threshold
 PCT_MARGIN = 3  # and a percentage rule this many points past
 
 
-def check_all(snapshot, cfg, unit_temp="F"):
+def check_all(
+    snapshot: Mapping[str, Any], cfg: Mapping[str, Any], unit_temp: str = "F"
+) -> list[Notice]:
     """Run every rule against a reading snapshot.
 
     `snapshot` is {sensor_key: value} in storage units (Celsius, hPa, volts as
@@ -163,7 +177,7 @@ def check_all(snapshot, cfg, unit_temp="F"):
     """
     configure(cfg)
     now = time.time()
-    out = []
+    out: list[Notice] = []
     for rule in _rules(snapshot, cfg, unit_temp):
         act = evaluate(
             rule.key, rule.wrong, now, rule.release, rule.hold, clear_hold=rule.clear_hold
@@ -175,7 +189,7 @@ def check_all(snapshot, cfg, unit_temp="F"):
     return out
 
 
-def _rules(snapshot, cfg, unit_temp):
+def _rules(snapshot: Mapping[str, Any], cfg: Mapping[str, Any], unit_temp: str) -> Iterator[Rule]:
     """Every rule that applies to this snapshot, in the order they are sent."""
     sustain = cfg.get("sustain_seconds", DEFAULTS["sustain_seconds"])
     yield from _soil_temperature(snapshot, cfg, unit_temp, sustain)
@@ -222,10 +236,12 @@ def _rules(snapshot, cfg, unit_temp):
     )
 
 
-def _soil_temperature(snapshot, cfg, unit_temp, sustain):
+def _soil_temperature(
+    snapshot: Mapping[str, Any], cfg: Mapping[str, Any], unit_temp: str, sustain: float
+) -> Iterator[Rule]:
     """Too warm and too cold, for each soil probe."""
 
-    def shown(c):
+    def shown(c: float) -> float:
         return c if unit_temp == "C" else c * 9 / 5 + 32
 
     tu = "\u00b0C" if unit_temp == "C" else "\u00b0F"
@@ -263,7 +279,9 @@ def _soil_temperature(snapshot, cfg, unit_temp, sustain):
             )
 
 
-def _moisture(snapshot, cfg, sustain):
+def _moisture(
+    snapshot: Mapping[str, Any], cfg: Mapping[str, Any], sustain: float
+) -> Iterator[Rule]:
     """A tray drying out. `_moisture` is {tray name: percent}, calibrated."""
     dry_at = cfg.get("probe_dry_pct", DEFAULTS["probe_dry_pct"])
     for tray, pct in (snapshot.get("_moisture") or {}).items():
@@ -281,7 +299,9 @@ def _moisture(snapshot, cfg, sustain):
         )
 
 
-def _humidity(snapshot, cfg, sustain):
+def _humidity(
+    snapshot: Mapping[str, Any], cfg: Mapping[str, Any], sustain: float
+) -> Iterator[Rule]:
     rh_hi = cfg.get("humidity_high", DEFAULTS["humidity_high"])
     rh = snapshot.get("humidity")
     if rh is None or not rh_hi:
@@ -299,7 +319,7 @@ def _humidity(snapshot, cfg, sustain):
     )
 
 
-def _daily_light(snapshot, cfg):
+def _daily_light(snapshot: Mapping[str, Any], cfg: Mapping[str, Any]) -> Iterator[Rule]:
     """The day's light total, judged once, just after lights-off.
 
     The caller supplies `_dli` (one setup) or `_dli_setups` (several, each on
@@ -366,7 +386,7 @@ def _daily_light(snapshot, cfg):
         )
 
 
-def _reservoir(snapshot, sustain):
+def _reservoir(snapshot: Mapping[str, Any], sustain: float) -> Iterator[Rule]:
     """Empty stops watering; a fault means a sensor is lying."""
     res = snapshot.get("_reservoir")
     if not res:
@@ -396,7 +416,7 @@ def _reservoir(snapshot, sustain):
     )
 
 
-def _faults(snapshot):
+def _faults(snapshot: Mapping[str, Any]) -> Iterator[Rule]:
     """Faults the caller has already worked out: the snapshot holds a
     description while one stands, and nothing when it does not."""
     slow = snapshot.get("_camera_slow_link")
@@ -446,7 +466,12 @@ def _faults(snapshot):
     )
 
 
-def _per_subject(prefix, wrong_now, fire_text, clear_text):
+def _per_subject(
+    prefix: str,
+    wrong_now: Mapping[str, Any],
+    fire_text: Callable[[str, Any], tuple[str, str, str]],
+    clear_text: Callable[[str], tuple[str, str]],
+) -> Iterator[Rule]:
     """One rule per subject (a sensor, a tray), named `prefix:subject`.
 
     `wrong_now` is {subject: why}. A subject that had a rule and is no longer

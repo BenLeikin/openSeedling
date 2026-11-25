@@ -13,11 +13,12 @@ python:
     paths:
       - .cache/pip
   before_script:
-    - pip install -q $(grep -E "^(Flask|waitress|astral)==" requirements.txt) $(grep -E "^(ruff|pytest)" requirements-dev.txt)
+    - pip install -q $(grep -E "^(Flask|waitress|astral)==" requirements.txt) $(grep -E "^(ruff|pytest|mypy)" requirements-dev.txt)
     - pip install -q -r requirements-optional.txt  # OpenCV, so the image checks run
   script:
     - ruff check .
     - ruff format --check .
+    - mypy
     - python -m pytest
 
 javascript:
