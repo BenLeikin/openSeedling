@@ -48,7 +48,12 @@ def photo_list():
         v = db.kv_get("thumbs_version") or 0
     except Exception:
         v = 0
-    return jsonify(names=[p.name for p in sorted(photos_mod.THUMB_DIR.glob("*.jpg"))], v=v)
+    names, stamp = photos_mod.thumb_names()
+    resp = jsonify(names=names, v=v)
+    # the list runs to hundreds of kB: a browser that has it is told so (304)
+    resp.set_etag(f"{stamp:x}-{v}")
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp.make_conditional(request)
 
 
 @bp.route("/thumb/<name>")

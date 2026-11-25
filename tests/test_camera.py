@@ -1131,3 +1131,35 @@ def test_capture_scratch():
         for f in (fresh, photo, out, *stale):
             f.unlink(missing_ok=True)
         (photos_mod.THUMB_DIR / out.name).unlink(missing_ok=True)
+
+
+def test_the_photo_list_is_read_again_only_when_the_folder_changes():
+    thumbs = photos_mod.THUMB_DIR
+    for name in ("20260101_120000.jpg", "20260101_120500.jpg"):
+        (thumbs / name).write_bytes(b"x")
+    first = c.get("/api/photos")
+    assert first.get_json()["names"] == ["20260101_120000.jpg", "20260101_120500.jpg"]
+
+    listings = []
+    real_glob = type(thumbs).glob
+
+    def counting(self, pattern):
+        listings.append(pattern)
+        return real_glob(self, pattern)
+
+    type(thumbs).glob = counting
+    try:
+        again = c.get("/api/photos")
+        assert again.get_json() == first.get_json() and listings == [], (
+            "unchanged: not listed again"
+        )
+        same = c.get("/api/photos", headers={"If-None-Match": first.headers["ETag"]})
+        assert same.status_code == 304 and not same.data, "a browser that has the list gets 304"
+
+        (thumbs / "20260101_121000.jpg").write_bytes(b"x")
+        new = c.get("/api/photos", headers={"If-None-Match": first.headers["ETag"]})
+        assert new.status_code == 200 and len(new.get_json()["names"]) == 3 and listings
+        (thumbs / "20260101_120000.jpg").unlink()
+        assert "20260101_120000.jpg" not in c.get("/api/photos").get_json()["names"]
+    finally:
+        type(thumbs).glob = real_glob

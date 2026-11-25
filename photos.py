@@ -43,6 +43,23 @@ def crop_filter(roi):
     return f"crop=trunc(iw*{w:.4f}/2)*2:trunc(ih*{h:.4f}/2)*2:trunc(iw*{x:.4f}):trunc(ih*{y:.4f})"
 
 
+_names = {"stamp": None, "names": []}
+
+
+def thumb_names():
+    """(file names of the thumbnails in order, a stamp that changes with them).
+
+    The folder is listed again only when it has changed: its modification
+    time moves whenever an entry is added, removed or renamed. A long run has
+    thousands of thumbnails, and the dashboard asks for the list on every
+    page load."""
+    stamp = THUMB_DIR.stat().st_mtime_ns  # read first: a change during the listing shows next time
+    if _names["stamp"] != stamp:
+        names = sorted(p.name for p in THUMB_DIR.glob("*.jpg"))
+        _names.update(stamp=stamp, names=names)
+    return _names["names"], stamp
+
+
 _thumb_lock = threading.Lock()
 
 
