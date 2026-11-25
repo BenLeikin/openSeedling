@@ -1,12 +1,11 @@
 // openSeedling dashboard: Live updates: the event stream, polling fallback, and the light curve.
-// ---- live updates ----
-// EventSource pushes a status the moment something changes. The poll stays,
-// slowed right down: a stream that dies quietly would otherwise freeze the
-// page, and this way the worst case is a 15-second refresh.
 import { render } from './light.js';
 import { lightBackend, pollFloat } from './charts.js';
 import { applyStatus, refresh } from './grid.js';
 
+// EventSource pushes a status the moment something changes. The poll stays,
+// slowed to once a minute while the stream is up, in case the stream dies
+// without an error.
 export const POLL_FAST = 15000,
   POLL_SLOW = 60000;
 export let pollTimer = null,
@@ -46,7 +45,7 @@ export function initStream() {
   };
 }
 // The server fixes a stream's signed-in state when it opens, so a login or
-// logout has to reopen it, or the next push would show the old view.
+// logout reopens it.
 export function restartStream() {
   if (es) {
     es.close();
@@ -78,10 +77,11 @@ export function drawLightCurve(curve, sweeping, nowPct) {
   const svg = document.getElementById('lcurve');
   const wrap = document.getElementById('lcurvewrap');
   if (!svg || !wrap) return;
+  // the plug cannot dim: nothing to sweep
   if (lightBackend === 'kasa') {
     wrap.style.display = 'none';
     return;
-  } // nothing to sweep
+  }
   wrap.style.display = '';
   const pts = (curve && curve.points) || [];
   if (!pts.length) {
@@ -103,9 +103,8 @@ export function drawLightCurve(curve, sweeping, nowPct) {
     const y = P + ((H - B - P) * i) / 2;
     h += `<line x1="${L}" y1="${y}" x2="${W - P}" y2="${y}" stroke="#e6f0de" stroke-width="1"/>`;
   }
-  // the ideal straight line. Raw: origin to peak, showing how far the fixture
-  // is from linear. Calibrated: 1% (the dimmest lit level) to full, which the
-  // calibrated curve should sit right on top of.
+  // the ideal straight line, origin to peak. A raw curve shows how far the
+  // fixture is from linear; a calibrated one should lie on the line.
   if (curve.calibrated) {
     h += `<line x1="${sx(0)}" y1="${sy(0)}" x2="${sx(100)}" y2="${sy(maxL)}"
           stroke="#c9c9c9" stroke-width="1" stroke-dasharray="4 3"/>`;
@@ -177,10 +176,8 @@ export async function startSweep() {
   }
   if (info) info.textContent = 'starting\u2026';
   try {
-    // One button does the whole job: a fine raw sweep, then the calibration
-    // built from it and switched on. A plain measure only ever showed the
-    // fixture's physical curve, which never changes shape, while the button
-    // that straightened it lived somewhere else in Settings.
+    // one request does the whole job: a fine raw sweep, then the calibration
+    // built from it and switched on
     const r = await fetch('/api/light_sweep', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

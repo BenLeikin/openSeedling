@@ -1,8 +1,4 @@
 // openSeedling dashboard: The smart plug, backup, theme, thunderstorm, light calibration and the second light.
-// ---- smart plug setup ----
-// Scan, pick, test. The password field is never populated from the server (it
-// is redacted like the dashboard hash), so a blank one means "leave it alone"
-// rather than "clear it".
 import { ctlTarget } from './setups.js';
 import { canEdit, formDirty, pendingSave } from './photos.js';
 import {
@@ -22,6 +18,9 @@ import {
 import { esc, loadPlantings } from './trays.js';
 import { refresh } from './grid.js';
 
+// ---- smart plug setup ----
+// Scan, pick, test. The password field is never filled from the server (it is
+// redacted like the dashboard hash), so a blank one means "leave it unchanged".
 export async function plugScan() {
   const info = document.getElementById('pluginfo');
   const list = document.getElementById('pluglist');
@@ -173,21 +172,21 @@ export function initPlantings() {
         return;
       }
       const wrapEl = document.getElementById('trayswrap');
-      if (wrapEl) wrapEl.dataset.sig = ''; // the restored cell must reappear now
+      if (wrapEl) wrapEl.dataset.sig = ''; // forces a redraw, so the restored cell reappears
       refresh();
       loadPlantings();
     });
   loadPlantings();
 }
 
-// Empty a cell in place. Used for the instant feedback after Transplanted or
-// Died: the authoritative redraw follows from the next status, but the click
-// should not look ignored while that round trip happens.
+// Empty a cell in place, as immediate feedback after Transplanted or Died. The
+// next status redraws it from the server's data.
 export function clearCellUI(cell) {
   cell.querySelectorAll('input,textarea').forEach(el => {
     el.value = '';
-    el.setAttribute('value', ''); // keep the attribute in step with the
-  }); // property, so the markup stays honest
+    // the attribute follows the property
+    el.setAttribute('value', '');
+  });
   cell.dataset.sprouted = '';
   cell.dataset.archived = '';
   cell.dataset.seed = '';
@@ -201,10 +200,8 @@ export function clearCellUI(cell) {
 // Theme: "auto" leaves it to the device's own preference, which the stylesheet
 // handles through a media query; light and dark force it with an attribute.
 // The browser chrome colour is kept in step so the phone address bar matches.
-// The header button names the mode it will switch you to, which is how a
-// two-state toggle stays unambiguous: "Dark Mode" means pressing it gives you
-// dark. "auto" resolves to whatever the device is currently doing, so the
-// first press always lands on the opposite of what you can see.
+// The header button names the mode it switches to. "auto" resolves to what the
+// device currently shows, so the first press lands on the opposite of that.
 export let themeMode = 'auto';
 export function isDarkNow(mode) {
   return (
@@ -221,7 +218,7 @@ export function labelTheme() {
 export async function toggleTheme() {
   const next = isDarkNow(themeMode) ? 'light' : 'dark';
   themeMode = next;
-  applyTheme(next); // instant: never wait on the round trip
+  applyTheme(next); // applied before the round trip
   try {
     const r = await fetch('/api/settings', {
       method: 'POST',
@@ -237,7 +234,7 @@ export async function toggleTheme() {
 // A button in the Light settings, shown only on the wiring that can do it:
 // an AC fixture on a 0-10V dim line. The 5V panel has too little range and
 // the smart plug cannot dim at all, so on those the server refuses and the
-// button stays hidden rather than offering something that will not work.
+// button stays hidden.
 export let stormBusy = false;
 export async function summonStorm() {
   if (stormBusy) return;
@@ -291,9 +288,8 @@ export function renderStorm(j) {
 }
 // ---- light calibration ----
 // A fine raw sweep (every percent) and an inverse lookup, so the dashboard's
-// percent means a fraction of the fixture's real output. The sweep's own
-// progress is shown by the existing sweep card; this just starts it and
-// reports what the calibration found.
+// percent means a fraction of the fixture's real output. The sweep card shows
+// the sweep's progress; this starts it and reports what the calibration found.
 export async function startCalibration() {
   const info = document.getElementById('lininfo');
   const btn = document.getElementById('linbtn');

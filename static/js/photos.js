@@ -1,8 +1,4 @@
 // openSeedling dashboard: The view crop and alignment guides, the Settings form's fill and save (driven by config.FORM), the timelapse player, the enlarged view, and sign-in.
-// ---- view crop: drag a rectangle on the full photo ----
-// The crop is a view setting: stored photos stay full, and the snapshot,
-// scrubber, video and AI report are cut to it. Only used when photos are
-// not flattened (a flattened photo is already just the tray).
 import { sensorData, sensorMeta, set_units, tDisp, tFromF, tToF, tUnit } from './charts.js';
 import { esc } from './trays.js';
 import { S } from './light.js';
@@ -12,6 +8,10 @@ import { restartStream } from './live.js';
 import { set_buddyOn, set_buddyPick } from './buddy.js';
 import { showScheduleMode, syncCaptureLight, syncUsbAuto } from './cards.js';
 
+// ---------------- view crop: drag a rectangle on the full photo ----------------
+// The crop is a view setting: stored photos stay full, and the snapshot,
+// scrubber, video and AI report are cut to it. Only used when photos are
+// not flattened (a flattened photo is already just the tray).
 export function parseRoi(s) {
   const m = String(s || '')
     .trim()
@@ -208,16 +208,13 @@ export function stopAlign() {
   refresh(); // restore the normal snapshot and grid overlay
 }
 
-// Values the user just saved, held until a status arrives that reflects them.
-// Without this, any poll landing between the POST and the server's next status
-// repaints the form with the OLD value, so a changed dropdown visibly snaps
-// back before snapping forward again.
+// Values the user just saved, held until a status arrives that reflects them:
+// a poll landing between the POST and the server's next status still carries
+// the old value.
 export let pendingSave = {};
 // Fields changed on the page but not saved yet. A status arrives every few
-// seconds (the live readings), and each one repaints the form; guarding only
-// the focused field meant a choice reverted as soon as focus moved on, which
-// on a phone is right after picking from a dropdown. A changed field now keeps
-// the user's value until Save sends it (or the page is reloaded).
+// seconds and repaints the form; a changed field keeps the user's value,
+// focused or not, until Save sends it or the page is reloaded.
 export const formDirty = new Set();
 export function markDirty(ev) {
   const el = ev.target;
@@ -452,9 +449,6 @@ export function togglePlay() {
 }
 export var thumbsV = 0; // bumped by the server when thumbnails are rebuilt
 export var playerFps = 4; // player_fps: frames a second in the dashboard player
-// Opened from the touchscreen's summary (/?kiosk=1): a button back, and back on
-// its own after three minutes untouched, so the screen never stays scrolled
-// halfway down the dashboard.
 
 export async function loadFrames() {
   if (window._camOn === false) return;
@@ -463,10 +457,11 @@ export async function loadFrames() {
     const j = await r.json();
     const had = frames.length;
     frames = j.names || [];
+    // thumbnails rebuilt: refetch the shown frame
     if (j.v != null && j.v !== thumbsV) {
       thumbsV = j.v;
       if (had) showFrame();
-    } // rebuilt: refetch
+    }
     const card = document.getElementById('videocard');
     if (frames.length < 2) {
       card.style.display = 'none';
@@ -677,7 +672,8 @@ export function start() {
       svg.addEventListener('pointerup', () => {
         if (!cropping) return;
         cropDrag = null;
-        if (cropSel && (cropSel[2] < 0.05 || cropSel[3] < 0.05)) cropSel = null; // a click, not a box
+        // a click, not a box
+        if (cropSel && (cropSel[2] < 0.05 || cropSel[3] < 0.05)) cropSel = null;
         drawCrop();
       });
     }

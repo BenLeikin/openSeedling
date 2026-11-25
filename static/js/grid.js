@@ -1,5 +1,4 @@
 // openSeedling dashboard: The cell grid overlay, the Settings form's submit handler, and the AI garden report.
-// ---------------- cell grid overlay ----------------
 import { S, capturePhoto, render, renderPhoto, set_S } from './light.js';
 import { applySetup, set_setupDirty, setupDirty, setupDraft, trayDraft } from './setups.js';
 import {
@@ -41,6 +40,7 @@ import {
   renderSweep
 } from './cards.js';
 
+// ---------------- cell grid overlay ----------------
 export let grid = null,
   gdrag = -1,
   gridDirty = false;
@@ -61,18 +61,18 @@ export function gridEditable() {
 export function drawGrid() {
   const svg = document.getElementById('gridsvg');
   if (!grid || !svg) return;
+  // the crop box owns the photo
   if (cropping) {
     svg.style.display = 'none';
     return;
-  } // the crop box owns the photo
+  }
   svg.style.display = grid.show ? '' : 'none';
   if (!grid.show) {
     svg.innerHTML = '';
     return;
   }
-  // On the flattened view the image IS the tray rectangle, so the cells are
-  // even splits of the frame; the saved corners describe the raw frame and
-  // would land in the wrong places here.
+  // On the flattened view the image is the tray rectangle, so the cells are
+  // even splits of the frame. The saved corners describe the raw frame.
   const photo = document.getElementById('photo');
   const flat = !!(photo && photo.dataset.flat);
   const cr =
@@ -287,7 +287,7 @@ export async function refresh() {
     if (!r.ok && r.status !== 503) throw 0;
     j = await r.json();
   } catch (e) {
-    // the server genuinely didn't answer
+    // the server did not answer
     document.getElementById('phase').textContent = 'Controller unreachable';
     return;
   }
@@ -299,9 +299,7 @@ export async function refresh() {
   applyStatus(j);
 }
 
-// The whole render, split out so a pushed status and a polled one go through
-// exactly the same path. Anything that renders differently depending on how
-// the data arrived is a bug waiting to happen.
+// The whole render: a pushed status and a polled one both go through here.
 export function applyStatus(j) {
   try {
     set_S({
@@ -313,11 +311,11 @@ export function applyStatus(j) {
       sunset: new Date(j.sunset)
     });
     // Same hold as the form fields: until the server echoes a saved backend,
-    // keep the chosen one. Otherwise a stale poll flips the slider and sweep
-    // card back into view for one cycle and the whole card jumps.
+    // keep the chosen one, so a stale poll does not bring the slider and sweep
+    // card back for one cycle. Set before any renderer reads it.
     set_lightBackend(
       'light_backend' in pendingSave ? pendingSave.light_backend : j.light_backend || 'pwm'
-    ); // set before any renderer reads it
+    );
     fillForm(j.settings);
     {
       const camOn = !!(j.settings && j.settings.camera_enabled);
@@ -365,8 +363,8 @@ export function applyStatus(j) {
     renderWater(j);
     render();
   } catch (e) {
-    // the server answered but our page code failed: usually a stale cached
-    // script after a deploy. Say so instead of blaming the controller.
+    // the server answered but the page code failed: usually a stale cached
+    // script after a deploy
     console.error('render error:', e);
     document.getElementById('phase').textContent = 'Page error \u2013 hard-refresh (Ctrl-Shift-R)';
   }
@@ -399,10 +397,11 @@ export function fitReportHeight() {
   const card = document.getElementById('reportcard');
   const media = document.querySelector('.amedia');
   if (!card || !media) return;
+  // single column: let it flow
   if (window.innerWidth < 1100) {
     card.style.maxHeight = '';
     return;
-  } // single column: let it flow
+  }
   const top = card.getBoundingClientRect().top;
   const mediaBottom = media.getBoundingClientRect().bottom;
   card.style.maxHeight = Math.max(220, Math.round(mediaBottom - top)) + 'px';
@@ -444,8 +443,8 @@ export function renderReport(j) {
   h += rList('Recommendations', r.recommendations);
   if (r.per_cell && r.per_cell.length)
     h += `<div class="rsec"><h4>Cell notes</h4><ul>${r.per_cell.map(c => `<li><b>${esc(c.cell || '')}</b> ${esc(c.note || '')}</li>`).join('')}</ul></div>`;
-  // Only cells that look wrong are worth showing: the planting map already
-  // records what is in every cell, so a list of confirmations is noise.
+  // Only cells that look wrong are listed: the planting map already records
+  // what is in every cell.
   {
     const vc = (r.variety_check || []).filter(v => v && v.looks_consistent === false);
     if (vc.length)
@@ -456,7 +455,7 @@ export function renderReport(j) {
             `${v.why ? ` &mdash; ${esc(v.why)}` : ''}</li>`
         )
         .join('')}</ul></div>`;
-    // reports saved by older versions lack this field
+    // a stored report without variety_check lists its species guesses instead
     if (!r.variety_check && r.species && r.species.length)
       h += `<div class="rsec"><h4>Species guesses</h4><ul>${r.species
         .map(sp => `<li><b>${esc(sp.cell || '')}</b> ${esc(sp.guess || 'unsure')}</li>`)
@@ -507,7 +506,8 @@ export async function genReport() {
 }
 // The seedling DLI target band, from the setup (Settings, Setups). The bar's scale grows
 // to fit a high band: 16 mol for a 6 to 12 band, 24 for 15 to 20, and so on.
-export var dliBand = { lo: 15, hi: 20, max: 24 }; // var: read by renders that can run before this line
+// A var, because renders that read it can run before this line.
+export var dliBand = { lo: 15, hi: 20, max: 24 };
 export function setDliBand(s) {
   if (!s) return;
   const lo = parseFloat(s.dli_target_low),
@@ -617,8 +617,8 @@ export function start() {
     const f = ev.target,
       msg = document.getElementById('msg');
     const body = {};
-    // Setups have their own Save button, but a change there must not be lost
-    // when the main Save is the one pressed
+    // Setups have their own Save button; an unsaved change there goes along
+    // with the main Save
     if (setupDirty && setupDraft) {
       body.setups = setupDraft;
       if (trayDraft) body.tray_sensors = trayDraft;
@@ -638,8 +638,8 @@ export function start() {
       });
       const j = await r.json();
       const errs = j.errors && Object.keys(j.errors);
-      // a rejected field inside a collapsed section would be invisible: open the
-      // sections holding any errors so the message points at something on screen
+      // open the sections holding any rejected field, so the message points at
+      // something on screen
       f.querySelectorAll('[aria-invalid="true"]').forEach(el => el.removeAttribute('aria-invalid'));
       for (const k of errs || []) {
         const el = k === 'setups' ? document.getElementById('setupcfg') : f.elements[k];

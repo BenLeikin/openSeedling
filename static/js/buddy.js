@@ -1,11 +1,10 @@
 // openSeedling dashboard: Little Buddy, the wandering seedling.
-// ---- the wandering seedling ----
 // Every half minute a small seedling crosses one card, entering and leaving
-// behind its edge. It sits at z-index:-1 inside the card, so it walks BEHIND
-// the chips and buttons rather than over them.
+// behind its edge. It sits at z-index:-1 inside the card, so it walks behind
+// the chips and buttons.
 
 export let buddyOn = true; // mirrors the "little buddy" setting
-export let buddyPick = 'sprout'; // 'sprout' | 'pepper' | 'cat' | 'random'
+export let buddyPick = 'sprout'; // a BUDDY_SPRITES key, or 'random'
 export function buddyModel() {
   if (buddyPick !== 'random') return buddyPick in BUDDY_SPRITES ? buddyPick : 'sprout';
   const keys = Object.keys(BUDDY_SPRITES);
@@ -22,9 +21,9 @@ export let walkTimer = null;
 // tiles (static/screen_buddy.js sets that)
 export let walkBoxes = '.card';
 
-// Three characters, picked per outing. Each returns the SVG for one walker;
-// they share the walk cycle, so a new one is a sprite function plus a case
-// here, nothing more. The parts that animate carry fixed class names:
+// The characters, by display name; one is picked per outing. Each sprite
+// function below returns the SVG for one walker. They share the walk cycle
+// through fixed class names on the parts that animate:
 // .legs/.leg-a/.leg-b step, .body bobs, .arm waves during the pause.
 export const BUDDY_MODELS = {
   sprout: 'Potted sprout',
@@ -111,10 +110,8 @@ export function buddyCat() {
 }
 
 export function buddySnail() {
-  // the slow one: BUDDY_DURATION gives it its own, slower crossing. In
-  // profile facing left: a long foot from head to tail, the shell on its back
-  // with the spiral inside it, eye stalks up from the head and two short
-  // feelers below them.
+  // In profile facing left: a long foot from head to tail, the shell on its
+  // back, eye stalks up from the head. BUDDY_DURATION gives it a slower crossing.
   return `<g class="legs">
       <line class="leg-a stalk" x1="6.6" y1="23.2" x2="4.6" y2="17.4" style="transform-origin:6.6px 23.2px"/>
       <line class="leg-b stalk" x1="9" y1="23.2" x2="9.8" y2="17.4" style="transform-origin:9px 23.2px"/>
@@ -134,11 +131,9 @@ export function buddySnail() {
 }
 
 export function buddyLadybug() {
-  // A seven-spot ladybug, from above. In flight it lifts its two shell halves
-  // (the elytra) up and out and the thin wings folded underneath do the
-  // flapping, so the shell is two halves hinged behind the pronotum (the black
-  // shield with two white patches), with the body and wings beneath them.
-  // Three black spots on each half and one shared at the front.
+  // A seven-spot ladybug, from above. The shell is two halves (the elytra)
+  // hinged behind the pronotum, with the body and wings beneath them: in flight
+  // the halves lift up and out and the wings flap.
   return `<g class="body">
       <g class="lwing lwing-l" style="transform-origin:13.5px 17.5px">
         <path class="lwing-m" d="M13.5 17.5C8.5 14.2 .5 14.8 -2.8 18.4C-4.4 20.4 -2.6 23.4 1 22.9C6 22.2 11 20.4 13.5 17.5z"/>
@@ -197,8 +192,7 @@ export function buddyDrop() {
 
 export function buddyBee() {
   // a flyer: no legs, two wings that flap about their own roots, mirrored.
-  // The stripes are bands of the body itself (clipped to its outline), the
-  // face sits in the top yellow band, and a small stinger points down.
+  // The stripes are paths cut to the body's outline.
   return `<g class="body">
       <ellipse class="wing wing-l" cx="9.5" cy="13.6" rx="5.5" ry="3.6" style="transform-origin:13.5px 15.5px"/>
       <ellipse class="wing wing-r" cx="20.5" cy="13.6" rx="5.5" ry="3.6" style="transform-origin:16.5px 15.5px"/>
@@ -251,10 +245,9 @@ export const BUDDY_SPRITES = {
 // the snail walks at its own pace; everything else shares the standard cycle
 export const BUDDY_DURATION = { snail: 20000 };
 // Sprites drawn in profile have a natural facing. The walk flips them with
-// scaleX so they always face the way they are travelling; a sprite drawn
-// facing LEFT needs the opposite sign from one drawn facing right, or it
-// moonwalks in one direction. Front-facing sprites are symmetric enough that
-// either sign looks correct.
+// scaleX so they face the way they travel, and a sprite drawn facing left
+// needs the opposite sign from one drawn facing right. Front-facing sprites
+// look right with either sign.
 export const BUDDY_FACES_LEFT = { cat: true, snail: true };
 // Characters that would naturally fly cruise through the card instead of
 // walking along its floor, and at the pause they loop the loop instead of
@@ -266,16 +259,15 @@ export const LOOP_HEADROOM = 76;
 export function walkerSvg(model) {
   const draw = BUDDY_SPRITES[model] || buddySprout;
   const name = model in BUDDY_SPRITES ? model : 'sprout';
-  // flyers get an inner group so the hover and the loop can move the whole
-  // sprite without fighting the travel transform on the svg itself
-  // two layers so the bob and the loop never fight over one transform: the
-  // outer one bobs the whole time, the inner one does the loop inside it
+  // Flyers get two inner groups, so the bob and the loop each have a transform
+  // of their own, apart from the travel transform on the svg: the outer group
+  // bobs the whole time, the inner one does the loop.
   const inner = BUDDY_FLIES[name] ? `<g class="bob"><g class="flyer">${draw()}</g></g>` : draw();
   return `<svg class="walker buddy-${name}${BUDDY_FLIES[name] ? ' flying' : ''}" viewBox="0 0 30 36" aria-hidden="true" focusable="false">${inner}</svg>`;
 }
 
 export function walkOnce() {
-  // never interrupt: one seedling at a time, and none while the tab is hidden
+  // one seedling at a time, and none while the tab is hidden
   if (!buddyOn || document.hidden || document.querySelector('.walkwrap')) return;
   const cards = [...document.querySelectorAll(walkBoxes)].filter(c => {
     if (c.offsetParent === null) return false; // hidden card
@@ -322,7 +314,8 @@ export function walkOnce() {
 
 export function startWalker() {
   if (walkTimer) return;
-  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return; // no ambient motion for anyone who opted out
+  // no ambient motion for anyone who opted out
+  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
   walkTimer = setInterval(walkOnce, WALK_EVERY_MS);
 }
 

@@ -1,5 +1,4 @@
 // openSeedling dashboard: Pi health tiles, the light plan and day progress, the fan, focus and USB camera controls, and start-up.
-// ---- Pi health tiles ----
 import {
   S,
   dragTimer,
@@ -236,7 +235,7 @@ export function renderDayProgress(j) {
   }
   const day = j.day_light || null;
   drawDliChart(day);
-  // how long the light has actually delivered today
+  // minutes the light has been on today
   const lit = document.getElementById('dplit');
   if (lit) lit.textContent = day && day.lit_minutes ? durStr(day.lit_minutes * 60000) + ' lit' : '';
 
@@ -249,10 +248,9 @@ export function renderDayProgress(j) {
   if (dfill)
     dfill.style.width = Math.max(0, Math.min(100, ((d || 0) / BMAX) * 100)).toFixed(1) + '%';
 
-  // Follow the schedule. During the photoperiod the fair comparison is not the
-  // whole day's target band but where the total should be by now: that band
-  // scaled by how far through the lit day we are (a noon total exactly on pace
-  // is not "below target"). After lights out the full band applies again.
+  // During the photoperiod the total is compared with where it should be by
+  // now: the target band scaled by the fraction of the lit day elapsed. After
+  // lights out the full band applies.
   const lo = BLO * frac,
     hi = BHI * frac;
   const during = frac > 0 && frac < 1;
@@ -263,8 +261,8 @@ export function renderDayProgress(j) {
     pm.style.display = during ? '' : 'none';
     pm.title = `where today\u2019s total should be by now: ${lo.toFixed(1)}\u2013${hi.toFixed(1)} mol`;
   }
-  // one verdict drives both the words and the fill color, so they can never
-  // disagree: pace while the lights are on, the full-day target after
+  // one verdict drives both the words and the fill color: pace while the
+  // lights are on, the full-day target after
   let state = '';
   if (d != null) {
     state = during
@@ -526,7 +524,6 @@ export function renderFocus(j) {
     else info.textContent = 'cancelled';
   }
 }
-// ---- two cameras: pick by USB port, align, show whether photos are stitched ----
 // ---- the touchscreen: what the kiosk reports, and its modes to pick from ----
 export async function loadDisplay() {
   const info = document.getElementById('dispinfo');
@@ -687,8 +684,8 @@ export function renderSweep(j) {
   if (btn) btn.textContent = sweepRunning ? 'Cancel' : 'Calibrate';
   if (sweepRunning && info) info.textContent = `measuring\u2026 ${sw.pct}%`;
   if (was && !sweepRunning && info && sw.error) info.textContent = sw.error;
-  // with a calibration in use, chart what the dashboard DELIVERS (a straight
-  // line if it worked) rather than the raw fixture, which never changes shape
+  // with a calibration in use, chart what the dashboard delivers (a straight
+  // line if the calibration worked), not the raw fixture's curve
   set_lastCurve(
     j.light_curve_effective
       ? {
@@ -701,8 +698,8 @@ export function renderSweep(j) {
         ? { ...j.light_curve, stale: !!j.light_linear_stale }
         : null
   );
+  // a drag owns the marker
   if (!dragging)
-    // a drag owns the marker
     drawLightCurve(
       lastCurve,
       sweepRunning,
@@ -780,9 +777,10 @@ export function initSchedule() {
 export function initLight() {
   {
     const row = document.getElementById('lightctl') || document.body;
-    if (row.dataset.lightBound) return; // double-binding would fire
+    // bind once: a second binding would fire every click twice
+    if (row.dataset.lightBound) return;
     row.dataset.lightBound = '1';
-  } // every click twice
+  }
   {
     const b = document.getElementById('sweepbtn');
     if (b) b.addEventListener('click', startSweep);

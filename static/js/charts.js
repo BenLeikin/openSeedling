@@ -1,5 +1,4 @@
 // openSeedling dashboard: Sensor readouts and units, and the chart grid.
-// ---------------- sensors: readout, chart, overlay ----------------
 import { S, agoStr } from './light.js';
 import { inSetup, sensorTrays, trayInSetup } from './setups.js';
 import { set_playerFps } from './photos.js';
@@ -56,12 +55,14 @@ export function tDisp(c) {
 export function tUnit() {
   return isMetric() ? '\u00b0C' : '\u00b0F';
 }
+// a setting stored in Fahrenheit, for display
 export function tFromF(f) {
   return isMetric() ? ((f - 32) * 5) / 9 : f;
-} // an F-stored setting, shown
+}
+// a displayed value, back to Fahrenheit for storage
 export function tToF(v) {
   return isMetric() ? (v * 9) / 5 + 32 : v;
-} // ...and read back
+}
 export function pDisp(hpa) {
   return isMetric() ? hpa : hpa * 0.0295299830714;
 }
@@ -190,16 +191,12 @@ export function sensorMeta(key, val) {
     };
   return { group: 'Other', label: key, value: String(val), unit: '' };
 }
-// Per-cell camera readings, laid out to match the physical trays. Canopy and
-// surface dryness live in the same square because they describe the same cell;
-// separate wrapped lists made it impossible to see which cell was which.
 export function sensorLabel(key) {
   const m = sensorMeta(key, 0);
   return m ? m.label : key;
 }
-// Sensor health, contradictions and post-fill verdicts. Collapsed by default:
-// when everything is fine this is one line, and it only demands attention when
-// something is actually wrong.
+// Sensor health, contradictions and post-fill verdicts. The summary line counts
+// what needs attention or review.
 export function renderQuality(j) {
   const wrap = document.getElementById('qualitywrap');
   const body = document.getElementById('qbody');
@@ -267,8 +264,8 @@ export function renderSensors(j) {
     capOn = !!j.settings.capture_enabled;
   }
   if ('canopy_due_since' in j) canopyDue = j.canopy_due_since;
-  // charts drawn before this status arrived lacked calibration context
-  // (probe %, thresholds); re-render them once from the cached series
+  // charts drawn before the first status lack calibration context (probe %,
+  // thresholds): re-render them once from the cached series
   if (!window._chartCtxSynced && Object.keys(seriesData).length) {
     window._chartCtxSynced = true;
     renderChartGrid();
@@ -279,8 +276,10 @@ export function renderSensors(j) {
   // grouped readout
   const groups = {};
   for (const k of keys) {
-    if (k.startsWith('float:') || k.startsWith('reservoir:')) continue; // shown in the water controls instead
-    if (k.startsWith('growth') || k.startsWith('dry:') || k.startsWith('moisture:')) continue; // drawn as tray grids below
+    // shown in the water controls instead
+    if (k.startsWith('float:') || k.startsWith('reservoir:')) continue;
+    // drawn as tray grids below
+    if (k.startsWith('growth') || k.startsWith('dry:') || k.startsWith('moisture:')) continue;
     // chips show the smoothed value so the readout matches what the alerts
     // judge; the charts below keep the raw series
     const raw = sensorData[k].value;
@@ -394,8 +393,7 @@ export let seriesData = {},
   soilTempLow = 80;
 export let humHigh = 60,
   humLow = 40;
-// lux and PPFD are the same measurement in two units, so the lux card names
-// both rather than the app drawing two identical charts
+// lux and PPFD are the same measurement in two units, so the lux card names both
 export function ppfdFromLux(lx) {
   const k = Number(S && S.settings && S.settings.lux_to_ppfd_k) || 0;
   const cf = Number(S && S.settings && S.settings.canopy_factor) || 1;
@@ -453,8 +451,8 @@ export function renderChartGrid() {
   if (!grid) return;
   // remember which cards are open: the grid is rebuilt on every reload
   document.querySelectorAll('.ccard.expanded').forEach(c => expandedCharts.add(c.id));
-  // PPFD is lux scaled by a constant, so a separate card would draw the same
-  // line twice. It rides along on the lux chart as a second unit instead.
+  // PPFD is lux scaled by a constant, so it has no card of its own: the lux
+  // chart shows it as a second unit
   const keys = Object.keys(seriesData)
     .filter(
       k => !k.startsWith('float:') && !k.startsWith('reservoir:') && k !== 'ppfd' && inSetup(k)
@@ -516,8 +514,7 @@ export function renderChartGrid() {
   for (const k of keys) drawMini(k);
   // Redraw a chart whenever its box changes size: when it first becomes
   // visible, on a window resize, or when the layout settles. The SVG is drawn
-  // 1:1 in its own pixels; drawn at a stale size and stretched to fit
-  // (preserveAspectRatio none), its text came out squashed or stretched.
+  // 1:1 in its own pixels, so at a stale size its text would be stretched.
   if (chartRO) {
     chartRO.disconnect();
     document
@@ -660,9 +657,8 @@ export function drawMini(key) {
   if (!svg) return;
   const card = document.getElementById('cc-' + cssId(key));
   const big = !!(card && card.classList.contains('expanded'));
-  // match the viewBox to the element's real pixel size: one unit = one CSS
-  // pixel, so text renders at its natural shape at any card width. A fixed
-  // viewBox stretched to fit would smear the labels (badly so on a phone).
+  // match the viewBox to the element's pixel size: one unit is one CSS pixel,
+  // so text keeps its shape at any card width
   const r = svg.getBoundingClientRect();
   if (r.width < 10 || r.height < 10) return; // not laid out yet: the resize observer draws it
   const W = Math.max(200, Math.round(r.width));
@@ -671,7 +667,7 @@ export function drawMini(key) {
     B = big ? 24 : 16;
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
   const FS = big ? 12 : 10,
-    FS2 = big ? 13 : 11; // now honest px sizes
+    FS2 = big ? 13 : 11; // font sizes, in CSS px
   const conv = convertFor(key),
     unit = chartUnitFor(key);
   const data = (seriesData[key] || [])
@@ -690,7 +686,7 @@ export function drawMini(key) {
     y1 = Math.max(...ys);
   const pct = unit === '%';
   // target band: soil temp uses the germination window, humidity its own
-  // comfort range. Both draw through the same code below.
+  // comfort range
   const isSoil = key.startsWith('temp:soil');
   const isHum = key === 'humidity';
   let hiLine = null,
@@ -724,10 +720,11 @@ export function drawMini(key) {
     y0 = Math.min(y0, loLine);
     y1 = Math.max(y1, loLine);
   }
+  // % charts on a fixed scale
   if (pct) {
     y0 = Math.min(y0, 0);
     y1 = Math.max(y1, 100);
-  } // % charts on a fixed scale
+  }
   if (y0 === y1) {
     y0 -= 1;
     y1 += 1;
@@ -740,7 +737,7 @@ export function drawMini(key) {
   const sx = t => P + ((t - x0) / (x1 - x0 || 1)) * (W - 2 * P);
   const sy = v => H - B - ((v - y0) / (y1 - y0 || 1)) * (H - B - P);
   let h = '';
-  // lights-off hours, shaded, so day/night patterns explain themselves
+  // lights-off hours, shaded
   h += nightBands(x0, x1, sx, P, H - B);
   // value gridlines at round numbers, labelled on the left
   {
@@ -756,10 +753,8 @@ export function drawMini(key) {
   }
   // time gridlines at round hours or days
   h += timeTicks(x0, x1, sx, P, H - B, W, FS, big);
-  // Split the series where sampling stopped. Drawing one unbroken line across
-  // an outage claims readings that were never taken; each run of real data is
-  // solid, and the interval between runs is a faint dashed bridge so the shape
-  // still reads while the absence is visible.
+  // Split the series where sampling stopped: each run of readings is a solid
+  // line, and the interval between runs is a faint dashed bridge.
   const gaps = [];
   for (let i = 1; i < data.length; i++) gaps.push(data[i][0] - data[i - 1][0]);
   const sorted = gaps.slice().sort((a, b) => a - b);
@@ -791,7 +786,7 @@ export function drawMini(key) {
   for (const r0 of runs) {
     const r = stepped ? stepPts(r0) : r0;
     if (r.length < 2) {
-      // a lone sample between two outages still deserves to be visible
+      // a lone sample between two outages is drawn as a dot
       if (r.length === 1)
         h += `<circle cx="${sx(r[0][0]).toFixed(1)}" cy="${sy(r[0][1]).toFixed(1)}"
               r="2" fill="#4a7c59"/>`;
@@ -836,7 +831,7 @@ export function drawMini(key) {
   }
   if (hiLine != null || loLine != null) {
     const clamp = v => Math.max(P, Math.min(H - B, v));
-    // the target band between the two bounds, so "in range" reads at a glance
+    // the target band between the two bounds
     if (hiLine != null && loLine != null) {
       const top = clamp(sy(hiLine)),
         bot = clamp(sy(loLine));
@@ -1011,9 +1006,9 @@ export function chartLeave() {
 export function floatLabel(v) {
   return v === null ? 'no sensor' : v >= 1 ? 'not full' : 'full';
 }
-export let pumpActive = false; // float state only changes while a pump runs; the 15s
-// status poll covers the idle case, so don't hammer
-// /api/float at 1.5s from every open tab
+// The float state changes only while a pump runs, so /api/float is polled (every
+// 1.5 s) only then; the 15 s status poll covers the idle case.
+export let pumpActive = false;
 export async function pollFloat() {
   if (!pumpActive) return;
   try {
@@ -1035,8 +1030,8 @@ export function renderWater(j) {
   }
   box.style.display = '';
   {
-    // auto-watering arm/disarm, above everything: it is the switch that matters
-    // on a setup tab, the switch arms that setup's pump trays only
+    // auto-watering arm/disarm, above the tray rows. On a setup tab the switch
+    // arms that setup's pump trays only.
     const mine = Object.keys(w.trays).filter(trayInSetup);
     autoWaterTrays = mine;
     const armed = new Set(w.armed || []);
@@ -1064,7 +1059,7 @@ export function renderWater(j) {
     btn.className = on ? 'on' : '';
     btn.disabled = !on && names.length > 0;
     if (names.length) {
-      // never arm on an untrustworthy probe: say exactly which tray and why
+      // arming is refused while a tray has blockers: name each tray and why
       info.innerHTML =
         '<b>Not ready:</b> ' +
         names.map(t => 'tray ' + esc(t) + ' ' + esc(blockers[t].join(', '))).join(' \u00b7 ');
@@ -1157,9 +1152,8 @@ export function renderWater(j) {
     const info = document.getElementById('pumpinfo' + t);
     if (dead) info.textContent = 'no pump hardware';
     else if (tw.last && !tw.running) {
-      // when as well as what: "how long since it was watered" is the question
-      // the tray card is usually asked (last_run survives a restart)
-      // agoStr takes a timestamp in milliseconds; last_run is in seconds
+      // the last outcome and how long ago. last_run is in seconds and survives
+      // a restart; agoStr takes milliseconds.
       const ago = tw.last_run ? agoStr(tw.last_run * 1000) : '';
       info.textContent = 'last: ' + tw.last + (ago ? ` \u00b7 ${ago}` : '');
     }
@@ -1254,7 +1248,7 @@ export async function calibrateProbe(tray, point, force, volts) {
       refresh();
       return;
     }
-    // refused: say why, and offer the override rather than hiding it
+    // refused: say why, and offer the override
     info.className = 'calbadmsg';
     const why = j.problems && j.problems.length ? j.problems : [j.error || 'could not capture'];
     info.innerHTML =

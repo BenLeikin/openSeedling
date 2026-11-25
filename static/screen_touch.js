@@ -3,8 +3,8 @@
 //
 // The panel delivers clean touches (libinput shows them), but between the
 // panel, the compositor and the browser a tap can land somewhere else on the
-// page: turned, mirrored, even squeezed into a corner. Rather than guess at
-// that chain, the page corrects taps itself:
+// page: turned, mirrored, even squeezed into a corner. The page corrects taps
+// itself:
 //
 // - Hold a finger anywhere on the screen for 3 seconds to calibrate: tap the
 //   four targets that appear. The page fits the straight-line mapping from
@@ -178,8 +178,8 @@
           )
         )
       : Infinity;
-    // four taps that no single straight-line mapping fits were not four
-    // careful taps on the targets: start again rather than save a bad fit
+    // four taps that no single straight-line mapping fits are not saved:
+    // start again
     if (!(err < 0.06 * Math.min(innerWidth, innerHeight))) {
       calib.points = [];
       calib.el.innerHTML =

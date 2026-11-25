@@ -1,10 +1,10 @@
 // openSeedling dashboard: The planting map and the planting history.
-// ---- planting map: two trays, editable seed / equipment / sow date ----
 import { curSetup, setupsList, trayInSetup } from './setups.js';
 import { canEdit } from './photos.js';
 import { clearCellUI } from './devices.js';
 import { colL, refresh } from './grid.js';
 
+// ---- planting map: editable seed / equipment / sow date per cell ----
 export let trays = {},
   trayDirty = {},
   trayTimer = null,
@@ -24,7 +24,7 @@ export function renderTrays(j) {
   const wrap = document.getElementById('trayswrap');
   if (!wrap) return;
   // don't clobber what's being typed, or a click whose save is still in flight
-  // (a poll started before the POST would otherwise return pre-save data)
+  // (a poll started before the POST returns pre-save data)
   if (trayPending > 0) return;
   if (wrap.dataset.sig === sig && wrap.children.length) return;
   if (document.activeElement && document.activeElement.closest('#trayswrap')) return;
@@ -36,8 +36,7 @@ export function renderTrays(j) {
       cells = tr.cells || {};
     const rows = tr.rows || 3,
       cols = tr.cols || 4;
-    // a cell counts when it holds something, not merely when it has a record
-    // (a cleared cell keeps an empty one: "20 of 20" with A4 empty)
+    // a cell counts when it holds something: a cleared cell keeps an empty record
     const filled = Object.values(cells).filter(
       v => v && (v.seed || v.equipment || v.planted || v.sprouted || v.archived)
     ).length;
@@ -155,9 +154,8 @@ export function renderTrays(j) {
     if (hint) hint.style.display = filled ? 'none' : '';
   }
 }
-// Single definition on purpose: a second `function esc` later in the file
-// would silently win for the whole scope and (if weaker) let a quote in a
-// seed name break out of an HTML attribute.
+// Escapes both quote characters as well as &, < and >, so a seed name cannot
+// break out of an HTML attribute.
 export function esc(s) {
   return String(s == null ? '' : s)
     .replace(/&/g, '&amp;')
@@ -245,8 +243,7 @@ export async function trayLayout(body) {
       return;
     }
     if (!j.ok && j.needs_confirm && !body.confirm) {
-      // ask once, never loop
-      // never destroy planting records without saying exactly what is at stake
+      // ask once, saying which planting records would be discarded
       const what = j.dropped
         ? `Cells ${j.dropped.join(', ')} fall outside the new grid`
         : `This tray has ${j.filled} filled cells`;
@@ -355,8 +352,9 @@ export function initTrayConfig() {
 }
 export function initTrays() {
   const wrap = document.getElementById('trayswrap');
-  if (!wrap || wrap.dataset.bound) return; // binding twice would make every
-  wrap.dataset.bound = '1'; // toggle immediately undo itself
+  // bind once: a second binding would undo every toggle
+  if (!wrap || wrap.dataset.bound) return;
+  wrap.dataset.bound = '1';
   const queue = e => {
     const cell = e.target.closest('.tcell');
     if (!cell) return;
@@ -400,9 +398,8 @@ export function initTrays() {
     const hide = new Set((cell.dataset.hide || '').split(',').filter(Boolean));
     if (cb.checked) hide.delete(field);
     else hide.add(field);
-    // remember an explicit "show" for the optional extras, which are hidden by
-    // default: without it the next render would hide an empty row again.
-    // Must happen before dataset.hide is written, or it never reaches the save.
+    // An explicit "show" for the optional extras, which are hidden while empty.
+    // It must be in the set before dataset.hide is written, which the save reads.
     if (['count', 'source', 'notes'].includes(field)) {
       if (cb.checked) hide.add('!' + field);
       else hide.delete('!' + field);
@@ -442,16 +439,14 @@ export function initTrays() {
         )
       )
         return;
-      // the button keeps focus after a click, and renderTrays deliberately
-      // skips re-rendering while focus is inside the tray area (so a poll can't
-      // clobber typing). Drop focus or the cell appears to do nothing until the
-      // next manual refresh.
+      // the button keeps focus after a click, and renderTrays skips
+      // re-rendering while focus is inside the tray area: drop focus so the
+      // cell can redraw
       end.blur();
       const tr = cell.dataset.tray,
         cid = cell.dataset.cell;
-      // Hold off tray re-renders until our own refresh lands, not just until
-      // the POST returns: a poll started before the delete carries the old
-      // data and would repaint the cell straight back in.
+      // Hold off tray re-renders until the refresh that follows the POST lands:
+      // a poll started before the delete carries the old data.
       trayPending++;
       let done = false;
       try {
@@ -470,8 +465,7 @@ export function initTrays() {
         trayPending = Math.max(0, trayPending - 1);
         return;
       }
-      // empty it locally and on screen now, so the click has a visible effect
-      // instead of waiting on a round trip
+      // empty it locally and on screen without waiting on the round trip
       if (trays[tr] && trays[tr].cells) delete trays[tr].cells[cid];
       clearCellUI(cell);
       const wrapEl = document.getElementById('trayswrap');
@@ -507,8 +501,8 @@ export function initTrays() {
     }
     const tray = cell.dataset.tray,
       cid = cell.dataset.cell;
-    // mirror into the local copy: a refresh landing before the save round-trips
-    // would otherwise re-render from stale server data and undo the click
+    // mirror into the local copy, so a refresh landing before the save
+    // completes does not re-render from stale server data
     if (trays[tray]) {
       const tc = (trays[tray].cells = trays[tray].cells || {});
       tc[cid] = Object.assign(
@@ -522,8 +516,8 @@ export function initTrays() {
   });
 }
 // ---- planting history ----
-// Cells are cleared when a plant is transplanted or lost, so this is where the
-// record of what grew where actually lives.
+// Cells are cleared when a plant is transplanted or lost; the history keeps
+// the record of what grew where.
 export let plantingHistory = [];
 export async function loadPlantings() {
   try {

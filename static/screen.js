@@ -271,13 +271,12 @@ function draw() {
   drawTrend();
 }
 
-// Everything must fit the screen with nothing cut off, whatever the fonts,
-// the screen's resolution, the number of setups and trays, or the length of
-// the attention line. The page is laid out for 600 px wide and sized in rem:
-// on a bigger screen the text grows (no more than the width allows) until the
-// chart is down to about a quarter of the height, so spare room goes to the
-// numbers rather than to an empty chart. When even the base size is too much,
-// the page tightens step by step, and as a last resort the chart is dropped.
+// Everything fits the screen with nothing cut off, whatever the fonts, the
+// resolution or the number of setups and trays. The page is laid out for
+// 600 px wide and sized in rem: on a bigger screen the text grows (no more
+// than the width allows) until the chart is down to about a quarter of the
+// height. When the base size is too much the page tightens step by step, and
+// as a last resort the chart is dropped.
 const FIT_STEPS = ['tight', 'tighter', 'notrend'];
 const BASE_PX = 16;
 const DESIGN_W = 600;
@@ -626,7 +625,8 @@ document.addEventListener('click', ev => {
   const seg = b.closest('.seg'),
     v = b.dataset.v,
     ctl = seg.dataset.ctl;
-  seg.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); // instant feedback
+  // instant feedback
+  seg.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
   if (ctl === 'heat') post('/api/heat', { mode: v });
   else if (ctl === 'fan') post('/api/fan', { mode: v });
   else if (ctl === 'light') post('/api/light', { mode: v });

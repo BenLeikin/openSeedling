@@ -1,14 +1,14 @@
 // openSeedling dashboard: Grow setups (tabs, light view, the Setups editor) and the USB camera's modes.
-// ---- grow setups: separate areas, each with its own light and sensors ----
-// The server sends every setup's measured day and verdict in `setups`; the tab
-// chosen here decides which one the Day and Plan cards show and which sensors
-// the chips and charts include. A setup with no sensors ticked shows them all.
 import { S } from './light.js';
 import { formDirty } from './photos.js';
 import { probeNames, renderChartGrid, sensorData, sensorMeta, set_lightBackend } from './charts.js';
 import { esc } from './trays.js';
 import { refresh, setDliBand } from './grid.js';
 
+// ---- grow setups: separate areas, each with its own light and sensors ----
+// The server sends every setup's measured day and verdict in `setups`; the tab
+// chosen here decides which one the Day and Plan cards show and which sensors
+// the chips and charts include. A setup with no sensors ticked shows them all.
 export var setupsList = [],
   selSetup = null;
 // which trays each sensor sits in (status sensor_trays), and each tray's
@@ -144,8 +144,8 @@ export var setupDraft = null,
 // and the sensors in each tray: {tray id: [sensor keys]}, saved with it
 export var trayDraft = null;
 // the lights as physical fixtures ("AC fixture (dim line)", "5V LED panel"),
-// from the server, which knows the wiring; a stored choice the hardware no
-// longer offers stays listed so saving does not silently drop it
+// from the server, which knows the wiring; a stored choice the hardware does
+// not offer stays listed, so saving does not drop it
 export function lightChoices(cur) {
   const out = lightOpts.map(o => [o.value, o.label]);
   if (cur && !out.some(o => o[0] === cur))
@@ -392,7 +392,7 @@ export function start() {
         if (!fs || !setupDraft) return;
         const s = setupDraft[+fs.dataset.i];
         setupDirty = true;
-        // either Save button sends it now; say so where both can be seen
+        // either Save button sends it: say so beside both
         {
           const sm = document.getElementById('setupmsg');
           if (sm) sm.textContent = 'Unsaved changes';

@@ -1252,7 +1252,7 @@ body.readonly .tcell input {
   color: var(--bad);
 }
 
-/* =================== production polish layer =================== */
+/* =================== interactive states =================== */
 /* interactive states: one consistent language for every control */
 button {
   transition:
@@ -1377,7 +1377,7 @@ button:focus:not(:focus-visible) {
   margin-top: 10px;
 }
 
-/* =================== flourish layer =================== */
+/* =================== chips, meters and small touches =================== */
 /* moisture chips carry their own fill level as a background bar */
 .schip[data-fill] {
   position: relative;

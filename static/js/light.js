@@ -193,7 +193,7 @@ export function minsToDate(ref, m) {
   return d;
 }
 
-// ---- lighting-stage graphics: graphic follows the actual phase ----
+// ---- lighting-stage graphics ----
 export const BULB = {
   day:
     '<svg viewBox="0 0 100 100" class="sunsvg"><g class="raygroup"><path d="M61.0 32.0 Q50.0 3.0 50.0 3.0 L39.0 32.0 Z"/><path d="M68.5 39.9 Q73.5 9.3 73.5 9.3 L49.5 28.9 Z"/><path d="M71.1 50.5 Q90.7 26.5 90.7 26.5 L60.1 31.5 Z"/><path d="M68.0 61.0 Q97.0 50.0 97.0 50.0 L68.0 39.0 Z"/><path d="M60.1 68.5 Q90.7 73.5 90.7 73.5 L71.1 49.5 Z"/><path d="M49.5 71.1 Q73.5 90.7 73.5 90.7 L68.5 60.1 Z"/><path d="M39.0 68.0 Q50.0 97.0 50.0 97.0 L61.0 68.0 Z"/><path d="M31.5 60.1 Q26.5 90.7 26.5 90.7 L50.5 71.1 Z"/><path d="M28.9 49.5 Q9.3 73.5 9.3 73.5 L39.9 68.5 Z"/><path d="M32.0 39.0 Q3.0 50.0 3.0 50.0 L32.0 61.0 Z"/><path d="M39.9 31.5 Q9.3 26.5 9.3 26.5 L28.9 50.5 Z"/><path d="M50.5 28.9 Q26.5 9.3 26.5 9.3 L31.5 39.9 Z"/></g>' +
@@ -296,17 +296,16 @@ export function render() {
     if (ph) ph.style.setProperty('--lum', (S.brightness / 100).toFixed(2));
   }
   {
-    // A status poll issued BEFORE the mode POST can land after it, carrying the
-    // old override and snapping the buttons back. Hold the chosen mode until
-    // the server reports it.
+    // A status poll issued before the mode POST can land after it, carrying the
+    // old override: hold the chosen mode until the server reports it.
     let m = S.light_override;
     if (pendingMode != null) {
       if (m === pendingMode)
         pendingMode = null; // server agrees; release
       else m = pendingMode;
     }
-    showLightMode(m, S.manual_bright, true);
-  } // from a status: may release
+    showLightMode(m, S.manual_bright, true); // from a status: may release the brightness hold
+  }
   document.getElementById('bulb').style.setProperty('--glow', S.brightness / 100);
   const [p, n, stage] = phaseOf();
   document.getElementById('phase').textContent = p;
@@ -336,14 +335,13 @@ export function showLightMode(mode, bright, fromStatus) {
   if (info) {
     let t = mode === 'on' || mode === 'off' ? 'holding ' + mode + ' - schedule paused' : '';
     if (lightBackend === 'kasa') {
-      // the plug is a network dependency: say plainly when it isn't answering
+      // the plug is reached over the network: say when it is not answering
       const k = (S && S.kasa) || {};
       if (k.ok === false) t = (t ? t + ' \u00b7 ' : '') + 'plug not responding: ' + (k.error || '');
       else
         t = (t ? t + ' \u00b7 ' : '') + 'smart plug' + (k.on == null ? '' : k.on ? ' on' : ' off');
     }
-    // Below the driver's minimum every setting gives the same light, so say
-    // so rather than letting the slider imply a dimness it cannot produce.
+    // Below the driver's minimum every setting gives the same light: say so.
     const lin = S && S.light_linear,
       floor = lin && lin.min_output_pct;
     const b = S ? Number(S.brightness) : null;
@@ -360,8 +358,7 @@ export function showLightMode(mode, bright, fromStatus) {
   const val = document.getElementById('lcval');
   if (!wrap || !rng) return;
   if (lightBackend === 'kasa') {
-    // the plug cannot dim: showing a brightness slider would be a control that
-    // lies about what it does
+    // the plug cannot dim, so there is no brightness slider
     wrap.style.display = 'none';
     return;
   }
@@ -369,13 +366,11 @@ export function showLightMode(mode, bright, fromStatus) {
   const live = mode === 'on';
   wrap.classList.toggle('dim', !live);
   rng.disabled = !live;
-  // Never move the thumb under the user, and never repaint a status that was
-  // built before their change landed: hold the requested value until the
-  // server reports it, or until the hold times out.
+  // Hold the requested value until a status reports it or the hold times out,
+  // so a status built before the change landed does not move the thumb.
   if (brightHold != null) {
-    // Only a STATUS can release the hold. The reply to the POST echoes the
-    // value back, so releasing on that let the next status, still carrying
-    // the old brightness, repaint it and snap the slider back.
+    // The hold is released only by a status, never by the POST's reply: the
+    // reply echoes the value, and the next status can still carry the old one.
     if (fromStatus && bright != null && Math.round(bright) === Math.round(brightHold)) {
       brightHold = null;
     } else {
@@ -389,9 +384,8 @@ export function showLightMode(mode, bright, fromStatus) {
     if (val) val.textContent = bright + '%';
   }
 }
-// The brightness the user asked for, held until the server confirms it. A
-// status built before the POST landed would otherwise repaint the old value
-// and then correct itself, which reads as the slider jumping back.
+// The brightness the user asked for, held until a status confirms it or the
+// timer runs out.
 export let brightHold = null,
   brightHoldTimer = null;
 export function holdBright(v) {
@@ -423,9 +417,9 @@ export async function setLight(mode, brightness, quiet) {
     if (r.ok && j.ok) {
       if (j.brightness != null) holdBright(j.brightness); // what it accepted
       if (quiet) {
+        // mid-drag: leave the slider alone
         lightMode = j.mode;
-      } // mid-drag: don't touch the slider
-      else {
+      } else {
         pendingMode = j.mode;
         showLightMode(j.mode, j.brightness);
         refresh();
@@ -529,10 +523,11 @@ export function renderPhoto(j) {
       if (img) img.classList.toggle('camdead', !!(camHealth && camHealth.fails > 0));
     }
   }
+  // those modes own the image
   if (aligning || cropping) {
     card.style.display = '';
     return;
-  } // those modes own the image
+  }
   if (!j.photo_count) {
     img.style.display = 'none';
     document.getElementById('photoinfo').textContent = 'No photos yet.';
@@ -541,10 +536,9 @@ export function renderPhoto(j) {
   }
   img.style.display = '';
   card.style.display = '';
-  // Show the flattened view by default: that is the corrected, top-down image
-  // and what the analysis works from. Only while the grid is unlocked (i.e.
-  // you are dragging corners) does it fall back to the raw frame, because you
-  // cannot place corners on an image that has already been rectified.
+  // The flattened view is the default: the corrected, top-down image the
+  // analysis works from. While the grid is unlocked for dragging corners the
+  // raw frame is shown, since corners cannot be placed on a rectified image.
   const stamp = j.latest_photo_time || Date.now();
   const editing = gridEditable();
   const flatOn = !(j.settings && j.settings.timelapse_flatten === false);
