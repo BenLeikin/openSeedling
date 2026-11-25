@@ -129,20 +129,10 @@ def _usb_capture(cfg, out_path, width, height, warmup=None, dev=None):
         "--stream-count=%d" % n,
         "--stream-to=%s" % tmp,
     ]
-    try:
-        r = subprocess.run(tools.oom_first(cmd), capture_output=True, timeout=60)
-    except subprocess.TimeoutExpired:
+    r = tools.run(cmd, f"the {width}x{height} capture", timeout=60)
+    if not r.ok or not tmp.exists() or tmp.stat().st_size == 0:
         tmp.unlink(missing_ok=True)
-        return False, "capture timed out"
-    if r.returncode != 0 or not tmp.exists() or tmp.stat().st_size == 0:
-        tmp.unlink(missing_ok=True)
-        oom = tools.killed_msg(r, f"the {width}x{height} capture")
-        if oom:
-            log.warning(oom)
-            return False, oom
-        return False, (
-            r.stderr.decode(errors="replace")[-200:].strip() or "v4l2-ctl returned no frames"
-        )
+        return False, r.error or "v4l2-ctl returned no frames"
     # The stream is n JPEGs back to back; keep the last, which is the settled one.
     try:
         data = tmp.read_bytes()
@@ -241,12 +231,11 @@ def _usb_capture_view(cfg, out_path, width, height, warmup=None):
                 STITCH_MAX_W,
                 "--q",
                 92,
-            ]
+            ],
+            "stitching",
         )
-        if r.returncode != 0:
-            return False, tools.killed_msg(
-                r, "stitching"
-            ) or f"stitching failed: {tools._imgtool_err(r)}"
+        if not r.ok:
+            return False, r.error
         return True, None
     finally:
         for part in parts:
@@ -322,9 +311,11 @@ def align_cameras():
             # each turned the right way up first, so the two are matched as
             # they will be shown
             _rotate_file(part, turns[i - 1])
-        r = tools.imgtool(["align", parts[0], parts[1], "--matches", ALIGN_MATCHES], timeout=180)
-        if r.returncode != 0:
-            return {"ok": False, "error": tools.killed_msg(r, "aligning") or tools._imgtool_err(r)}
+        r = tools.imgtool(
+            ["align", parts[0], parts[1], "--matches", ALIGN_MATCHES], "aligning", timeout=180
+        )
+        if not r.ok:
+            return {"ok": False, "error": r.error}
         res = json.loads(r.stdout.decode(errors="replace") or "{}")
         if not res.get("ok"):
             return res
@@ -344,7 +335,7 @@ def align_cameras():
         r = tools.imgtool(
             ["stitch", parts[0], parts[1], tmp, json.dumps(st["h"]), "--max-w", STITCH_MAX_W]
         )
-        if r.returncode == 0:
+        if r.ok:
             tmp.replace(PREVIEW_PATH)
         with config.settings_lock:
             old = stitch_of(config.settings)
@@ -392,14 +383,9 @@ def _postprocess_file(path, cfg):
     degrees = int(cfg.get("cam_rotate", 0) or 0)
     if degrees not in (90, 180, 270):
         return
-    try:
-        r = tools.imgtool(["rotate", path, degrees, "--q", 90])
-        if r.returncode != 0:
-            log.error(
-                f"post-process failed ({tools._imgtool_err(r)}); keeping the frame as captured"
-            )
-    except Exception as e:
-        log.error(f"post-process failed ({e}); keeping the frame as captured")
+    r = tools.imgtool(["rotate", path, degrees, "--q", 90], "rotating the photo")
+    if not r.ok:
+        log.error(f"post-process failed ({r.error}); keeping the frame as captured")
 
 
 # Rotate by a given angle: each camera of a pair has its own.
@@ -432,11 +418,7 @@ def _rpicam_capture(cfg, out_path):
         "--height",
         str(int(cfg.get("cam_height", 2592))),
     ]
-    r = subprocess.run(tools.oom_first(cmd), capture_output=True, timeout=90)
-    if r.returncode == 0:
-        return None
-    err = tools.killed_msg(r, "rpicam-still") or r.stderr.decode(errors="replace")[-300:]
-    return err.strip() or "capture failed"
+    return tools.run(cmd, "rpicam-still", timeout=90).error or None
 
 
 def take_photo(cfg, now, manual=False):
@@ -515,21 +497,18 @@ def record_growth(path, cfg, now):
         # rotate it a second time
         "rotate": 0,
     }
+    r = tools.run(
+        [sys.executable, str(GROWTH_SCRIPT), str(path), json.dumps(payload)],
+        "canopy analysis",
+        timeout=120,
+    )
     try:
-        r = subprocess.run(
-            tools.oom_first([sys.executable, str(GROWTH_SCRIPT), str(path), json.dumps(payload)]),
-            capture_output=True,
-            timeout=120,
-        )
-        if tools.killed_msg(r, "canopy analysis"):
-            log.warning(tools.killed_msg(r, "canopy analysis"))
-        out = json.loads((r.stdout or b"{}").decode(errors="replace") or "{}")
-    except Exception as e:
-        log.error(f"growth analyze error: {e}")
-        return
+        out = json.loads(r.stdout.decode(errors="replace") or "{}")
+    except ValueError:
+        out = {}
     if not out.get("ok"):
-        if out.get("error"):
-            log.error(f"growth: {out['error']}")
+        # growth.py reports its own failures as JSON; a crash or a kill is in r.error
+        log.error(f"growth: {out.get('error') or r.error or 'no result'}")
         return
     readings = readings_mod.validate_readings(out.get("readings") or {})
     if readings:
@@ -705,7 +684,7 @@ def sharpness_score(path):
     are bench clutter that would reward focusing on the wrong thing.
     Returns None when the frame can't be read."""
     try:
-        r = tools.imgtool(["sharpness", path], timeout=60)
+        r = tools.imgtool(["sharpness", path], "the sharpness score", timeout=60)
         v = float((r.stdout or b"nan").decode().strip() or "nan")
         return None if r.returncode != 0 or v != v else v
     except Exception as e:

@@ -26,6 +26,7 @@ the 4-17 baseline. The installer commits each one with the heading below.
 - A daily report that fails is not run again every minute for the rest of the day.
 - Alerts go to ntfy as well as Discord, and one that could not be sent is sent on the next pass.
 - A light sensor reading zero in the dark is no longer reported as stuck.
+- A canopy analysis that crashes or is killed is logged; it used to fail without a trace.
 - Settings in a hand-edited `config.json` are checked at start-up; an invalid one falls back to its default with an error in the log. NaN and infinity are refused wherever a number is expected.
 - `setup.sh` runs without a terminal where sudo needs no password, and a change to `requirements-dev.txt` no longer triggers it on the Pi.
 
@@ -36,6 +37,7 @@ the 4-17 baseline. The installer commits each one with the heading below.
 - The touchscreen is signed in because it connects to its own port, 5001 on 127.0.0.1 (`GROWLIGHT_SCREEN_PORT`), not because its requests come from the Pi. After updating, restart the kiosk: `sudo systemctl restart growlight-kiosk`.
 - The server tests run under pytest: the single 5,000-line script is now one file per area with plain asserts, and each test starts from the same settings and an empty history, so any test passes on its own.
 - The README is a short front page; the detail it held is in `docs/`, one file per topic.
+- `camera.py` is split: stored photos in `photos.py`, the video render in `video.py`, and one function in `tools.py` that starts every helper program and reports a timeout, an out-of-memory kill or a failure the same way.
 
 ### Security
 - Request bodies over 1 MB are refused.

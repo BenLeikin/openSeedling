@@ -18,6 +18,6 @@ addopts = "-q"
 # and checked strictly. The rest of the app is not annotated yet, so what
 # these import from it is taken on trust.
 python_version = "3.11"
-files = ["alerts.py", "events.py", "quality.py", "units.py"]
+files = ["alerts.py", "events.py", "quality.py", "tools.py", "units.py"]
 strict = true
 follow_imports = "silent"

@@ -157,14 +157,12 @@ def detect_grid():
     if not helper.exists():
         return jsonify(ok=False, error="Detector not installed."), 200
     try:
-        r = subprocess.run(
-            tools.oom_first([sys.executable, str(helper), str(latest)]),
-            capture_output=True,
-            timeout=60,
-        )
+        r = tools.run([sys.executable, str(helper), str(latest)], "corner detection", timeout=60)
         out = r.stdout.decode(errors="replace").strip()
         return jsonify(
-            json.loads(out) if out else {"ok": False, "error": "Detector returned nothing."}
+            json.loads(out)
+            if out
+            else {"ok": False, "error": r.error or "Detector returned nothing."}
         ), 200
     except Exception as e:
         return jsonify(ok=False, error=f"Detector error: {e}"), 200
@@ -327,13 +325,9 @@ def api_preview():
                 "--height",
                 str(ph),
             ]
-            r = subprocess.run(tools.oom_first(cmd), capture_output=True, timeout=20)
-            if r.returncode != 0:
-                camera_mod._camera_fail(
-                    tools.killed_msg(r, "the preview")
-                    or r.stderr.decode(errors="replace")[-150:]
-                    or "preview failed"
-                )
+            r = tools.run(cmd, "the preview", timeout=20)
+            if not r.ok:
+                camera_mod._camera_fail(r.error)
                 return jsonify(ok=False, error="camera error; check the log"), 200
         tmp.replace(camera_mod.PREVIEW_PATH)  # atomic, so a half-written frame is never served
         camera_mod._camera_ok()
@@ -603,7 +597,7 @@ def cropped_image():
     try:
         r = tools.imgtool(["crop", latest, "-", json.dumps(list(roi)), "--q", 88])
         if r.returncode != 0 or not r.stdout:
-            return (f"crop failed: {tools._imgtool_err(r)}", 500)
+            return (r.error or "crop failed: no image returned", 500)
         data = r.stdout
         with photos_mod._rect_lock:
             photos_mod._crop_cache.update(key=key, bytes=data)
@@ -656,7 +650,7 @@ def rectified_image():
             ]
         )
         if r.returncode != 0 or not r.stdout:
-            return (f"rectify failed: {tools._imgtool_err(r)}", 500)
+            return (r.error or "rectify failed: no image returned", 500)
         data = r.stdout
         with photos_mod._rect_lock:
             photos_mod._rect_cache.update(key=key, bytes=data)

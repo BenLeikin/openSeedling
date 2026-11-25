@@ -5,7 +5,6 @@ import hashlib
 import json
 import os
 import shutil
-import subprocess
 import threading
 import time
 from datetime import datetime
@@ -93,41 +92,36 @@ def _make_thumb(photo_path, cfg, dst):
                 os.replace(part, dst)
                 return
             log.error(
-                f"thumb rectify failed for {photo_path.name} ({tools._imgtool_err(r)}); plain scale"
+                f"thumb rectify failed for {photo_path.name} ({r.error or 'no output'}); plain scale"
             )
         except Exception as e:
             log.error(f"thumb rectify failed for {photo_path.name} ({e}); plain scale")
     roi = crop_box(cfg)
     vf = (crop_filter(roi) + "," if roi else "") + "scale=640:-2"
     try:
-        r = subprocess.run(
-            tools.oom_first(
-                [
-                    "ffmpeg",
-                    "-loglevel",
-                    "error",
-                    "-y",
-                    "-i",
-                    str(photo_path),
-                    "-vf",
-                    vf,
-                    "-q:v",
-                    "7",
-                    "-f",
-                    "mjpeg",
-                    str(part),
-                ]
-            ),
-            capture_output=True,
+        r = tools.run(
+            [
+                "ffmpeg",
+                "-loglevel",
+                "error",
+                "-y",
+                "-i",
+                str(photo_path),
+                "-vf",
+                vf,
+                "-q:v",
+                "7",
+                "-f",
+                "mjpeg",
+                str(part),
+            ],
+            "the thumbnail",
             timeout=120,
         )
         if r.returncode == 0 and part.exists() and part.stat().st_size:
             os.replace(part, dst)
         else:
-            log.error(
-                f"thumbnail error for {photo_path.name}: "
-                f"{(r.stderr or b'').decode(errors='replace')[-200:] or 'no output'}"
-            )
+            log.error(f"thumbnail error for {photo_path.name}: {r.error or 'no output'}")
     except Exception as e:
         log.error(f"thumbnail error for {photo_path.name}: {e}")
     finally:
@@ -169,8 +163,8 @@ def frame_view(photo_path, cfg=None):
             )
         else:  # quality as /photo/cropped.jpg
             r = tools.imgtool(["crop", photo_path, "-", json.dumps(list(roi)), "--q", 88])
-    if r.returncode != 0 or not r.stdout:
-        raise ValueError(tools._imgtool_err(r))
+    if not r.ok or not r.stdout:
+        raise ValueError(r.error or "the image job returned nothing")
     return r.stdout, None
 
 

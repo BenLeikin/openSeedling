@@ -1,5 +1,6 @@
 """Tests: camera."""
 
+import ast
 import json
 import os
 import pytest
@@ -524,35 +525,32 @@ def test_oom():
     assert not ok and err and "out of memory" in err and "3264x2448" in err, (
         f"a capture killed for memory says so instead of 'no frames' ({err})"
     )
-    killed = tools._imgtool_err(types.SimpleNamespace(returncode=-9, stderr=b""))
-    crashed = tools._imgtool_err(types.SimpleNamespace(returncode=-11, stderr=b""))
-    assert "out of memory" in killed and crashed == "killed by signal 11", (
+    killed = tools._why(-9, b"", "the image job")
+    crashed = tools._why(-11, b"", "the image job")
+    assert "out of memory" in killed and crashed == "the image job was killed by signal 11", (
         f"an image job killed by a signal reports why ({crashed})"
     )
-    cam_src = "\n".join(
-        (APP / f).read_text() for f in ("camera.py", "photos.py", "video.py", "tools.py")
+    # tools.run is the only way a helper is started: anything else that calls
+    # subprocess.run directly is a quick query (camera controls, systemctl)
+    direct = []
+    for f in ("camera.py", "photos.py", "video.py", "routes_camera.py", "monitor.py"):
+        tree = ast.parse((APP / f).read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and ast.unparse(node.func) == "subprocess.run":
+                first = ast.unparse(node.args[0])
+                if not first.startswith(("['v4l2-ctl', '-d', dev", "['systemctl'")):
+                    direct.append(f"{f}:{node.lineno}")
+    assert not direct, (
+        f"captures, thumbnails, the render and image jobs all start through tools.run {direct}"
     )
-    sq = squash(cam_src)
-    runs = [sq[m.end() : m.end() + 40] for m in re.finditer(r"subprocess\.run\(", sq)]
-    wrapped = ("oom_first(", "tools.oom_first(", '["v4l2-ctl","-d",dev')
-    unwrapped = [r for r in runs if not r.startswith(wrapped)]
-    heavy = sq.count("oom_first(cmd)") + sq.count('oom_first(["ffmpeg"')
-    rsrc = "\n".join(
-        (APP / f).read_text()
-        for f in (
-            "routes.py",
-            "routes_camera.py",
-            "routes_garden.py",
-            "routes_climate.py",
-            "routes_data.py",
-        )
-    )
-    assert (
-        not unwrapped
-        and heavy >= 5
-        and code_has(rsrc, "tools.oom_first([sys.executable, str(helper)", "tools.oom_first(cmd)")
-    ), (
-        "captures, thumbnails, the render, canopy analysis, previews and corner detection all run OOM-first"
+    seen.clear()
+    camera_mod.subprocess.run = fake_run
+    try:
+        res = tools.run(["ffmpeg", "-version"], "the render", timeout=5)
+    finally:
+        camera_mod.subprocess.run = real_run
+    assert seen[0][:2] == ["sh", "-c"] and "out of memory" in res.error and not res.ok, (
+        f"tools.run starts every helper OOM-first and names a memory kill ({res.error})"
     )
     boot = (APP / "deploy" / "boot-config.txt").read_text()
     setup = (APP / "scripts" / "setup.sh").read_text()
@@ -1077,12 +1075,12 @@ def test_capture_scratch():
         Path(path).write_bytes(jpeg)
         return True, None
 
-    def fake_imgtool(args, timeout=120):
+    def fake_imgtool(args, what="", timeout=120):
         # both cameras' frames are on disk here; the stitched photo is not yet
         seen["listed"] = sorted(p.name for p in tl.glob("*.jpg"))
         seen["latest"] = photos_mod.photo_inventory()[1]
         Path(args[3]).write_bytes(jpeg)
-        return types.SimpleNamespace(returncode=0, stderr=b"", stdout=b"")
+        return tools.Result(0, b"", b"", "")
 
     real = camera_mod._usb_capture, tools.imgtool
     camera_mod._usb_capture, tools.imgtool = fake_capture, fake_imgtool

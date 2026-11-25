@@ -297,11 +297,7 @@ def test_memory_and_status():
         )
     }
     no_import = [f for f, t in srcs.items() if "import cv2" in t or "import numpy" in t]
-    assert (
-        not no_import
-        and "def imgtool(args, timeout=120):" in (APP / "tools.py").read_text()
-        and (APP / "imgtool.py").exists()
-    ), (
+    assert not no_import and tools.IMGTOOL.name == "imgtool.py" and (APP / "imgtool.py").exists(), (
         f"no controller module imports OpenCV or NumPy; image work runs in imgtool.py "
         f"(importers: {no_import or 'none'}; already loaded here by the test harness: {loaded})"
     )

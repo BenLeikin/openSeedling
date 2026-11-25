@@ -2,7 +2,6 @@
 
 import json
 import os
-import subprocess
 import threading
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -60,8 +59,8 @@ def _flatten_frames_to(dest, frames, cfg):
         )
     finally:
         listfile.unlink(missing_ok=True)
-    if r.returncode != 0:
-        log.error(f"flattening frames failed ({tools._imgtool_err(r)})")
+    if not r.ok:
+        log.error(f"flattening frames failed ({r.error})")
         return None
     return dest
 
@@ -112,53 +111,51 @@ def render_worker():
         # thread, and no +faststart here (its second pass rewrites the whole
         # file in memory). Faststart is added by a stream-copy remux afterwards.
         fps = max(1.0, float(cfg_r.get("video_fps", 8)))
-        r = subprocess.run(
-            tools.oom_first(
-                [
-                    "ffmpeg",
-                    "-loglevel",
-                    "error",
-                    "-y",
-                    "-framerate",
-                    f"{fps:g}",
-                    "-pattern_type",
-                    "glob",
-                    "-i",
-                    src_glob,
-                    # JPEG stills are full-range (yuvj420p/pc); browsers render that as
-                    # black. Remap to limited-range yuv420p and tag it. Height is forced
-                    # to a multiple of 16 (-16, not -2): a non-mod16 height makes the
-                    # encoder signal a crop that some hardware decoders render as black.
-                    "-vf",
-                    vf,
-                    # crf 20: ultrafast turns off adaptive quantization and
-                    # deblocking, and a higher crf smears fine leaf and soil
-                    # texture. crf changes file size, not encode time or memory.
-                    "-c:v",
-                    "libx264",
-                    "-preset",
-                    "ultrafast",
-                    "-crf",
-                    "20",
-                    "-threads",
-                    "1",
-                    "-pix_fmt",
-                    "yuv420p",
-                    "-color_range",
-                    "tv",
-                    # Fully specify the colour metadata (BT.601, matching the JPEG
-                    # source). An unspecified matrix makes some hardware decoders
-                    # (VLC's, browsers') render the video as black.
-                    "-colorspace",
-                    "smpte170m",
-                    "-color_primaries",
-                    "smpte170m",
-                    "-color_trc",
-                    "smpte170m",
-                    str(tmp),
-                ]
-            ),
-            capture_output=True,
+        r = tools.run(
+            [
+                "ffmpeg",
+                "-loglevel",
+                "error",
+                "-y",
+                "-framerate",
+                f"{fps:g}",
+                "-pattern_type",
+                "glob",
+                "-i",
+                src_glob,
+                # JPEG stills are full-range (yuvj420p/pc); browsers render that as
+                # black. Remap to limited-range yuv420p and tag it. Height is forced
+                # to a multiple of 16 (-16, not -2): a non-mod16 height makes the
+                # encoder signal a crop that some hardware decoders render as black.
+                "-vf",
+                vf,
+                # crf 20: ultrafast turns off adaptive quantization and
+                # deblocking, and a higher crf smears fine leaf and soil
+                # texture. crf changes file size, not encode time or memory.
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-crf",
+                "20",
+                "-threads",
+                "1",
+                "-pix_fmt",
+                "yuv420p",
+                "-color_range",
+                "tv",
+                # Fully specify the colour metadata (BT.601, matching the JPEG
+                # source). An unspecified matrix makes some hardware decoders
+                # (VLC's, browsers') render the video as black.
+                "-colorspace",
+                "smpte170m",
+                "-color_primaries",
+                "smpte170m",
+                "-color_trc",
+                "smpte170m",
+                str(tmp),
+            ],
+            "the render",
             timeout=3600,
         )
         if r.returncode == 0 and tmp.exists():
@@ -167,23 +164,21 @@ def render_worker():
             # rename: a download running during the remux keeps reading the
             # old file.
             part = VIDEO_PATH.with_name("timelapse.part.mp4")
-            r2 = subprocess.run(
-                tools.oom_first(
-                    [
-                        "ffmpeg",
-                        "-loglevel",
-                        "error",
-                        "-y",
-                        "-i",
-                        str(tmp),
-                        "-c",
-                        "copy",
-                        "-movflags",
-                        "+faststart",
-                        str(part),
-                    ]
-                ),
-                capture_output=True,
+            r2 = tools.run(
+                [
+                    "ffmpeg",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-i",
+                    str(tmp),
+                    "-c",
+                    "copy",
+                    "-movflags",
+                    "+faststart",
+                    str(part),
+                ],
+                "the video remux",
                 timeout=600,
             )
             tmp.unlink(missing_ok=True)
@@ -206,9 +201,8 @@ def render_worker():
             except Exception:
                 pass
         else:
-            err = r.stderr.decode(errors="replace")[-200:]
             with render_lock:
-                render.update(state="error", elapsed=round(dt, 1), msg=err or "ffmpeg failed")
+                render.update(state="error", elapsed=round(dt, 1), msg=r.error or "ffmpeg failed")
     except Exception as e:
         with render_lock:
             render.update(state="error", elapsed=round(_t.monotonic() - t0, 1), msg=str(e))
