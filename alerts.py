@@ -526,31 +526,26 @@ def check_all(snapshot, cfg, unit_temp="F"):
                     )
                 )
 
-    # --- reservoir / fill failure, surfaced by the caller ---
-    if snapshot.get("_fill_failed"):
-        act = evaluate("fill_failed", True, now, hold=0)
+    # --- fills that did not reach the float, one rule per tray ---
+    failed = snapshot.get("_fill_failed") or {}
+    _state.pop("fill_failed", None)  # the single rule from before failures were per tray
+    for tray, why in sorted(failed.items()):
+        act = evaluate(f"fill_failed:{tray}", True, now, hold=0)
         if act in ("fire", "remind"):
-            out.append(
-                (
-                    act,
-                    "fill_failed",
-                    "Watering did not complete",
-                    str(snapshot["_fill_failed"]),
-                    "error",
+            out.append((act, f"fill_failed:{tray}", "Watering did not complete", str(why), "error"))
+    for tray in [k[12:] for k in list(_state) if k.startswith("fill_failed:")]:
+        if tray not in failed:
+            act = evaluate(f"fill_failed:{tray}", False, now, hold=0)
+            if act == "clear":
+                out.append(
+                    (
+                        act,
+                        f"fill_failed:{tray}",
+                        "Watering completed normally",
+                        f"Tray {tray}'s fill reached the float again.",
+                        "good",
+                    )
                 )
-            )
-    else:
-        act = evaluate("fill_failed", False, now, hold=0)
-        if act == "clear":
-            out.append(
-                (
-                    act,
-                    "fill_failed",
-                    "Watering completed normally",
-                    "A fill reached the float again.",
-                    "good",
-                )
-            )
 
     # --- camera health, when the camera is in use ---
     cam_fails = snapshot.get("_camera_fails") or 0

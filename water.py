@@ -1,6 +1,7 @@
 """Watering: pump runs and fills, the reservoir, probe filtering and
 moisture, auto-water decisions, post-fill checks and pump persistence."""
 
+import re
 import time
 
 from applog import log
@@ -12,10 +13,10 @@ import config
 import hardware
 import setups as setups_mod
 
-# a fill that ran to its cap without the float tripping: the message feeds the
-# alert state machine (fires on the next sample tick, reminds while unresolved)
-# and is cleared by the next successful fill
-fill_failure = {"msg": ""}
+# Trays whose last fill did not reach the float, each with the message for its
+# alert (fires on the next sample tick, reminds while unresolved). A tray's
+# entry is cleared by its own next successful fill.
+fill_failures = {}
 
 # What a restart must not forget: last_run drives the auto-water cooldown,
 # today_seconds the daily pump limit, and reserved is the time a run that was
@@ -31,7 +32,7 @@ def save_persistent_state():
             t: {k: st.get(k) for k in PERSIST_PUMP_KEYS} for t, st in hardware.pump_state.items()
         }
         db.kv_set("pump_state", data)
-        db.kv_set("fill_failure", {"msg": fill_failure.get("msg", "")})
+        db.kv_set("fill_failure", {"trays": dict(fill_failures)})
     except Exception as e:
         log.error(f"could not save pump state: {e}")
 
@@ -72,7 +73,13 @@ def restore_persistent_state():
             st["today_seconds"] = 0.0
     ff = db.kv_get("fill_failure")
     if isinstance(ff, dict):
-        fill_failure["msg"] = str(ff.get("msg") or "")
+        fill_failures.clear()
+        if isinstance(ff.get("trays"), dict):
+            fill_failures.update({str(t): str(m) for t, m in ff["trays"].items() if m})
+        elif ff.get("msg"):
+            # saved before failures were kept per tray; the message names its tray
+            named = re.match(r"Tray (\w+) ", str(ff["msg"]))
+            fill_failures[named.group(1) if named else "1"] = str(ff["msg"])
     restored = {t: round(st["today_seconds"], 1) for t, st in hardware.pump_state.items()}
     log.info(f"restored pump state: today {restored}s")
 
@@ -301,7 +308,7 @@ def run_pump_until_full(tray, reason="fill", force=False):
         pass
     status_mod.publish("pump")
     if tripped:
-        fill_failure["msg"] = ""  # a good fill resolves the alert
+        fill_failures.pop(tray, None)  # a good fill resolves this tray's alert
         save_persistent_state()
         schedule_postfill(tray, tripped=True)  # judge the probe once water wicks
         return True, f"filled in {elapsed:.1f}s"
@@ -313,7 +320,7 @@ def run_pump_until_full(tray, reason="fill", force=False):
     if stop_why == "daily_cap":
         save_persistent_state()
         return False, f"stopped at {elapsed:.1f}s, daily pump limit reached"
-    fill_failure["msg"] = {
+    msg = {
         "reservoir": f"Tray {tray} fill stopped at {elapsed:.1f}s: the "
         "reservoir ran empty. Refill it before watering again.",
         "float_lost": f"Tray {tray} fill stopped at {elapsed:.1f}s: the float "
@@ -331,11 +338,12 @@ def run_pump_until_full(tray, reason="fill", force=False):
             left = [t for t in armed_trays(config.settings) if t != tray]
             config.settings["auto_water_trays"] = left
             config.settings["auto_water"] = bool(left)
-            fill_failure["msg"] += f" Auto-watering has been switched off for tray {tray}."
+            msg += f" Auto-watering has been switched off for tray {tray}."
             try:
                 config.save_config()
             except Exception as e:
                 log.warning(f"auto_water disable not persisted ({e})")
+    fill_failures[tray] = msg
     save_persistent_state()
     return False, {
         "reservoir": f"stopped at {elapsed:.1f}s, reservoir empty",

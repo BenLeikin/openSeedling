@@ -652,7 +652,7 @@ def _watering():
         )
     hardware.pump_state["1"]["today_seconds"] = 99.5
     floats["1"].is_pressed = True
-    water.fill_failure["msg"] = ""
+    water.fill_failures.clear()
     pumped = []
     real = (
         water.reservoir_state,
@@ -670,7 +670,7 @@ def _watering():
             not ok
             and "daily pump limit" in why
             and "daily pump limit" in detail
-            and not water.fill_failure["msg"]
+            and not water.fill_failures
             and water.armed_trays(config.settings) == ["1", "2"],
             f"a fill cut short by the daily limit is not a failed fill: no alert, "
             f"and the tray stays armed ({detail})",
@@ -704,6 +704,38 @@ def _watering():
         ) = real
         with config.settings_lock:
             config.settings.update(saved)
+
+    # failed fills are kept per tray
+    import alerts
+
+    ok, why, detail, _ = fill(lambda res: res.update(reservoir="empty"))
+    after_fail = dict(water.fill_failures)
+    water.fill_failures["2"] = "Tray 2 fill ran to the 60.0s cap without the float tripping."
+    ok, why, detail, _ = fill(lambda res: setattr(floats["1"], "is_pressed", False))
+    check(
+        list(after_fail) == ["1"] and ok and list(water.fill_failures) == ["2"],
+        "a good fill clears that tray's failure and leaves another tray's standing",
+    )
+    both = {"1": "tray 1 failed", "2": "tray 2 failed"}
+    fired = sorted(a[1] for a in alerts.check_all({"_fill_failed": both}, {}) if a[0] == "fire")
+    later = [
+        (a[0], a[1])
+        for a in alerts.check_all({"_fill_failed": {"1": "tray 1 failed"}}, {})
+        if a[1].startswith("fill_failed")
+    ]
+    alerts.check_all({"_fill_failed": {}}, {})
+    check(
+        fired == ["fill_failed:1", "fill_failed:2"] and later == [("clear", "fill_failed:2")],
+        f"each tray's failed fill is its own alert, resolved on its own ({later})",
+    )
+    db.kv_set("fill_failure", {"msg": "Tray 2 fill stopped at 3.0s: the reservoir ran empty."})
+    water.restore_persistent_state()
+    check(
+        list(water.fill_failures) == ["2"],
+        "a failure saved before they were kept per tray is restored to the tray it names",
+    )
+    water.fill_failures.clear()
+    water.save_persistent_state()
 
     # a run cut off by a restart: what was saved as the pump started is enough
     for st in hardware.pump_state.values():
@@ -1867,7 +1899,7 @@ def _shutdown():
     """Last: sets the shutdown flag for good, the way SIGTERM does."""
     with config.settings_lock:
         config.settings.update(fill_max_seconds=5, auto_water=True)
-    water.fill_failure["msg"] = ""
+    water.fill_failures.clear()
     for st in hardware.pump_state.values():
         st.update(running=False, today_seconds=0, day=config._today_str())
     fl = sensors._floats()
@@ -1912,7 +1944,7 @@ def _shutdown():
     )
     check(not hardware._pumps["1"].value, "pump is off after shutdown")
     check(
-        config.settings.get("auto_water") and not water.fill_failure["msg"],
+        config.settings.get("auto_water") and not water.fill_failures,
         "a fill cut short by shutdown is not a failure: auto-water stays armed",
     )
     ok, why = water.run_pump("1", 3, "manual")

@@ -956,7 +956,7 @@ def run_alerts(readings):
         with config.state_lock:
             snap["_camera_fails"] = camera_mod.camera["fails"] if cfg.get("camera_enabled") else 0
 
-        snap["_fill_failed"] = water.fill_failure["msg"]
+        snap["_fill_failed"] = dict(water.fill_failures)
         snap["_reservoir"] = water.reservoir_state()
         # a plug that stops responding means the light is stuck wherever it
         # was; the sustain window absorbs a wifi blip, repeated failures do not
