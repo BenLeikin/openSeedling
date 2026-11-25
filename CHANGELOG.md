@@ -46,6 +46,7 @@ the 4-17 baseline. The installer commits each one with the heading below.
 ### Security
 - Wrong passwords back off per client address (1 s doubling to 60 s) and a client that has to wait is refused with 429 instead of being queued. Before, one delay was shared by everyone and held a server thread, so a client guessing passwords could keep the owner from signing in and stall the dashboard.
 - A session is tied to the password it signed in with: changing the password signs every browser out. Every browser has to sign in once after this update.
+- The service runs sandboxed (`deploy/growlight.service`): it cannot use sudo, the filesystem outside the app folder is read-only, home folders are hidden from it, and its files are created readable by its user only. `deploy.sh` puts the previous unit back when it rolls back.
 - With a password set, full-size timelapse frames (`/frame/<name>`) need a login, and signed-out viewers may hold 2 of the 6 live-update connections.
 - A new photo is cropped or flattened once however many dashboards ask for it at the same moment; each request used to start its own image job.
 - Request bodies over 1 MB are refused.

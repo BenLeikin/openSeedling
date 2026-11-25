@@ -12,7 +12,8 @@
 #   4. run scripts/setup.sh --defaults if deploy/ or the requirements changed
 #   5. restart growlight and wait for /api/status and no tracebacks
 # If 3 or 5 fails, the Pi goes back to the commit it was on and restarts.
-# Changes setup.sh made to the box (packages, boot config) stay.
+# Packages and boot settings setup.sh changed stay; the service unit goes back
+# with the code.
 #
 # Options:
 #   --host HOST  ssh host of the Pi (default $GROWLIGHT_HOST or grow-server)
@@ -112,6 +113,10 @@ rollback() {
   echo "ERROR: $1" >&2
   echo "Going back to $(git log --oneline -1 "$OLD")" >&2
   git reset -q --keep "$OLD" || { echo "reset failed; fix by hand: git reset --keep $OLD" >&2; exit 1; }
+  if [[ "${APPLIED:-0}" -eq 1 ]]; then
+    # the service unit on the box came from the new version: put the old one back
+    bash scripts/setup.sh --defaults > /dev/null 2>&1 || echo "    could not re-apply the previous box config" >&2
+  fi
   sudo systemctl restart "$SERVICE" || true
   if healthy 120; then echo "Back on the previous version and running." >&2
   else echo "Rolled back, but the service is not answering: journalctl -u $SERVICE -b" >&2; fi
@@ -146,6 +151,7 @@ if [[ $BOX -eq 1 ]]; then
   step "Applying box config (scripts/setup.sh --defaults)"
   LOG="$(mktemp)"; rc=0
   bash scripts/setup.sh --defaults > "$LOG" 2>&1 || rc=$?
+  APPLIED=1
   grep -E "DRIFT|updated|added|installed|created|WARNING" "$LOG" | sed 's/^/  /' || true
   grep -q "needs a reboot\|REBOOT REQUIRED" "$LOG" && REBOOT=1
   if [[ "$rc" -ne 0 ]]; then

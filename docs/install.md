@@ -88,6 +88,13 @@ sudo systemctl restart growlight
 journalctl -u growlight -f
 ```
 
+The unit sandboxes the service: it cannot use sudo, everything outside the app
+folder is read-only, home folders other than the app folder are hidden, and
+the files it creates are readable by its user only. It keeps the network and
+the Pi's devices (GPIO, I2C, cameras, PWM and 1-Wire). If you add something
+that writes elsewhere, list the folder under `ReadWritePaths=` in
+`deploy/growlight.service` and run `scripts/setup.sh` again.
+
 ## Deploy from a development checkout
 
 When the Pi's `~/growlight` is a git checkout of the same remote, deploy from

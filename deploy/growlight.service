@@ -11,5 +11,36 @@ Restart=always
 RestartSec=5
 User=@RUN_USER@
 
+# What the service may reach: its own folder, the network, and the Pi's
+# devices (GPIO, I2C, the cameras, and PWM and 1-Wire under /sys).
+#
+# No setuid program can raise its rights, sudo included, whatever @RUN_USER@
+# may do at a shell.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+RestrictSUIDSGID=yes
+# Everything outside the app folder is read-only. /dev, /proc and /sys are not
+# covered by this. PrivateDevices and ProtectKernelTunables are left off on
+# purpose: the first hides the GPIO and camera devices, the second makes the
+# PWM files under /sys read-only.
+ProtectSystem=strict
+ReadWritePaths=@APP_DIR@
+# ProtectSystem leaves /home alone. Home folders are empty to the service
+# apart from the app folder, so it can neither read SSH keys nor add one.
+ProtectHome=tmpfs
+BindPaths=@APP_DIR@
+PrivateTmp=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+# config.json, the database and the photos are readable by @RUN_USER@ only
+UMask=0077
+
 [Install]
 WantedBy=multi-user.target
