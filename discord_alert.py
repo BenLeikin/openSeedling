@@ -24,7 +24,7 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-from applog import log  # levelled logging; see applog.py
+from applog import log
 
 CONFIG_PATH = Path(__file__).with_name("config.json")
 WEBHOOK_FILE = Path(__file__).with_name(".discord_webhook")

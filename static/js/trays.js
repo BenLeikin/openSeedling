@@ -1,8 +1,4 @@
 // openSeedling dashboard: The planting map and the planting history.
-// An ES module: what it uses from the others is imported at the top, and what
-// it offers is exported. Another module cannot assign one of its variables
-// directly; it calls the set_<name>() exported at the bottom. Code that runs
-// at page load is in start(), which main.js calls in a fixed order.
 // ---- planting map: two trays, editable seed / equipment / sow date ----
 import { curSetup, setupsList, trayInSetup } from './setups.js';
 import { canEdit } from './photos.js';

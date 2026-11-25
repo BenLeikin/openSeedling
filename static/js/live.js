@@ -1,8 +1,4 @@
 // openSeedling dashboard: Live updates: the event stream, polling fallback, and the light curve.
-// An ES module: what it uses from the others is imported at the top, and what
-// it offers is exported. Another module cannot assign one of its variables
-// directly; it calls the set_<name>() exported at the bottom. Code that runs
-// at page load is in start(), which main.js calls in a fixed order.
 // ---- live updates ----
 // EventSource pushes a status the moment something changes. The poll stays,
 // slowed right down: a stream that dies quietly would otherwise freeze the
@@ -209,7 +205,6 @@ export async function startSweep() {
 export let sweepRunning = false,
   lastCurve = null;
 
-// setters: other modules cannot assign an imported binding
 export function set_lastCurve(v) {
   lastCurve = v;
   return v;
@@ -219,7 +214,6 @@ export function set_sweepRunning(v) {
   return v;
 }
 
-// Runs once at page load; main.js calls each module's start() in a fixed order.
 export function start() {
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {

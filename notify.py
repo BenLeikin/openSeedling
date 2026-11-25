@@ -21,7 +21,7 @@ import json
 import urllib.request
 from pathlib import Path
 
-from applog import log  # levelled logging; see applog.py
+from applog import log
 
 CONFIG_PATH = Path(__file__).with_name("config.json")
 

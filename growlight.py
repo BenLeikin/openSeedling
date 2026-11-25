@@ -1,21 +1,10 @@
 #!/usr/bin/env python3
-"""
-Grow light controller + dashboard + timelapse for Raspberry Pi.
+"""openSeedling controller: the entry point.
 
-Drives a logic-level MOSFET on GPIO18 via the kernel's hardware PWM,
-following local sunrise and sunset with smooth fade-in / fade-out ramps.
-Serves a dashboard on http://<pi-ip>:5000 with live-editable settings.
-Optionally captures timelapse photos at a fixed interval during the
-photoperiod, holding the light at a fixed brightness for each shot so
-every frame is identically exposed. Photos land in ./timelapse/.
-
-Requires (handled by setup.sh):
-  - 'dtoverlay=pwm,pin=18,func=2' in /boot/firmware/config.txt, then reboot
-  - rpicam-apps (apt) for the camera
-  - pip install astral rpi-hardware-pwm flask
-
-This file is the entry point. The code lives in config, hardware, light,
-setups, water, monitor, camera, status and routes; see the README.
+Starts the control loops (light, camera, sensors, watering, heat mat, daily
+report) as threads and serves the dashboard on port 5000, or the port in
+GROWLIGHT_HTTP_PORT. scripts/setup.sh installs what this needs and the
+systemd unit that runs it.
 """
 
 import signal
@@ -23,10 +12,9 @@ import threading
 
 from applog import log
 
-# The app is split into modules, each importing the ones below it. Importing
-# them here, in this order, is what starts the app: config loads settings,
-# hardware claims the pins, light starts the dither thread, status arms the
-# switch watchers, routes builds the Flask app.
+# Import order matters: each module sets itself up when imported. config loads
+# the settings, hardware claims the pins, light starts the dither thread,
+# status arms the switch watchers, routes builds the Flask app.
 import config
 import hardware
 import light as light_mod
@@ -51,14 +39,8 @@ if __name__ == "__main__":
     threading.Thread(target=monitor.report_loop, daemon=True).start()
     threading.Thread(target=heat.heat_loop, daemon=True, name="heat").start()
     log.info(f"Dashboard at http://0.0.0.0:{config.HTTP_PORT}")
-    # Waitress rather than Flask's development server: it is a real WSGI server,
-    # it stops the "do not use in production" warning filling the journal, and
-    # its worker threads can hold long-lived connections, which the dev server
-    # handles badly (that is what blocked server-sent events).
-    #
-    # Single process on purpose. The loops above own the PWM, the pumps and the
-    # I2C bus; a second worker process would mean two controllers driving the
-    # same hardware, so never run this under multiple workers.
+    # One process only: the loops above own the PWM, the pumps and the I2C bus,
+    # and a second worker would be a second controller on the same hardware.
     try:
         from waitress import serve
 

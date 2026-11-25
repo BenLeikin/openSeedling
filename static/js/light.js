@@ -1,8 +1,4 @@
 // openSeedling dashboard: The status object, the schedule curve and the lighting-stage graphics.
-// An ES module: what it uses from the others is imported at the top, and what
-// it offers is exported. Another module cannot assign one of its variables
-// directly; it calls the set_<name>() exported at the bottom. Code that runs
-// at page load is in start(), which main.js calls in a fixed order.
 import { ctlTarget } from './setups.js';
 import { aligning, canEdit, cropping, parseRoi } from './photos.js';
 import { camHealth, capMin, capOn, lightBackend, set_camHealth } from './charts.js';
@@ -634,7 +630,6 @@ export async function capturePhoto() {
   }
 }
 
-// setters: other modules cannot assign an imported binding
 export function set_S(v) {
   S = v;
   return v;

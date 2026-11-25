@@ -1,8 +1,4 @@
 // openSeedling dashboard: Grow setups (tabs, light view, the Setups editor) and the USB camera's modes.
-// An ES module: what it uses from the others is imported at the top, and what
-// it offers is exported. Another module cannot assign one of its variables
-// directly; it calls the set_<name>() exported at the bottom. Code that runs
-// at page load is in start(), which main.js calls in a fixed order.
 // ---- grow setups: separate areas, each with its own light and sensors ----
 // The server sends every setup's measured day and verdict in `setups`; the tab
 // chosen here decides which one the Day and Plan cards show and which sensors
@@ -364,13 +360,11 @@ export async function loadCameraModes() {
   }
 }
 
-// setters: other modules cannot assign an imported binding
 export function set_setupDirty(v) {
   setupDirty = v;
   return v;
 }
 
-// Runs once at page load; main.js calls each module's start() in a fixed order.
 export function start() {
   try {
     selSetup = localStorage.getItem('setup');

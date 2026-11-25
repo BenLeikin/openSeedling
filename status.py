@@ -478,7 +478,5 @@ def status_payload(authed=None):
     )
 
 
-# Imported last: these modules import this one, and their import-time
-# code runs only after everything above is defined. Their names are
-# used inside functions, at call time, always as module.name.
+# imported at the bottom: these modules import this one
 import routes

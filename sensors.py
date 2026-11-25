@@ -34,7 +34,7 @@ import statistics
 import threading
 import time
 
-from applog import log  # levelled logging; see applog.py
+from applog import log
 
 # One lock for every I2C read. The sample loop, the calibration endpoints, and
 # the light sweep all touch these devices from different threads. Blinka only

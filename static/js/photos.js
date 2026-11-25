@@ -1,8 +1,4 @@
 // openSeedling dashboard: The view crop and alignment guides, the Settings form's fill and save (driven by config.FORM), the timelapse player, the enlarged view, and sign-in.
-// An ES module: what it uses from the others is imported at the top, and what
-// it offers is exported. Another module cannot assign one of its variables
-// directly; it calls the set_<name>() exported at the bottom. Code that runs
-// at page load is in start(), which main.js calls in a fixed order.
 // ---- view crop: drag a rectangle on the full photo ----
 // The crop is a view setting: stored photos stay full, and the snapshot,
 // scrubber, video and AI report are cut to it. Only used when photos are
@@ -653,13 +649,11 @@ export function initAuth() {
   });
 }
 
-// setters: other modules cannot assign an imported binding
 export function set_playerFps(v) {
   playerFps = v;
   return v;
 }
 
-// Runs once at page load; main.js calls each module's start() in a fixed order.
 export function start() {
   {
     const svg = document.getElementById('guidesvg');

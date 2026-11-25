@@ -1,8 +1,4 @@
 // openSeedling dashboard: The cell grid overlay, the Settings form's submit handler, and the AI garden report.
-// An ES module: what it uses from the others is imported at the top, and what
-// it offers is exported. Another module cannot assign one of its variables
-// directly; it calls the set_<name>() exported at the bottom. Code that runs
-// at page load is in start(), which main.js calls in a fixed order.
 // ---------------- cell grid overlay ----------------
 import { S, capturePhoto, render, renderPhoto, set_S } from './light.js';
 import { applySetup, set_setupDirty, setupDirty, setupDraft, trayDraft } from './setups.js';
@@ -615,7 +611,6 @@ export function initReport() {
   fetchReport();
 }
 
-// Runs once at page load; main.js calls each module's start() in a fixed order.
 export function start() {
   document.getElementById('cfgform').addEventListener('submit', async ev => {
     ev.preventDefault();

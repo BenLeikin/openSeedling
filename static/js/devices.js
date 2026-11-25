@@ -1,8 +1,4 @@
 // openSeedling dashboard: The smart plug, backup, theme, thunderstorm, light calibration and the second light.
-// An ES module: what it uses from the others is imported at the top, and what
-// it offers is exported. Another module cannot assign one of its variables
-// directly; it calls the set_<name>() exported at the bottom. Code that runs
-// at page load is in start(), which main.js calls in a fixed order.
 // ---- smart plug setup ----
 // Scan, pick, test. The password field is never populated from the server (it
 // is redacted like the dashboard hash), so a blank one means "leave it alone"
