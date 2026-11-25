@@ -7,20 +7,16 @@ import os
 import threading
 import time
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
 from astral import LocationInfo
 from astral.sun import sun
 
 from applog import log
 import db
-import readings as readings_mod
-import events
 import sensors
 
 import config
 import hardware
 
-LOOP_SECONDS = 30
 
 # light response sweep: brightness % -> measured lux, so the dashboard can show
 # what the driver actually delivers (PWM dimming is rarely linear)
@@ -517,14 +513,6 @@ def light2_cfg(cfg):
     )
 
 
-def lux_key_for_light(light, cfg=None):
-    """The light sensor of the setup on that light ("main" or "second")."""
-    for st in setups_mod.setups(cfg):
-        if st.get("light") == light and st.get("lux"):
-            return st["lux"]
-    return "lux" if light == "main" else None
-
-
 def linear_table(cfg):
     """The calibration table if it is on, current and well formed, else None."""
     if not cfg.get("light_linear_on"):
@@ -950,90 +938,6 @@ def _storm(seconds, style):
         db.log_event("light", "lightning finished")
 
 
-def control_loop():
-    logged = None
-    last_err = None
-    while True:
-        try:
-            with config.settings_lock:
-                cfg = dict(config.settings)
-            tz = ZoneInfo(cfg["timezone"])
-            now = datetime.now(tz)
-            sunrise, sunset, on_time, off_time = window_at(cfg, now)
-            if (on_time, off_time) != logged:
-                logged = (on_time, off_time)
-                log.info(
-                    f"light window: on {on_time:%a %H:%M}, off {off_time:%a %H:%M} "
-                    f"({cfg['latitude']}, {cfg['longitude']}, {cfg['timezone']})"
-                )
-            # the second light first, so the write below carries its new level
-            if light2_fixture(cfg):
-                lv, why = light2_level(cfg, now)
-                light2_state.update(level=round(lv, 2), why=why)
-            else:
-                light2_state.update(
-                    level=0.0, why="off" if not cfg.get("light2_on") else "needs both PWM channels"
-                )
-            b = brightness_for(cfg, now, on_time, off_time)
-            ov = cfg.get("light_override", "auto")
-            if ov == "on":
-                b = max(0, min(100, int(cfg.get("manual_bright", cfg["max_bright"]))))
-            elif ov == "off":
-                b = 0
-            if holder() is None:
-                set_brightness(b)
-
-            mode = cfg.get("fan_mode", "auto")
-            if mode == "on":
-                hardware.set_fan(cfg.get("fan_speed", 100), "manual")
-            elif mode == "off":
-                hardware.set_fan(0, "manual")
-            else:
-                fon, foff = setups_mod.setup_window(
-                    cfg, setups_mod.setup_with(cfg, "fan") or {"light": "main"}, on_time, off_time
-                )
-                # filtered, so one bad humidity reading does not start the fan
-                rh, _ = readings_mod.reading_filtered("humidity")
-                want, why = hardware.fan_should_run(cfg, now, fon, foff, rh)
-                hardware.set_fan(cfg.get("fan_auto_speed", 70) if want else 0, why)
-            with config.state_lock:
-                l2_now = light2_state["level"]
-                was = config.state.get("brightness")
-                changed = (
-                    round(config.state.get("light2_level", -1), 1) != round(l2_now, 1)
-                    or was is None
-                    or round(was, 1) != round(b, 1)
-                    or config.state.get("override") != ov
-                    or config.state.get("on") != on_time
-                )
-                config.state.update(
-                    brightness=b,
-                    on=on_time,
-                    off=off_time,
-                    sunrise=sunrise,
-                    sunset=sunset,
-                    override=ov,
-                    light2_level=l2_now,
-                )
-            # only when something moved: this loop runs every 30 seconds and during
-            # a ramp every pass changes brightness, but a steady day should not
-            # push an identical status to every open browser twice a minute
-            if changed:
-                events.publish("light")
-        except Exception as e:
-            # One bad pass must not end light control for good: the thread
-            # dying leaves the dashboard up while the fixture stays wherever
-            # it was last set. Log it (once per distinct error, with the
-            # traceback) and try again next pass.
-            if str(e) != last_err:
-                log.exception(f"control_loop error: {e}")
-                last_err = str(e)
-        else:
-            last_err = None
-        config.wake.wait(timeout=LOOP_SECONDS)
-        config.wake.clear()
-
-
 def _curve_lux(pts, raw_pct):
     """Interpolate a raw [[pct, lux]] curve at a raw percent."""
     if not pts:
@@ -1050,13 +954,13 @@ def _curve_lux(pts, raw_pct):
     return pts[-1][1]
 
 
-def run_light_sweep(step=5, settle=2.0, linearize=False, target="main"):
-    """Step the light 0..100% and record lux at each stop, to chart the
-    fixture's real response. Runs in a thread and holds the light; whatever
-    happens, the previous brightness is restored and the hold given up."""
+def run_light_sweep(step=5, settle=2.0, linearize=False, target="main", key="lux"):
+    """Step the light 0..100% and record lux from sensor `key` at each stop,
+    to chart the fixture's real response. Runs in a thread and holds the
+    light; whatever happens, the previous brightness is restored and the hold
+    given up."""
     points = []
     before = 0
-    key = lux_key_for_light(target) or "lux"
     # each stop is the settle time plus a sensor read and a write to the outputs
     if not claim(HOLD_SWEEP, (100 // step + 2) * (settle + 5) + 60):
         with sweep_lock:
@@ -1171,6 +1075,3 @@ def _park_channels():
 
 hardware.at_shutdown(_dark, "off")
 hardware.at_shutdown(_park_channels, "end")
-
-# imported at the bottom: these modules import this one
-import setups as setups_mod

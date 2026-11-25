@@ -106,7 +106,7 @@ def api_light_sweep():
             ok=False,
             error="the second light is not available (turned off, or no second PWM channel)",
         ), 200
-    key = light_mod.lux_key_for_light(target)
+    key = setups_mod.lux_key_for_light(target)
     if not key or sensors.read_all().get(key) is None:
         return jsonify(
             ok=False,
@@ -141,7 +141,9 @@ def api_light_sweep():
             l2_raw=0.0,
         )
     threading.Thread(
-        target=light_mod.run_light_sweep, args=(step, settle, linearize, target), daemon=True
+        target=light_mod.run_light_sweep,
+        args=(step, settle, linearize, target, key),
+        daemon=True,
     ).start()
     est = int((101 / step + 1) * (settle + 0.3))
     return jsonify(ok=True, started=True, estimate_seconds=est)

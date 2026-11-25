@@ -12,18 +12,16 @@ import threading
 
 from applog import log
 
-# Import order matters: each module sets itself up when imported. config loads
-# the settings, hardware claims the pins, light starts the dither thread,
-# status arms the switch watchers, routes builds the Flask app.
+# Importing these starts the app: each module sets itself up when imported.
+# config loads the settings, hardware claims the pins, light starts its dither
+# thread, status arms the switch watchers, routes builds the Flask app.
 import config
 import hardware
-import light as light_mod
-import setups as setups_mod  # noqa: F401
+import control
 import water
 import monitor
 import heat
 import camera as camera_mod
-import status as status_mod  # noqa: F401
 import routes
 
 signal.signal(signal.SIGINT, hardware.cleanup)
@@ -31,7 +29,7 @@ signal.signal(signal.SIGTERM, hardware.cleanup)
 
 if __name__ == "__main__":
     water.restore_persistent_state()  # before anything can water
-    threading.Thread(target=light_mod.control_loop, daemon=True).start()
+    threading.Thread(target=control.control_loop, daemon=True).start()
     threading.Thread(target=camera_mod.capture_loop, daemon=True).start()
     threading.Thread(target=monitor.sample_loop, daemon=True).start()
     threading.Thread(target=monitor.live_loop, daemon=True).start()

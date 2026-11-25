@@ -283,6 +283,14 @@ def light_options(cfg=None):
     return opts
 
 
+def lux_key_for_light(light, cfg=None):
+    """The light sensor of the setup on that light ("main" or "second")."""
+    for st in setups(cfg):
+        if st.get("light") == light and st.get("lux"):
+            return st["lux"]
+    return "lux" if light == "main" else None
+
+
 def light_label(value, cfg=None):
     for o in light_options(cfg):
         if o["value"] == value:

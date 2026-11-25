@@ -16,6 +16,7 @@ import readings as readings_mod
 
 import config
 import hardware
+import control
 import light as light_mod
 import setups as setups_mod
 import water
@@ -277,7 +278,7 @@ def status_payload(authed=None):
         },
         gpio=hardware.GPIO_PIN,
         freq=hardware.PWM_FREQ,
-        loop=light_mod.LOOP_SECONDS,
+        loop=control.LOOP_SECONDS,
         photo_count=count,
         latest_photo_time=latest_time.isoformat() if latest_time else None,
         camera={

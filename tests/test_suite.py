@@ -54,6 +54,7 @@ APP_MODULES = (
     "config.py",
     "hardware.py",
     "light.py",
+    "control.py",
     "setups.py",
     "water.py",
     "monitor.py",
@@ -355,6 +356,7 @@ import growlight  # noqa: E402  (imports every module, in order)
 import config  # noqa: E402
 import hardware  # noqa: E402
 import light as light_mod  # noqa: E402
+import control  # noqa: E402
 import setups as setups_mod  # noqa: E402
 import water  # noqa: E402
 import monitor  # noqa: E402
@@ -961,8 +963,8 @@ def _light_schedule():
         return real_sw(cfg_, day, tz_)
 
     light_mod.sun_window = flaky
-    light_mod.LOOP_SECONDS = 0.1
-    t = threading.Thread(target=light_mod.control_loop, daemon=True)
+    control.LOOP_SECONDS = 0.1
+    t = threading.Thread(target=control.control_loop, daemon=True)
     t.start()
     time.sleep(0.8)
     check(t.is_alive() and calls["n"] >= 2, "control loop survives an error and retries")
@@ -1737,10 +1739,20 @@ def _fan_camera_timing():
     want, _ = hardware.fan_should_run(
         dict(cfg, fan_humidity_on=0), now.replace(hour=21, minute=0), fon, foff
     )
-    gl = app_source()
+    fan_set = []
+    real_fan, real_rf = hardware.set_fan, readings_mod.reading_filtered
+    hardware.set_fan = lambda speed, why: fan_set.append((speed > 0, why))
+    readings_mod.reading_filtered = lambda key, snap=None: (None, None)
+    try:
+        # the control loop's fan step, at 21:00 and at noon, given the main light's window
+        fan_cfg = dict(cfg, fan_mode="auto", fan_humidity_on=0, fan_with_light=True)
+        control._fan(fan_cfg, now.replace(hour=21, minute=0), mon, moff)
+        control._fan(fan_cfg, now.replace(hour=12, minute=0), mon, moff)
+    finally:
+        hardware.set_fan, readings_mod.reading_filtered = real_fan, real_rf
     check(
-        want and code_has(gl, 'setups_mod.setup_window(cfg, setups_mod.setup_with(cfg, "fan")'),
-        "the fan runs on its setup's light hours (21:00 under a 20:00-02:00 panel)",
+        want and fan_set == [(True, "photoperiod"), (False, "idle")],
+        f"the fan runs on its setup's light hours (21:00 under a 20:00-02:00 panel) ({fan_set})",
     )
     st = {x["id"]: x for x in c.get("/api/status").get_json()["setups"]}
     check(
@@ -1867,7 +1879,9 @@ def _per_sensor_controls():
     sensors.read_all = sensors_fake
     light_mod.sweep_state.update(running=True, cancel=False, error="", target="second", l2_raw=0.0)
     try:
-        light_mod.run_light_sweep(step=50, settle=0.0, linearize=False, target="second")
+        light_mod.run_light_sweep(
+            step=50, settle=0.0, linearize=False, target="second", key="lux:2"
+        )
     finally:
         sensors.read_all = real_read
 
@@ -1879,7 +1893,9 @@ def _per_sensor_controls():
     light_mod.sweep_state.update(running=True, cancel=False, error="", target="second", l2_raw=0.0)
     config.save_config, sensors.read_all = no_disk, sensors_fake
     try:
-        light_mod.run_light_sweep(step=50, settle=0.0, linearize=False, target="second")
+        light_mod.run_light_sweep(
+            step=50, settle=0.0, linearize=False, target="second", key="lux:2"
+        )
     finally:
         config.save_config, sensors.read_all = real_save, real_read
     check(
@@ -2708,7 +2724,7 @@ def _canopy_stale():
     # The control loop started in "Light schedule" writes the real on and off
     # times into config.state on every pass. Park it while this section sets
     # its own, or the checks below depend on which thread ran last.
-    real_loop_s, light_mod.LOOP_SECONDS = light_mod.LOOP_SECONDS, 3600
+    real_loop_s, control.LOOP_SECONDS = control.LOOP_SECONDS, 3600
     time.sleep(0.5)  # let a pass already under way finish
     with config.state_lock:
         saved_state = {k: config.state.get(k) for k in ("on", "off")}
@@ -2760,7 +2776,7 @@ def _canopy_stale():
         with config.state_lock:
             config.state.update(saved_state)
         monitor._health_cache["ts"] = 0
-        light_mod.LOOP_SECONDS = real_loop_s
+        control.LOOP_SECONDS = real_loop_s
         config.wake.set()
 
 
@@ -4696,6 +4712,7 @@ def _memory_and_status():
             "monitor.py",
             "status.py",
             "light.py",
+            "control.py",
             "water.py",
             "heat.py",
         )
