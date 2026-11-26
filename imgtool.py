@@ -452,6 +452,7 @@ def main(argv):
         dest = Path(dest)
         corners = json.loads(corners)
         frames = [ln for ln in Path(listfile).read_text().splitlines() if ln.strip()]
+        max_w = int(opt.get("max-w") or 0)  # widest a flattened frame is written
         for i, src in enumerate(frames):
             out = dest / f"{i:06d}.jpg"
             try:
@@ -459,6 +460,13 @@ def main(argv):
                 if img is None:
                     raise ValueError("unreadable")
                 warped = growth.rectify(img, corners, cols=int(cols), rows=int(rows))
+                h, w = warped.shape[:2]
+                if max_w and w > max_w:
+                    warped = cv2.resize(
+                        warped,
+                        (max_w, max(1, round(h * max_w / w))),
+                        interpolation=cv2.INTER_AREA,
+                    )
                 cv2.imwrite(str(out), warped, [cv2.IMWRITE_JPEG_QUALITY, int(opt.get("q", 88))])
             except Exception:
                 shutil.copyfile(src, out)  # copied unwarped, so the timeline has no gap

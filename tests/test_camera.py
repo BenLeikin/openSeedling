@@ -1020,7 +1020,7 @@ def test_two_cameras():
     assert (
         'check_camera "Camera 2" "$dev2"' in sh
         and "force_original_aspect_ratio=decrease" in cam
-        and "pad=1280:" in cam
+        and "pad={VIDEO_W}:" in cam
     ), (
         "usbcheck.sh checks both cameras; the video keeps one frame size when a run changes "
         "shape (letterboxed)"
@@ -1222,3 +1222,33 @@ def test_an_unreadable_photo_is_not_thumbnailed_on_every_tick(monkeypatch):
     for _ in range(3):
         cam._capture_tick(None)
     assert tries == [bad.name], f"the backfill tries a photo once ({len(tries)} tries)"
+
+
+def test_render_refuses_when_the_card_is_short_of_space(monkeypatch):
+    for i in range(4):
+        (photos_mod.TIMELAPSE_DIR / f"2026092{i}_120000.jpg").write_bytes(b"photo")
+    ran = []
+    monkeypatch.setattr(video_mod.tools, "run", lambda *a, **k: ran.append(a))
+    monkeypatch.setattr(video_mod.tools, "imgtool", lambda *a, **k: ran.append(a))
+    monkeypatch.setattr(photos_mod, "disk_free_gb", lambda path=None: photos_mod.MIN_FREE_GB)
+    video_mod.render_worker()
+    state = dict(video_mod.render)
+    assert state["state"] == "error" and "free space" in state["msg"] and not ran, state
+    assert video_mod.scratch_gb(1000, True) > video_mod.scratch_gb(1000, False) > 0
+
+
+def test_flattened_video_frames_are_no_wider_than_the_video(tmp_path):
+    cv2 = pytest.importorskip("cv2")
+    import numpy as np
+
+    src = tmp_path / "frame.jpg"
+    cv2.imwrite(str(src), np.full((1200, 3200, 3), 128, np.uint8))
+    listfile = tmp_path / "frames.txt"
+    listfile.write_text(f"{src}\n")
+    dest = tmp_path / "flat"
+    dest.mkdir()
+    corners = json.dumps([[0.05, 0.05], [0.95, 0.05], [0.95, 0.95], [0.05, 0.95]])
+    r = tools.imgtool(["flatten", dest, listfile, corners, 6, 4, "--max-w", 1280])
+    assert r.ok, r.error
+    w, h = photos_mod.jpeg_size(dest / "000000.jpg")
+    assert w == 1280 and h < 1280, f"{w}x{h}"

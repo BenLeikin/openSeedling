@@ -28,6 +28,21 @@ VIDEO_PATH = photos_mod.TIMELAPSE_DIR / "timelapse.mp4"
 # ---- video render -----------------------------------------------------------
 
 
+VIDEO_W = 1280  # the video's width, in pixels
+# What a render writes besides the finished video, per frame: a flattened copy
+# of each frame at the video's width, and the encoded video twice over (the
+# encode, then the faststart remux beside it).
+FLAT_MB_PER_FRAME = 0.4
+VIDEO_MB_PER_FRAME = 0.15
+ENCODE_S_PER_FRAME = 6  # allowed per frame on a Pi Zero 2, above the hour's floor
+
+
+def scratch_gb(frames, flatten):
+    """About how much free space a render of `frames` frames needs, in GB."""
+    per_frame = 2 * VIDEO_MB_PER_FRAME + (FLAT_MB_PER_FRAME if flatten else 0.0)
+    return frames * per_frame / 1024.0
+
+
 def _flatten_frames_to(dest, frames, cfg):
     """Write rectified copies of `frames` into `dest`, numbered in order.
 
@@ -54,6 +69,10 @@ def _flatten_frames_to(dest, frames, cfg):
                 int(grid.get("rows", 4)),
                 "--q",
                 88,
+                # no wider than the video: full-size copies of a long run
+                # would not fit on the SD card beside the photos
+                "--max-w",
+                VIDEO_W,
             ],
             timeout=4 * 3600,
         )
@@ -82,7 +101,15 @@ def render_worker():
     try:
         with config.settings_lock:
             cfg_r = dict(config.settings)
-        if cfg_r.get("timelapse_flatten", True):
+        flatten = bool(cfg_r.get("timelapse_flatten", True))
+        need_gb = scratch_gb(len(frames), flatten)
+        free_gb = photos_mod.disk_free_gb()
+        if free_gb - need_gb < photos_mod.MIN_FREE_GB:
+            raise RuntimeError(
+                f"not enough free space to render: about {need_gb:.1f} GB needed, "
+                f"{free_gb:.1f} GB free"
+            )
+        if flatten:
             with render_lock:
                 render["msg"] = f"Flattening {len(frames)} frames..."
             flat_dir = _flatten_frames_to(photos_mod.TIMELAPSE_DIR / "_flat", frames, cfg_r)
@@ -90,7 +117,7 @@ def render_worker():
         # the view crop applies to raw frames; flattened ones are already the tray
         roi = None if flat_dir else photos_mod.crop_box(cfg_r)
         # lanczos: a sharper downscale than the default bicubic, same memory
-        vf_scale = "scale=1280:-16:flags=lanczos:in_range=full:out_range=tv"
+        vf_scale = f"scale={VIDEO_W}:-16:flags=lanczos:in_range=full:out_range=tv"
         # One frame size for the whole video, from the newest frame: a run that
         # changed shape (a second camera, a new capture size) is letterboxed
         # instead of failing the encode when the size changes mid-stream.
@@ -100,10 +127,10 @@ def render_worker():
             fw, fh = size
             if roi:
                 fw, fh = fw * roi[2], fh * roi[3]
-            oh = max(16, int(round(1280 * fh / fw / 16.0)) * 16)
+            oh = max(16, int(round(VIDEO_W * fh / fw / 16.0)) * 16)
             vf_scale = (
-                f"scale=1280:{oh}:force_original_aspect_ratio=decrease:force_divisible_by=2"
-                f":flags=lanczos:in_range=full:out_range=tv,pad=1280:{oh}:(ow-iw)/2:(oh-ih)/2"
+                f"scale={VIDEO_W}:{oh}:force_original_aspect_ratio=decrease:force_divisible_by=2"
+                f":flags=lanczos:in_range=full:out_range=tv,pad={VIDEO_W}:{oh}:(ow-iw)/2:(oh-ih)/2"
             )
         vf = (photos_mod.crop_filter(roi) + "," + vf_scale) if roi else vf_scale
         tmp = photos_mod.TIMELAPSE_DIR / "_render_tmp.mp4"
@@ -156,7 +183,7 @@ def render_worker():
                 str(tmp),
             ],
             "the render",
-            timeout=3600,
+            timeout=max(3600, ENCODE_S_PER_FRAME * len(frames)),
         )
         if r.returncode == 0 and tmp.exists():
             # Faststart as a stream-copy remux: no re-encode, little memory.
