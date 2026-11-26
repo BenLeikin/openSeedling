@@ -1,6 +1,6 @@
 // openSeedling dashboard: The cell grid overlay, the Settings form's submit handler, and the AI garden report.
 import { notice, offer, onStatus, request, send } from './store.js';
-import { S, capturePhoto, render, renderPhoto, set_S } from './light.js';
+import { S, capturePhoto, render, renderPhoto, set_S, wallTime } from './light.js';
 import { applySetup, set_setupDirty, setupDirty, setupDraft, trayDraft } from './setups.js';
 import {
   FORM,
@@ -308,11 +308,13 @@ export function applyStatus(j) {
   try {
     set_S({
       ...j,
-      now: new Date(j.now),
-      on: new Date(j.on),
-      off: new Date(j.off),
-      sunrise: new Date(j.sunrise),
-      sunset: new Date(j.sunset)
+      now: wallTime(j.now),
+      on: wallTime(j.on),
+      off: wallTime(j.off),
+      sunrise: wallTime(j.sunrise),
+      sunset: wallTime(j.sunset),
+      // how far the controller's wall clock is from this browser's
+      skew: wallTime(j.now) - Date.now()
     });
     // Same hold as the form fields: until the server echoes a saved backend,
     // keep the chosen one, so a stale poll does not bring the slider and sweep
@@ -694,7 +696,8 @@ export function start() {
     }
   });
   setInterval(() => {
-    const d = new Date();
+    // the controller's time, as everything else on the page is
+    const d = new Date(Date.now() + ((S && S.skew) || 0));
     document.getElementById('clock').textContent = d.toLocaleTimeString();
     if (S) {
       S.now = d;

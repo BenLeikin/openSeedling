@@ -792,6 +792,30 @@ def dark_charts(pw, base):
     b.close()
 
 
+def far_away(pw, base):
+    """A browser in another time zone shows the schedule in the controller's
+    time: lights-on at 07:00 there reads 07:00, not the viewer's hour for it."""
+    b = pw.chromium.launch()
+    page = b.new_context(
+        viewport={"width": 1400, "height": 1000}, timezone_id="Asia/Tokyo", locale="en-GB"
+    ).new_page()
+    page.goto(base + "/")
+    page.wait_for_timeout(4000)
+    got = page.evaluate(
+        """async ()=>{
+          const j = await (await fetch('/api/status')).json();
+          const facts = [...document.querySelectorAll('dt')].find(e => /Lights on/.test(e.textContent));
+          return {there: j.on.slice(11, 16), shown: facts ? facts.nextElementSibling.textContent : null,
+                  clock: document.getElementById('clock').textContent.slice(0, 2), now: j.now.slice(11, 13)};
+        }"""
+    )
+    check(
+        got["shown"] == got["there"] and got["clock"] == got["now"],
+        f"from another time zone the schedule and the clock read the controller's time ({got})",
+    )
+    b.close()
+
+
 def drawn(pw, base):
     """How many charts and trays the dashboard draws."""
     b = pw.chromium.launch()
@@ -1196,6 +1220,7 @@ def main():
             print("Signed-out viewer")
             owner_sees = drawn(pw, base)
             dark_charts(pw, base)
+            far_away(pw, base)
             proc.terminate()
             proc.wait(15)
             from werkzeug.security import generate_password_hash

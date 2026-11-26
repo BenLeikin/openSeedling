@@ -1,6 +1,6 @@
 // openSeedling dashboard: Grow setups (tabs, light view, the Setups editor) and the USB camera's modes.
 import { request } from './store.js';
-import { S } from './light.js';
+import { S, keepDrag } from './light.js';
 import { formDirty } from './photos.js';
 import { probeNames, renderChartGrid, sensorData, sensorMeta, set_lightBackend } from './charts.js';
 import { esc } from './trays.js';
@@ -122,6 +122,7 @@ export function applyLightView(j, cs) {
   S.ramp = +l2.ramp_min || 0;
   S.on = hhmmToday(S.now, l2.start);
   S.off = hhmmToday(S.now, l2.end);
+  keepDrag();
   S.schedule_mode = 'light2';
   S.light_linear_on = false;
   set_lightBackend('pwm'); // the second light always dims by PWM

@@ -9,6 +9,13 @@ import { durStr } from './cards.js';
 
 export let S = null;
 
+// A time from the status, as a Date whose clock fields read the controller's
+// own wall clock whatever zone the browser is in. The schedule is set and
+// shown in the controller's time: 07:00 there is drawn and edited as 07:00.
+// Only for the schedule's times of day; ages and countdowns use real instants.
+export function wallTime(iso) {
+  return new Date(String(iso).replace(/(Z|[+-]\d\d:?\d\d)$/, ''));
+}
 export function fmt(d) {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
@@ -581,7 +588,15 @@ export async function capturePhoto() {
 
 export function set_S(v) {
   S = v;
+  keepDrag();
   return v;
+}
+// A status that arrives while a schedule edge is being dragged carries the
+// saved window; the edge stays where the pointer has it.
+export function keepDrag() {
+  if (!S || !schedDrag || schedDrag.value == null) return;
+  if (schedDrag.edge === 'on') S.on = minsToDate(S.on, schedDrag.value);
+  else S.off = minsToDate(S.off, schedDrag.value);
 }
 export function set_dragPending(v) {
   dragPending = v;

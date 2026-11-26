@@ -217,7 +217,7 @@ export function renderDayProgress(j) {
   if (!wrap || !S.on || !S.off) return;
   const on = +S.on,
     off = +S.off,
-    now = Date.now();
+    now = +S.now;
   const span = off - on;
   if (!(span > 0)) {
     wrap.style.display = 'none';
