@@ -230,7 +230,13 @@ ask() {                            # ask VAR "prompt" "default" ["hint"]
   if [[ -n "${CFG[${1}__NONE]:-}" ]]; then def="none"; else def="${CFG[$1]:-$3}"; fi
   if [[ "$NONINTERACTIVE" -eq 1 ]]; then CFG["$var"]="$def"; return; fi
   [[ -n "$hint" ]] && echo "    $hint"
-  read -r -p "    $q [$def]: " reply < /dev/tty || true
+  if [[ "$var" == *_PASS ]]; then
+    # a secret: typed unseen, and the stored one is never printed
+    read -r -s -p "    $q [${def:+saved; Enter keeps it}]: " reply < /dev/tty || true
+    echo
+  else
+    read -r -p "    $q [$def]: " reply < /dev/tty || true
+  fi
   CFG["$var"]="${reply:-$def}"
 }
 
@@ -393,7 +399,13 @@ $(strip_comments "$DEPLOY/boot-config.txt")
   else
     local bak; bak="$CONFIG_TXT.growlight-$(date +%Y%m%d-%H%M%S)"
     sudo cp -p "$CONFIG_TXT" "$bak"
-    printf '%s\n' "$want" | sudo tee "$CONFIG_TXT" > /dev/null
+    # written beside the file and moved into place: a power cut part way
+    # through must not leave half a boot config
+    local tmp="$CONFIG_TXT.growlight-new"
+    printf '%s\n' "$want" | sudo tee "$tmp" > /dev/null
+    sudo sync "$tmp"
+    sudo mv -f "$tmp" "$CONFIG_TXT"
+    sudo sync "$CONFIG_TXT"
     echo "    updated; previous file saved as $bak"
     NEED_REBOOT=1
   fi
@@ -641,6 +653,7 @@ step_shell() {
   grep -qxF "$line" "$HOME/.bashrc" 2>/dev/null && return 0
   [[ "$MODE" == check ]] && { note "venv auto-activate not in ~/.bashrc"; return 0; }
   echo "$line" >> "$HOME/.bashrc"
+  note "added to ~/.bashrc, so a new shell starts in the app's venv: $line"
 }
 
 step_hardware() {
