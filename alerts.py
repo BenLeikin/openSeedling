@@ -164,43 +164,56 @@ PCT_MARGIN = 3  # and a percentage rule this many points past
 
 
 def check_all(
-    snapshot: Mapping[str, Any], cfg: Mapping[str, Any], unit_temp: str = "F"
+    snapshot: Mapping[str, Any],
+    cfg: Mapping[str, Any],
+    unit_temp: str = "F",
+    on_error: Callable[[str, Exception], None] | None = None,
 ) -> list[Notice]:
     """Run every rule against a reading snapshot.
 
     `snapshot` is {sensor_key: value} in storage units (Celsius, hPa, volts as
     logged) plus the derived keys the rules below name. Returns a list of
     (action, key, title, message, level) to send.
+
+    A group of rules that raises is skipped, its rules left in the state they
+    were in, and the other groups still run; on_error(group, exception) is
+    told about it.
     """
     configure(cfg)
     now = time.time()
+    sustain = cfg.get("sustain_seconds", DEFAULTS["sustain_seconds"])
     out: list[Notice] = []
-    for rule in _rules(snapshot, cfg, unit_temp):
-        act = evaluate(
-            rule.key, rule.wrong, now, rule.release, rule.hold, clear_hold=rule.clear_hold
-        )
-        if act in ("fire", "remind"):
-            out.append((act, rule.key, rule.title, rule.message, rule.level))
-        elif act == "clear" and rule.clear_title:
-            out.append((act, rule.key, rule.clear_title, rule.clear_message, GOOD))
+    for group in RULE_GROUPS:
+        try:
+            for rule in group(snapshot, cfg, unit_temp, sustain):
+                act = evaluate(
+                    rule.key, rule.wrong, now, rule.release, rule.hold, clear_hold=rule.clear_hold
+                )
+                if act in ("fire", "remind"):
+                    out.append((act, rule.key, rule.title, rule.message, rule.level))
+                elif act == "clear" and rule.clear_title:
+                    out.append((act, rule.key, rule.clear_title, rule.clear_message, GOOD))
+        except Exception as e:
+            if on_error is None:
+                raise
+            on_error(group.__name__.lstrip("_"), e)
     return out
 
 
-def _rules(snapshot: Mapping[str, Any], cfg: Mapping[str, Any], unit_temp: str) -> Iterator[Rule]:
-    """Every rule that applies to this snapshot, in the order they are sent."""
-    sustain = cfg.get("sustain_seconds", DEFAULTS["sustain_seconds"])
-    yield from _soil_temperature(snapshot, cfg, unit_temp, sustain)
-    yield from _moisture(snapshot, cfg, sustain)
-    yield from _humidity(snapshot, cfg, sustain)
-    yield from _daily_light(snapshot, cfg)
-    yield from _reservoir(snapshot, sustain)
-    yield from _faults(snapshot)
+def _stuck(
+    snapshot: Mapping[str, Any], cfg: Mapping[str, Any], unit_temp: str, sustain: float
+) -> Iterator[Rule]:
     yield from _per_subject(
         "stuck",
         snapshot.get("_stuck") or {},
         lambda key, why: (f"{key} is not changing", why, WARNING),
         lambda key: (f"{key} is changing again", "The sensor is reporting varying values."),
     )
+
+
+def _fill_failed(
+    snapshot: Mapping[str, Any], cfg: Mapping[str, Any], unit_temp: str, sustain: float
+) -> Iterator[Rule]:
     _state.pop("fill_failed", None)  # the single rule from before failures were per tray
     yield from _per_subject(
         "fill_failed",
@@ -211,6 +224,11 @@ def _rules(snapshot: Mapping[str, Any], cfg: Mapping[str, Any], unit_temp: str) 
             f"Tray {tray}'s fill reached the float again.",
         ),
     )
+
+
+def _camera(
+    snapshot: Mapping[str, Any], cfg: Mapping[str, Any], unit_temp: str, sustain: float
+) -> Iterator[Rule]:
     cam_fails = snapshot.get("_camera_fails") or 0
     yield Rule(
         "camera",
@@ -220,6 +238,11 @@ def _rules(snapshot: Mapping[str, Any], cfg: Mapping[str, Any], unit_temp: str) 
         clear_title="Camera recovered",
         clear_message="Captures are succeeding again.",
     )
+
+
+def _stale(
+    snapshot: Mapping[str, Any], cfg: Mapping[str, Any], unit_temp: str, sustain: float
+) -> Iterator[Rule]:
     stale = snapshot.get("_stale") or []
     yield Rule(
         "stale",
@@ -277,7 +300,7 @@ def _soil_temperature(
 
 
 def _moisture(
-    snapshot: Mapping[str, Any], cfg: Mapping[str, Any], sustain: float
+    snapshot: Mapping[str, Any], cfg: Mapping[str, Any], unit_temp: str, sustain: float
 ) -> Iterator[Rule]:
     """A tray drying out. `_moisture` is {tray name: percent}, calibrated."""
     dry_at = cfg.get("probe_dry_pct", DEFAULTS["probe_dry_pct"])
@@ -297,7 +320,7 @@ def _moisture(
 
 
 def _humidity(
-    snapshot: Mapping[str, Any], cfg: Mapping[str, Any], sustain: float
+    snapshot: Mapping[str, Any], cfg: Mapping[str, Any], unit_temp: str, sustain: float
 ) -> Iterator[Rule]:
     rh_hi = cfg.get("humidity_high", DEFAULTS["humidity_high"])
     rh = snapshot.get("humidity")
@@ -316,7 +339,9 @@ def _humidity(
     )
 
 
-def _daily_light(snapshot: Mapping[str, Any], cfg: Mapping[str, Any]) -> Iterator[Rule]:
+def _daily_light(
+    snapshot: Mapping[str, Any], cfg: Mapping[str, Any], unit_temp: str, sustain: float
+) -> Iterator[Rule]:
     """The day's light total, judged once, just after lights-off.
 
     The caller supplies `_dli` (one setup) or `_dli_setups` (several, each on
@@ -383,7 +408,9 @@ def _daily_light(snapshot: Mapping[str, Any], cfg: Mapping[str, Any]) -> Iterato
         )
 
 
-def _reservoir(snapshot: Mapping[str, Any], sustain: float) -> Iterator[Rule]:
+def _reservoir(
+    snapshot: Mapping[str, Any], cfg: Mapping[str, Any], unit_temp: str, sustain: float
+) -> Iterator[Rule]:
     """Empty stops watering; a fault means a sensor is lying."""
     res = snapshot.get("_reservoir")
     if not res:
@@ -413,7 +440,9 @@ def _reservoir(snapshot: Mapping[str, Any], sustain: float) -> Iterator[Rule]:
     )
 
 
-def _faults(snapshot: Mapping[str, Any]) -> Iterator[Rule]:
+def _faults(
+    snapshot: Mapping[str, Any], cfg: Mapping[str, Any], unit_temp: str, sustain: float
+) -> Iterator[Rule]:
     """Faults the caller has already worked out: the snapshot holds a
     description while one stands, and nothing when it does not."""
     slow = snapshot.get("_camera_slow_link")
@@ -490,3 +519,19 @@ def _per_subject(
                 clear_message=message,
                 hold=0,
             )
+
+
+RuleGroup = Callable[[Mapping[str, Any], Mapping[str, Any], str, float], Iterator[Rule]]
+# every group of rules, in the order their notices are sent
+RULE_GROUPS: tuple[RuleGroup, ...] = (
+    _soil_temperature,
+    _moisture,
+    _humidity,
+    _daily_light,
+    _reservoir,
+    _faults,
+    _stuck,
+    _fill_failed,
+    _camera,
+    _stale,
+)

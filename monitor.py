@@ -821,114 +821,9 @@ def run_alerts(readings):
             {"id": st.get("id"), "name": st.get("name"), "band": setups_mod.setup_band(st)}
             for st in setups_mod.setups(cfg)
         ]
-        # The rules judge filtered values: a lone bad reading must not fire a
-        # soil-temperature or humidity alert, and the sustain window cannot
-        # help when the excursion lasts longer than one sample. Charts and the
-        # DLI code use the raw series.
         snap = dict(readings)
-        for key in list(snap):
-            if readings_mod.sensor_jump(key) is None or key.startswith("probe:"):
-                continue  # probes are handled by their own filter below
-            fv, _ = readings_mod.reading_filtered(key)
-            if fv is not None:
-                snap[key] = fv
-
-        # The day's light total is judged once the day is over: _dli is
-        # present only in the 45 minutes after lights-off, so the rule fires
-        # at most once per evening and a low total mid-morning raises nothing.
-        with config.state_lock:
-            off_t = config.state.get("off")
-        if off_t is not None and (cfg.get("alert_dli_low") or cfg.get("alert_dli_high")):
-            now_dt = datetime.now(off_t.tzinfo)
-            if off_t <= now_dt <= off_t + timedelta(minutes=45):
-                multi = setups_mod.setups(cfg)
-                vals = {
-                    st.get("id"): setups_mod.dli_today(st["lux"], setups_mod.setup_k(st))
-                    for st in multi
-                    if st.get("lux")
-                }
-                if len(multi) == 1:
-                    d = next(iter(vals.values()), None)
-                    if d is not None:
-                        snap["_dli"] = d
-                else:
-                    snap["_dli_setups"] = {i: v for i, v in vals.items() if v is not None}
-
-        # tray moisture as percentages, using each tray's calibration
-        pcal = cfg.get("probe_cal") or {}
-        names = cfg.get("probe_names") or {}
-        stf = water.latest_soil_temp_f()
-        moist = {}
-        for k, v in readings.items():
-            if not k.startswith("probe:"):
-                continue
-            t = k[6:]
-            fv, _ = water.probe_volts_filtered(t)  # transient-rejected, not raw
-            pct, approx = water.probe_moisture_any(
-                fv if fv is not None else v, pcal.get(t) or {}, stf
-            )
-            if pct is not None and not approx:  # only alert on real calibration
-                moist[probe_name(cfg, t, names)] = pct
-        snap["_moisture"] = moist
-
-        with config.state_lock:
-            snap["_camera_fails"] = camera_mod.camera["fails"] if cfg.get("camera_enabled") else 0
-
-        snap["_fill_failed"] = dict(water.fill_failures)
-        snap["_reservoir"] = water.reservoir_state()
-        # the slower of the cameras: either one below 480 Mbit/s (a USB 1.1
-        # link) spoils the photos
-        spds = (
-            [
-                sp
-                for d in (cfg.get("usb_device", "/dev/video0"), cfg.get("usb_device2"))
-                if d and (sp := camera_mod.usb_link_speed(d)) is not None
-            ]
-            if cfg.get("camera_enabled") and cfg.get("camera_backend", "rpicam") == "usb"
-            else []
-        )
-        spd = min(spds) if spds else None
-        snap["_camera_slow_link"] = f"{spd:g} Mbit/s" if spd is not None and spd < 480 else ""
-        free = photos_mod.disk_free_gb()
-        snap["_disk_low"] = (
-            f"{free:.1f} GB free on the SD card"
-            + (" (photos have stopped)" if free < photos_mod.MIN_FREE_GB else "")
-            if free < photos_mod.LOW_FREE_GB
-            else ""
-        )
-        # A plug that stops responding leaves the light it switches stuck on
-        # or off. One failure can be a wifi blip, so it takes two in a row.
-        snap["_plug_failed"] = (
-            light_mod.kasa_state["error"]
-            if (
-                light_mod.light_backend(cfg) == "kasa"
-                and cfg.get("plug_use", "light") == "light"
-                and light_mod.kasa_state["fails"] >= 2
-            )
-            else ""
-        )
-        # the heat mat: held off by its own safety rules, or its plug failing
-        hs = heat_mod.status(cfg)
-        snap["_heat_fault"] = ""
-        if hs["use"] and hs["mode"] != "off":
-            if light_mod.kasa_state["fails"] >= 2:
-                snap["_heat_fault"] = "the plug is not responding: " + str(
-                    light_mod.kasa_state["error"]
-                )
-            elif hs["fault"]:
-                snap["_heat_fault"] = hs["fault"]
-
-        # Sensors that have gone quiet: keys seen recently but missing from
-        # this read. Kept in memory only and aged out after SEEN_TTL, so an
-        # unwired device stops raising reminders after a few days.
-        now_ts = time.time()
-        for k in readings:
-            _seen_sensors[k] = now_ts
-        for k in [k for k, t in _seen_sensors.items() if now_ts - t > SEEN_TTL]:
-            _seen_sensors.pop(k, None)
-        snap["_stale"] = sorted(set(_seen_sensors) - set(readings))
-        # reporting on time but not measuring: invisible to the stale check
-        snap["_stuck"] = stuck_sensors(max(1, int(cfg.get("sample_interval_min", 5))) * 60)
+        for part in SNAPSHOT_PARTS:
+            snap.update(_snapshot_part(part, cfg, readings))
 
         global _alert_rules_saved
         if _alert_rules_saved is None:
@@ -936,7 +831,7 @@ def run_alerts(readings):
             _alert_rules_saved = alerts.snapshot()
         notices = []
         for action, key, title, message, level in alerts.check_all(
-            snap, acfg, "C" if cfg.get("units") == "metric" else "F"
+            snap, acfg, "C" if cfg.get("units") == "metric" else "F", on_error=_rules_failed
         ):
             prefix = {"fire": "", "remind": "Still: ", "clear": "Resolved: "}[action]
             notices.append((prefix + title, message, "good" if action == "clear" else level))
@@ -948,6 +843,184 @@ def run_alerts(readings):
         deliver(notices)
     except Exception:
         log.exception("alert check failed")
+
+
+# What each part of the snapshot last produced, and the error each failing
+# part or rule group last logged.
+_part_last = {}
+_alert_errors = {}
+
+
+def _snapshot_part(part, cfg, readings):
+    """One part of the alert snapshot, as {key: value}.
+
+    A part that fails must not take the other rules down with it. Its last
+    good values stand in, so the rules that read them stay in the state they
+    were in instead of announcing a recovery that did not happen. The
+    traceback is logged when the error first appears and when it changes.
+    """
+    name = part.__name__.lstrip("_")
+    try:
+        out = part(cfg, readings)
+    except Exception as e:
+        if _alert_errors.get(name) != str(e):
+            _alert_errors[name] = str(e)
+            log.exception(f"alert check: {name} failed: {e}")
+        return _part_last.get(name, {})
+    _alert_errors.pop(name, None)
+    _part_last[name] = out
+    return out
+
+
+def _rules_failed(group, e):
+    name = f"rules:{group}"
+    if _alert_errors.get(name) != str(e):
+        _alert_errors[name] = str(e)
+        log.error(f"alert check: the {group} rules failed: {type(e).__name__}: {e}")
+
+
+def _filtered_values(cfg, readings):
+    """Filtered values for the rules to judge: a lone bad reading must not
+    fire a soil-temperature or humidity alert, and the sustain window cannot
+    help when the excursion lasts longer than one sample. Charts and the DLI
+    code use the raw series."""
+    out = {}
+    for key in readings:
+        if readings_mod.sensor_jump(key) is None or key.startswith("probe:"):
+            continue  # probes have their own filter, in _moisture
+        fv, _ = readings_mod.reading_filtered(key)
+        if fv is not None:
+            out[key] = fv
+    return out
+
+
+def _daily_light(cfg, readings):
+    """The day's light total, judged once the day is over: present only in
+    the 45 minutes after lights-off, so the rule fires at most once per
+    evening and a low total mid-morning raises nothing."""
+    with config.state_lock:
+        off_t = config.state.get("off")
+    if off_t is None or not (cfg.get("alert_dli_low") or cfg.get("alert_dli_high")):
+        return {}
+    now_dt = datetime.now(off_t.tzinfo)
+    if not off_t <= now_dt <= off_t + timedelta(minutes=45):
+        return {}
+    multi = setups_mod.setups(cfg)
+    vals = {
+        st.get("id"): setups_mod.dli_today(st["lux"], setups_mod.setup_k(st))
+        for st in multi
+        if st.get("lux")
+    }
+    if len(multi) == 1:
+        d = next(iter(vals.values()), None)
+        return {} if d is None else {"_dli": d}
+    return {"_dli_setups": {i: v for i, v in vals.items() if v is not None}}
+
+
+def _moisture(cfg, readings):
+    """Tray moisture as percentages, using each tray's calibration."""
+    pcal = cfg.get("probe_cal") or {}
+    names = cfg.get("probe_names") or {}
+    stf = water.latest_soil_temp_f()
+    moist = {}
+    for k, v in readings.items():
+        if not k.startswith("probe:"):
+            continue
+        t = k[6:]
+        fv, _ = water.probe_volts_filtered(t)  # transient-rejected, not raw
+        pct, approx = water.probe_moisture_any(fv if fv is not None else v, pcal.get(t) or {}, stf)
+        if pct is not None and not approx:  # only alert on real calibration
+            moist[probe_name(cfg, t, names)] = pct
+    return {"_moisture": moist}
+
+
+def _watering(cfg, readings):
+    return {"_fill_failed": dict(water.fill_failures), "_reservoir": water.reservoir_state()}
+
+
+def _camera(cfg, readings):
+    with config.state_lock:
+        fails = camera_mod.camera["fails"] if cfg.get("camera_enabled") else 0
+    # the slower of the cameras: either one below 480 Mbit/s (a USB 1.1
+    # link) spoils the photos
+    spds = (
+        [
+            sp
+            for d in (cfg.get("usb_device", "/dev/video0"), cfg.get("usb_device2"))
+            if d and (sp := camera_mod.usb_link_speed(d)) is not None
+        ]
+        if cfg.get("camera_enabled") and cfg.get("camera_backend", "rpicam") == "usb"
+        else []
+    )
+    spd = min(spds) if spds else None
+    return {
+        "_camera_fails": fails,
+        "_camera_slow_link": f"{spd:g} Mbit/s" if spd is not None and spd < 480 else "",
+    }
+
+
+def _disk(cfg, readings):
+    free = photos_mod.disk_free_gb()
+    return {
+        "_disk_low": f"{free:.1f} GB free on the SD card"
+        + (" (photos have stopped)" if free < photos_mod.MIN_FREE_GB else "")
+        if free < photos_mod.LOW_FREE_GB
+        else ""
+    }
+
+
+def _plug(cfg, readings):
+    """A plug that stops responding leaves what it switches stuck on or off.
+    One failure can be a wifi blip, so it takes two in a row."""
+    failing = light_mod.kasa_state["fails"] >= 2
+    out = {
+        "_plug_failed": light_mod.kasa_state["error"]
+        if (
+            light_mod.light_backend(cfg) == "kasa"
+            and cfg.get("plug_use", "light") == "light"
+            and failing
+        )
+        else "",
+        "_heat_fault": "",
+    }
+    # the heat mat: held off by its own safety rules, or its plug failing
+    hs = heat_mod.status(cfg)
+    if hs["use"] and hs["mode"] != "off":
+        if failing:
+            out["_heat_fault"] = "the plug is not responding: " + str(light_mod.kasa_state["error"])
+        elif hs["fault"]:
+            out["_heat_fault"] = hs["fault"]
+    return out
+
+
+def _quiet_sensors(cfg, readings):
+    """Sensors that have gone quiet: keys seen recently but missing from this
+    read. Kept in memory only and aged out after SEEN_TTL, so an unwired
+    device stops raising reminders after a few days."""
+    now_ts = time.time()
+    for k in readings:
+        _seen_sensors[k] = now_ts
+    for k in [k for k, t in _seen_sensors.items() if now_ts - t > SEEN_TTL]:
+        _seen_sensors.pop(k, None)
+    return {"_stale": sorted(set(_seen_sensors) - set(readings))}
+
+
+def _stuck_sensors(cfg, readings):
+    """Reporting on time but not measuring: invisible to the quiet check."""
+    return {"_stuck": stuck_sensors(max(1, int(cfg.get("sample_interval_min", 5))) * 60)}
+
+
+SNAPSHOT_PARTS = (
+    _filtered_values,
+    _daily_light,
+    _moisture,
+    _watering,
+    _camera,
+    _disk,
+    _plug,
+    _quiet_sensors,
+    _stuck_sensors,
+)
 
 
 # The alert rules' states as last written to the database, or None before the

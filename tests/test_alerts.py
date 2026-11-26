@@ -4,6 +4,7 @@ import json
 import time
 
 from harness import (
+    alerts,
     config,
     db,
     monitor,
@@ -13,8 +14,6 @@ from harness import (
 def test_alert_reminders():
     """A standing problem is announced once, reminded once a day, and not
     announced again because the service restarted."""
-    import alerts
-
     kept = dict(alerts._state)
     alerts.reset()
     try:
@@ -52,7 +51,7 @@ def test_alert_reminders():
     sent = []
     monitor.deliver = lambda notices: sent.extend(notices)
 
-    def one_rule(snap, cfg=None, unit="F"):
+    def one_rule(snap, cfg=None, unit="F", on_error=None):
         act = alerts.evaluate("test:standing", True, hold=0)
         return [(act, "test:standing", "Test", "still wrong", "warning")] if act else []
 
@@ -152,7 +151,6 @@ def test_stuck_in_the_dark():
 
 def test_alert_levels():
     """A warning reaches Discord at a level the embed has a colour for."""
-    import alerts
     import discord_alert
 
     fired = [
@@ -164,3 +162,37 @@ def test_alert_levels():
         f"a warning is sent at a level with its own colour ({fired and fired[0][4]})"
     )
     alerts.evaluate("stuck:lux:9", False, hold=0)
+
+
+def test_one_failure_does_not_silence_the_other_rules(monkeypatch):
+    """A part of the snapshot that raises, or a group of rules that raises,
+    is skipped; everything else is still judged and still sent."""
+    sent = []
+    monkeypatch.setattr(monitor, "deliver", lambda notices: sent.extend(notices))
+    monkeypatch.setattr(monitor, "_alert_rules_saved", None)
+    with config.settings_lock:
+        config.settings.update(alerts_enabled=True)
+    monitor.water.fill_failures["1"] = "the float never tripped"
+
+    def broken(*_):
+        raise RuntimeError("disk gone")
+
+    alerts.reset()
+    monkeypatch.setattr(monitor.photos_mod, "disk_free_gb", broken)
+    monkeypatch.setattr(alerts, "RULE_GROUPS", (broken,) + alerts.RULE_GROUPS)
+    monitor.run_alerts({"humidity": 50.0})
+    assert [n[0] for n in sent] == ["Watering did not complete"], (
+        f"a failed fill is still announced when the disk check and another rule group fail ({sent})"
+    )
+
+    # a part that fails after having worked keeps its last values, so a
+    # standing problem is not announced as resolved
+    monkeypatch.setattr(monitor, "_part_last", {"watering": {"_fill_failed": {"1": "float"}}})
+    alerts.reset()
+    alerts.evaluate("fill_failed:1", True, hold=0)
+    monkeypatch.setattr(monitor.water, "reservoir_state", broken)
+    sent.clear()
+    monitor.run_alerts({"humidity": 50.0})
+    assert not any(t.startswith("Resolved") for t, _, _ in sent), (
+        f"a failed check does not read as the problem having gone away ({sent})"
+    )
