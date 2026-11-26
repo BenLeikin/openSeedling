@@ -633,7 +633,8 @@ function showPairView(at) {
 export function renderCameraPair(j) {
   const info = document.getElementById('pairinfo');
   const cam = j.camera || {};
-  showPairView(cam.align_view);
+  // The picture is for signed-in viewers; a visitor's page does not ask for it.
+  showPairView(j.authed ? cam.align_view : null);
   const btn = document.getElementById('pairbtn');
   if (btn) btn.disabled = !cam.second;
   if (!info) return;
