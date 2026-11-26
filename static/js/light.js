@@ -51,28 +51,28 @@ export function draw() {
   const hours = [0, 6, 12, 18, 24]
     .map(
       h =>
-        `<text x="${x(h * 60)}" y="${H - 12}" text-anchor="middle" font-size="11" fill="#3f7d45">${String(h).padStart(2, '0')}:00</text>
-     <line x1="${x(h * 60)}" y1="${T}" x2="${x(h * 60)}" y2="${H - B}" stroke="#d8e6cd" stroke-width="1"/>`
+        `<text x="${x(h * 60)}" y="${H - 12}" text-anchor="middle" font-size="11" fill="var(--leaf)">${String(h).padStart(2, '0')}:00</text>
+     <line x1="${x(h * 60)}" y1="${T}" x2="${x(h * 60)}" y2="${H - B}" stroke="var(--line)" stroke-width="1"/>`
     )
     .join('');
   const sunM = mins(S.sunrise),
     setM = mins(S.sunset);
   document.getElementById('chart').innerHTML = `
     <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#e8b04b" stop-opacity=".85"/>
-      <stop offset="55%" stop-color="#7fb069" stop-opacity=".75"/>
-      <stop offset="100%" stop-color="#3f7d45" stop-opacity=".35"/>
+      <stop offset="0%" stop-color="var(--sun)" stop-opacity=".85"/>
+      <stop offset="55%" stop-color="var(--sprout)" stop-opacity=".75"/>
+      <stop offset="100%" stop-color="var(--leaf)" stop-opacity=".35"/>
     </linearGradient></defs>
     ${hours}
-    <line x1="${L}" y1="${y(0)}" x2="${W - R}" y2="${y(0)}" stroke="#27432e" stroke-width="1.5"/>
+    <line x1="${L}" y1="${y(0)}" x2="${W - R}" y2="${y(0)}" stroke="var(--fir)" stroke-width="1.5"/>
     <path d="${area}" fill="url(#g)"/>
-    <path d="${line}" fill="none" stroke="#27432e" stroke-width="2"/>
+    <path d="${line}" fill="none" stroke="var(--fir)" stroke-width="2"/>
     <text x="${x(sunM)}" y="${T - 5}" font-size="14" text-anchor="middle">&#127774;</text>
     <text x="${x(setM)}" y="${T - 5}" font-size="14" text-anchor="middle">&#127771;</text>
     <line x1="${x(now)}" y1="${T}" x2="${x(now)}" y2="${y(0)}" stroke="#b3543a" stroke-width="2"/>
     <circle class="nowdot" cx="${x(now)}" cy="${y(curve(now, on, off, S.ramp, S.max))}" r="6"
-            fill="#b3543a" stroke="#fff" stroke-width="2"/>
-    <text x="${L}" y="${y(100) - 4}" font-size="11" fill="#3f7d45">${S.max}%</text>
+            fill="#b3543a" stroke="var(--glass)" stroke-width="2"/>
+    <text x="${L}" y="${y(100) - 4}" font-size="11" fill="var(--leaf)">${S.max}%</text>
     ${schedHandles(x, y, on, off, T, H, B)}`;
   bindSchedDrag();
 }
@@ -93,9 +93,9 @@ export function schedHandles(x, y, on, off, T, H, B) {
   const h = (m, id, label) => `
     <g class="schandle" data-edge="${id}" style="cursor:ew-resize">
       <line x1="${x(m)}" y1="${top}" x2="${x(m)}" y2="${bot}"
-            stroke="#27432e" stroke-width="1.5" stroke-dasharray="4 3"/>
-      <rect x="${x(m) - 7}" y="${top - 14}" width="14" height="14" rx="3" fill="#27432e"/>
-      <text x="${x(m)}" y="${top - 3}" text-anchor="middle" font-size="10" fill="#fff">${label}</text>
+            stroke="var(--fir)" stroke-width="1.5" stroke-dasharray="4 3"/>
+      <rect x="${x(m) - 7}" y="${top - 14}" width="14" height="14" rx="3" fill="var(--fir)"/>
+      <text x="${x(m)}" y="${top - 3}" text-anchor="middle" font-size="10" fill="var(--on-accent)">${label}</text>
       <rect class="schit" x="${x(m) - 14}" y="${top}" width="28" height="${bot - top}"
             fill="transparent"/>
     </g>`;

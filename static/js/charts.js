@@ -680,7 +680,7 @@ export function drawMini(key) {
     .map(([t, v]) => [t, conv(v)])
     .filter(d => d[1] != null && !isNaN(d[1]));
   if (data.length < 2) {
-    svg.innerHTML = `<text x="${W / 2}" y="${H / 2}" text-anchor="middle" fill="#7a8a72" font-size="11">not enough data</text>`;
+    svg.innerHTML = `<text x="${W / 2}" y="${H / 2}" text-anchor="middle" fill="var(--muted)" font-size="11">not enough data</text>`;
     if (stat) stat.innerHTML = '&mdash;';
     return;
   }
@@ -795,7 +795,7 @@ export function drawMini(key) {
       // a lone sample between two outages is drawn as a dot
       if (r.length === 1)
         h += `<circle cx="${sx(r[0][0]).toFixed(1)}" cy="${sy(r[0][1]).toFixed(1)}"
-              r="2" fill="#4a7c59"/>`;
+              r="2" fill="var(--series)"/>`;
       continue;
     }
     const seg = r.map(pt).join(' ');
@@ -803,7 +803,7 @@ export function drawMini(key) {
       x1s = sx(r[r.length - 1][0]).toFixed(1);
     h += `<polygon points="${x0s},${H - B} ${seg} ${x1s},${H - B}"
           fill="rgba(74,124,89,0.10)"/>`;
-    h += `<polyline fill="none" stroke="#4a7c59" stroke-width="1.8" points="${seg}"
+    h += `<polyline fill="none" stroke="var(--series)" stroke-width="1.8" points="${seg}"
           pathLength="1" class="cline" vector-effect="non-scaling-stroke"/>`;
   }
   for (let i = 1; i < runs.length; i++) {
@@ -811,7 +811,7 @@ export function drawMini(key) {
       b0 = runs[i][0];
     h += `<line x1="${sx(a0[0]).toFixed(1)}" y1="${sy(a0[1]).toFixed(1)}"
           x2="${sx(b0[0]).toFixed(1)}" y2="${sy(b0[1]).toFixed(1)}"
-          stroke="#4a7c59" stroke-width="1.4" stroke-dasharray="3 4" opacity="0.45"
+          stroke="var(--series)" stroke-width="1.4" stroke-dasharray="3 4" opacity="0.45"
           vector-effect="non-scaling-stroke" class="cgap"/>`;
   }
   if (key === 'pressure' && data.length >= 4) {
@@ -831,7 +831,7 @@ export function drawMini(key) {
       const c = v => Math.max(P, Math.min(H - B, sy(v)));
       h += `<line x1="${sx(x0).toFixed(1)}" y1="${c(fy(x0)).toFixed(1)}"
             x2="${sx(x1).toFixed(1)}" y2="${c(fy(x1)).toFixed(1)}"
-            stroke="#8a8a8a" stroke-width="1.2" stroke-dasharray="4 3"
+            stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="4 3"
             vector-effect="non-scaling-stroke" opacity="0.85"/>`;
     }
   }
@@ -851,10 +851,10 @@ export function drawMini(key) {
         h += `<rect x="${P}" y="${P}" width="${W - 2 * P}" height="${Math.max(0, hy - P).toFixed(1)}"
               fill="rgba(181,50,47,0.07)"/>`;
         h += `<line x1="${P}" y1="${hy.toFixed(1)}" x2="${W - P}" y2="${hy.toFixed(1)}"
-              stroke="#b5322f" stroke-width="1.2" stroke-dasharray="5 4"
+              stroke="var(--bad)" stroke-width="1.2" stroke-dasharray="5 4"
               vector-effect="non-scaling-stroke"/>`;
         h += `<text x="${W - P - 2}" y="${(hy - 3).toFixed(1)}" text-anchor="end" font-size="${FS}"
-              fill="#b5322f" font-size="${FS}">${hiTxt}</text>`;
+              fill="var(--bad)" font-size="${FS}">${hiTxt}</text>`;
       }
     }
     if (loLine != null) {
@@ -863,10 +863,10 @@ export function drawMini(key) {
         h += `<rect x="${P}" y="${ly.toFixed(1)}" width="${W - 2 * P}"
               height="${Math.max(0, H - B - ly).toFixed(1)}" fill="rgba(58,110,165,0.07)"/>`;
         h += `<line x1="${P}" y1="${ly.toFixed(1)}" x2="${W - P}" y2="${ly.toFixed(1)}"
-              stroke="#3a6ea5" stroke-width="1.2" stroke-dasharray="5 4"
+              stroke="var(--cool)" stroke-width="1.2" stroke-dasharray="5 4"
               vector-effect="non-scaling-stroke"/>`;
         h += `<text x="${W - P - 2}" y="${(ly + 10).toFixed(1)}" text-anchor="end" font-size="${FS}"
-              fill="#3a6ea5" font-size="${FS}">${loTxt}</text>`;
+              fill="var(--cool)" font-size="${FS}">${loTxt}</text>`;
       }
     }
   }
@@ -877,9 +877,9 @@ export function drawMini(key) {
       : d.toLocaleDateString([], { month: 'numeric', day: 'numeric' });
   };
   void fmtT;
-  h += `<line class="hvl" y1="${P}" y2="${H - B}" stroke="#4a7c59" stroke-width="1"
+  h += `<line class="hvl" y1="${P}" y2="${H - B}" stroke="var(--series)" stroke-width="1"
         stroke-dasharray="3 3" style="display:none"/>`;
-  h += `<circle class="hdot" r="${big ? 4.5 : 3}" fill="#2e7d32" stroke="#fff" stroke-width="1.2" style="display:none"/>`;
+  h += `<circle class="hdot" r="${big ? 4.5 : 3}" fill="var(--series)" stroke="var(--glass)" stroke-width="1.2" style="display:none"/>`;
   h += `<g class="hlbl" style="display:none">
         <rect rx="3" fill="#2f4030" opacity="0.92"/>
         <text font-size="${FS2}" fill="#eafff0"></text>

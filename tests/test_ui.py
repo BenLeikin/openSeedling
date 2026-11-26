@@ -766,6 +766,32 @@ def phone(pw, base):
     b.close()
 
 
+def dark_charts(pw, base):
+    """In dark mode the charts' lines and labels are light on the dark card."""
+    b = pw.chromium.launch()
+    page = b.new_context(viewport={"width": 1400, "height": 1000}, color_scheme="dark").new_page()
+    page.goto(base + "/")
+    page.wait_for_timeout(4000)
+    got = page.evaluate(
+        """()=>{
+          const lum = c => { const m = c.match(/[\\d.]+/g).map(Number);
+            return (0.2126*m[0] + 0.7152*m[1] + 0.0722*m[2]) / 255; };
+          const of = (sel, prop) => { const e = document.querySelector(sel);
+            return e ? lum(getComputedStyle(e)[prop]) : null; };
+          return {curve: of('#chart path[fill="none"]', 'stroke'),
+                  label: of('#chart text[fill]', 'fill'),
+                  card: lum(getComputedStyle(document.querySelector('.card')).backgroundColor)};
+        }"""
+    )
+    check(
+        got["curve"] is not None
+        and got["curve"] - got["card"] > 0.4
+        and got["label"] - got["card"] > 0.25,
+        f"in dark mode the light curve and its labels stand out from the card ({got})",
+    )
+    b.close()
+
+
 def drawn(pw, base):
     """How many charts and trays the dashboard draws."""
     b = pw.chromium.launch()
@@ -1169,6 +1195,7 @@ def main():
             screen(pw, base, app)
             print("Signed-out viewer")
             owner_sees = drawn(pw, base)
+            dark_charts(pw, base)
             proc.terminate()
             proc.wait(15)
             from werkzeug.security import generate_password_hash

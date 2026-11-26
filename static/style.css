@@ -25,6 +25,7 @@
   --warn-bg: #fbf0d8;
   --bad: #b5322f;
   --bad-bg: #f7dedd;
+  --cool: #3a6ea5;
   --page-bg-1: #e2efd4;
   --page-bg-2: #e6f0db;
   color-scheme: light;
@@ -56,6 +57,7 @@
   --warn-bg: #332a16;
   --bad: #f08a86;
   --bad-bg: #3a2020;
+  --cool: #86b3e0;
   --page-bg-1: #1b2a1c;
   --page-bg-2: #1a261b;
   color-scheme: dark;
@@ -85,6 +87,7 @@
     --warn-bg: #332a16;
     --bad: #f08a86;
     --bad-bg: #3a2020;
+    --cool: #86b3e0;
     --page-bg-1: #1b2a1c;
     --page-bg-2: #1a261b;
     color-scheme: dark;

@@ -87,7 +87,7 @@ export function drawLightCurve(curve, sweeping, nowPct) {
   const pts = (curve && curve.points) || [];
   if (!pts.length) {
     svg.innerHTML =
-      `<text x="160" y="66" text-anchor="middle" fill="#7a8a72" font-size="11">` +
+      `<text x="160" y="66" text-anchor="middle" fill="var(--muted)" font-size="11">` +
       `${sweeping ? 'measuring\u2026' : 'no measurement yet'}</text>`;
     return;
   }
@@ -102,44 +102,44 @@ export function drawLightCurve(curve, sweeping, nowPct) {
   let h = '';
   for (let i = 0; i <= 2; i++) {
     const y = P + ((H - B - P) * i) / 2;
-    h += `<line x1="${L}" y1="${y}" x2="${W - P}" y2="${y}" stroke="#e6f0de" stroke-width="1"/>`;
+    h += `<line x1="${L}" y1="${y}" x2="${W - P}" y2="${y}" stroke="var(--line)" stroke-width="1"/>`;
   }
   // the ideal straight line, origin to peak. A raw curve shows how far the
   // fixture is from linear; a calibrated one should lie on the line.
   if (curve.calibrated) {
     h += `<line x1="${sx(0)}" y1="${sy(0)}" x2="${sx(100)}" y2="${sy(maxL)}"
-          stroke="#c9c9c9" stroke-width="1" stroke-dasharray="4 3"/>`;
+          stroke="var(--line-2)" stroke-width="1" stroke-dasharray="4 3"/>`;
     // the raw fixture, faint, for comparison
     const raw = curve.rawPoints || [];
     if (raw.length) {
       const rl = raw.map(p => `${sx(p[0]).toFixed(1)},${sy(p[1]).toFixed(1)}`).join(' ');
-      h += `<polyline fill="none" stroke="#e8b04b" stroke-opacity="0.28" stroke-width="1.2"
+      h += `<polyline fill="none" stroke="var(--sun)" stroke-opacity="0.28" stroke-width="1.2"
             points="${rl}" vector-effect="non-scaling-stroke"/>`;
     }
   } else {
     h += `<line x1="${sx(0)}" y1="${sy(0)}" x2="${sx(100)}" y2="${sy(maxL)}"
-          stroke="#c9c9c9" stroke-width="1" stroke-dasharray="4 3"/>`;
+          stroke="var(--line-2)" stroke-width="1" stroke-dasharray="4 3"/>`;
   }
   const line = pts.map(p => `${sx(p[0]).toFixed(1)},${sy(p[1]).toFixed(1)}`).join(' ');
-  h += `<polyline fill="none" stroke="#e8b04b" stroke-width="2" points="${line}"
+  h += `<polyline fill="none" stroke="var(--sun)" stroke-width="2" points="${line}"
         vector-effect="non-scaling-stroke"/>`;
   if (!curve.calibrated)
     pts.forEach(p => {
       h += `<circle cx="${sx(p[0]).toFixed(1)}" cy="${sy(p[1]).toFixed(1)}" r="1.7" fill="#c98a1e"/>`;
     });
-  h += `<text x="${L}" y="${H - 5}" font-size="9" fill="#7a8a72">0%</text>`;
-  h += `<text x="${W - P}" y="${H - 5}" font-size="9" fill="#7a8a72" text-anchor="end">100%</text>`;
-  h += `<text x="2" y="${P + 8}" font-size="9" fill="#7a8a72">${Math.round(maxL).toLocaleString()}</text>`;
-  h += `<text x="2" y="${H - B}" font-size="9" fill="#7a8a72">0 lx</text>`;
+  h += `<text x="${L}" y="${H - 5}" font-size="9" fill="var(--muted)">0%</text>`;
+  h += `<text x="${W - P}" y="${H - 5}" font-size="9" fill="var(--muted)" text-anchor="end">100%</text>`;
+  h += `<text x="2" y="${P + 8}" font-size="9" fill="var(--muted)">${Math.round(maxL).toLocaleString()}</text>`;
+  h += `<text x="2" y="${H - B}" font-size="9" fill="var(--muted)">0 lx</text>`;
   // where the light is set right now, and what the curve says that delivers
   if (nowPct != null && !sweeping) {
     const px = sx(Math.max(0, Math.min(100, nowPct)));
     const lx = curveLuxAt(pts, nowPct);
     const py = sy(lx);
     h += `<line x1="${px.toFixed(1)}" y1="${P}" x2="${px.toFixed(1)}" y2="${H - B}"
-          stroke="#4a7c59" stroke-width="1.2" stroke-dasharray="3 3"/>`;
+          stroke="var(--series)" stroke-width="1.2" stroke-dasharray="3 3"/>`;
     h += `<circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="3.4"
-          fill="#2e7d32" stroke="#fff" stroke-width="1.4"/>`;
+          fill="var(--series)" stroke="var(--glass)" stroke-width="1.4"/>`;
     const label = `${Math.round(nowPct)}% \u2192 ${Math.round(lx).toLocaleString()} lx`;
     const wEst = label.length * 5.3 + 8;
     const flip = px > W - wEst - P; // keep the label on-canvas near 100%
