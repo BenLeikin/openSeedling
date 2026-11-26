@@ -436,3 +436,17 @@ def test_two_channel_rig_keeps_the_panel_dark(monkeypatch):
     )
     lm.release_backend("pwm")
     assert panel.duty == 0.0
+
+
+def test_dither_keeps_its_share_when_set_again():
+    """The below-minimum cycle is counted on the clock, so setting the target
+    again part-way through does not start it over in its lit part."""
+    lm = light_mod
+    step = lm.DITHER_PERIOD_S / 400
+    lit = sum(lm._dither_phase(0.25, 1000 + i * step)[0] for i in range(400))
+    assert lit == 100, f"a 25% target is lit a quarter of the time ({lit / 4:.0f}%)"
+    on, left = lm._dither_phase(0.25, 3 * lm.DITHER_PERIOD_S + 1)
+    assert on and abs(left - (0.25 * lm.DITHER_PERIOD_S - 1)) < 1e-6
+    on, left = lm._dither_phase(0.25, 3 * lm.DITHER_PERIOD_S + 12)
+    assert not on and abs(left - (lm.DITHER_PERIOD_S - 12)) < 1e-6
+    assert lm._dither_phase(1.0, 5.0)[0] and not lm._dither_phase(0.0, 5.0)[0]

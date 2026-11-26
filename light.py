@@ -296,6 +296,20 @@ def _dither_stop():
         _dither_wake.set()
 
 
+def _dither_phase(frac, t):
+    """(lit, seconds until the next switch) at clock time `t`.
+
+    The cycle is counted on the clock, not from when the target was last set:
+    the control loop sets the target again on every pass, and a cycle that
+    started over each time would always be in its lit part.
+    """
+    lit_s = DITHER_PERIOD_S * frac
+    at = t % DITHER_PERIOD_S
+    if at < lit_s:
+        return True, lit_s - at
+    return False, DITHER_PERIOD_S - at
+
+
 def _dither_loop():
     """Cycle between off and the minimum while a sub-minimum target is set."""
     while True:
@@ -305,16 +319,11 @@ def _dither_loop():
             _dither_wake.wait()
             _dither_wake.clear()
             continue
-        lit = DITHER_PERIOD_S * frac
         try:
-            if lit > 0:
-                set_brightness_raw(raw)
-                if _dither_wake.wait(lit):
-                    _dither_wake.clear()
-                    continue  # target changed; restart
-            set_brightness_raw(0)
-            if _dither_wake.wait(DITHER_PERIOD_S - lit):
-                _dither_wake.clear()
+            lit, left = _dither_phase(frac, time.monotonic())
+            set_brightness_raw(raw if lit else 0)
+            if _dither_wake.wait(left):
+                _dither_wake.clear()  # the target changed
         except Exception as e:
             log.error(f"dimming below the minimum failed: {e}")
             time.sleep(1)
