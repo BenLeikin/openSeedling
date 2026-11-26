@@ -17,7 +17,7 @@ fail() { printf '  FAIL  %s\n' "$1"; fails=$((fails + 1)); }
 info() { printf '        %s\n' "$1"; }
 
 cfg() {   # cfg KEY DEFAULT: a value from config.json
-  python3 - "$APP_DIR/config.json" "$1" "$2" <<'EOF' 2>/dev/null || echo "$3"
+  python3 - "$APP_DIR/config.json" "$1" "$2" <<'EOF' 2>/dev/null || echo "$2"
 import json, sys
 try:
     print(json.load(open(sys.argv[1])).get(sys.argv[2], sys.argv[3]))
