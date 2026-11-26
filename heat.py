@@ -50,6 +50,7 @@ heat_state = {
     "integral": 0.0,  # the PI controller's integral term
     "window": None,  # start of the current window (epoch s)
     "on_until": 0.0,  # the mat is on until this time in the window
+    "air_c": None,  # the last air temperature the feed-forward had
 }
 _lock = threading.Lock()
 _pass_lock = threading.Lock()  # the loop and a button press never decide at once
@@ -68,11 +69,19 @@ def duty_for(cfg, temp_c, air_c, st, window_s=WINDOW_S):
     """The share of the next window the mat is on (0 to 1): PI control with an
     air-temperature feed-forward.
 
-    Updates st["integral"], except while the output is pinned at 0 or 1 in the
-    direction of the error, so it cannot wind up while the mat is flat out and
-    still short."""
+    window_s is how long Auto has run since it last chose a duty: the time the
+    integral is advanced by. Updates st["integral"], except while the output
+    is pinned at 0 or 1 in the direction of the error, so it cannot wind up
+    while the mat is flat out and still short.
+
+    Without an air reading the feed-forward keeps the last air temperature it
+    had; the first guess, with none ever seen, is 0.7."""
     target_c = f_to_c(cfg.get("heat_target_f", 75))
     err = target_c - temp_c
+    if air_c is None:
+        air_c = st.get("air_c")
+    else:
+        st["air_c"] = air_c
     ff = (target_c - FF_BASE_C - FF_AIR * air_c) / FF_GAIN_C if air_c is not None else 0.7
     integ = st.get("integral", 0.0)
     raw = ff + KP_PER_C * err + integ
@@ -120,7 +129,11 @@ def decide(cfg, temp_c, age_s, on_now, now, air_c=None, st=None):
         )
     win = st.get("window")
     if win is None or now >= win + WINDOW_S or now < win:
-        duty = duty_for(cfg, temp_c, air_c, st)
+        # A window that follows another advances the integral by the time
+        # between them. The first one after Auto starts, or after the clock
+        # steps back, has no such time behind it.
+        ran_s = min(WINDOW_S, now - win) if win is not None and now > win else 0.0
+        duty = duty_for(cfg, temp_c, air_c, st, ran_s)
         on_s = duty * WINDOW_S
         if on_s < MIN_PULSE_S:
             on_s = 0.0

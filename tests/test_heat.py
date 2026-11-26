@@ -80,6 +80,22 @@ def test_heat_mat():
     assert (
         st["duty"] == 1.0 and st["integral"] <= heat.KP_PER_C * 3 * heat.WINDOW_S / heat.TI_S + 1e-9
     ), f"the integral does not wind up while the mat is flat out (integral {st['integral']:.3f})"
+    # switching Auto off and on again does not add a window's worth of integral
+    st = {}
+    for k in range(6):
+        d(base, c75 - 1, 60, None, now + k * 40, 18.0, st)
+        d(dict(base, heat_mode="off"), c75 - 1, 60, None, now + k * 40 + 20, 18.0, st)
+    assert st.get("integral", 0.0) == 0.0, (
+        f"the integral advances with the time Auto has run, not with each restart "
+        f"({st.get('integral')})"
+    )
+    # losing the air sensor keeps the feed-forward where it was
+    st = {}
+    with_air = heat.duty_for(base, c75 - 0.2, air_half, st, 0)
+    without = heat.duty_for(base, c75 - 0.2, None, st, 0)
+    assert with_air == without and heat.duty_for(base, c75 - 0.2, None, {}, 0) != with_air, (
+        "with no air reading the feed-forward uses the last air temperature it had"
+    )
     st = {}
     tiny = [
         d(base, c75 + 0.35, 60, None, now + k, c75 - 0.2, st)[0]
