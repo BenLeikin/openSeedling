@@ -557,3 +557,22 @@ def test_tray_sensor_map():
     finally:
         with config.settings_lock:
             config.settings.update(saved)
+
+
+def test_arming_one_tray_does_not_rearm_another(monkeypatch):
+    """A tray disarmed while an arm request is being checked stays disarmed."""
+    with config.settings_lock:
+        config.settings.update(auto_water_trays=["1"], auto_water=True)
+
+    def pump_disarms_tray_1(cfg=None):
+        with config.settings_lock:  # as a failed fill does, mid-request
+            config.settings.update(auto_water_trays=[], auto_water=False)
+        return {}
+
+    monkeypatch.setattr(water, "auto_water_blockers", pump_disarms_tray_1)
+    r = c.post("/api/auto_water", json={"enabled": True, "trays": ["2"]}).get_json()
+    with config.settings_lock:
+        armed = list(config.settings["auto_water_trays"])
+    assert r["ok"] and r["armed"] == ["2"] and armed == ["2"], (
+        f"arming tray 2 leaves tray 1 as the pump code left it ({armed})"
+    )

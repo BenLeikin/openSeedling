@@ -404,11 +404,11 @@ def api_auto_water():
     )
     if not trays_:
         return jsonify(ok=False, error="none of these trays has a pump"), 200
-    with config.settings_lock:
-        cur = set(water.armed_trays(config.settings))
+    # The armed set is read and written under one hold of the lock: a tray
+    # the pump code disarms in between (a failed fill) must stay disarmed.
     if not want:
-        left = sorted(cur - set(trays_))
         with config.settings_lock:
+            left = sorted(set(water.armed_trays(config.settings)) - set(trays_))
             config.settings["auto_water_trays"], config.settings["auto_water"] = left, bool(left)
             config.save_config()
         db.log_event("auto_water", f"disarmed tray {', '.join(trays_)}")
@@ -422,8 +422,8 @@ def api_auto_water():
             error="Auto-watering needs a calibrated probe and a "
             "float switch on every tray it waters.",
         ), 200
-    armed = sorted(cur | set(trays_))
     with config.settings_lock:
+        armed = sorted(set(water.armed_trays(config.settings)) | set(trays_))
         config.settings["auto_water_trays"], config.settings["auto_water"] = armed, True
         config.save_config()
     db.log_event("auto_water", f"armed tray {', '.join(trays_)}")
