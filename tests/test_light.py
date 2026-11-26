@@ -477,3 +477,13 @@ def test_an_unreachable_plug_does_not_hold_up_the_light(monkeypatch):
     assert took < 0.5 and asked == [True], (
         f"a light write returns without waiting for the plug ({took:.2f}s), and the plug follows"
     )
+
+
+def test_sunrise_where_twilight_lasts_all_night():
+    """At 63°N in June the sun sets but the sky never gets dark; the real
+    sunrise and sunset are still reported."""
+    tz = ZoneInfo("Europe/Helsinki")
+    cfg = dict(config.settings, latitude=63.0, longitude=25.0, schedule_mode="solar")
+    cfg.update(sunrise_offset_min=0, sunset_offset_min=0)
+    rise, sets, on, off = light_mod.sun_window(cfg, date(2026, 6, 21), tz)
+    assert (rise.hour, sets.hour) == (3, 23) and (on, off) == (rise, sets)

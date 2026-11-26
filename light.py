@@ -8,7 +8,7 @@ import threading
 import time
 from datetime import datetime, timedelta
 from astral import LocationInfo
-from astral.sun import sun
+from astral import sun as astral_sun
 
 from applog import log
 import db
@@ -757,7 +757,12 @@ def sun_window(cfg, day, tz):
     """
     loc = LocationInfo(latitude=cfg["latitude"], longitude=cfg["longitude"])
     try:
-        s = sun(loc.observer, date=day, tzinfo=tz)
+        # sunrise and sunset on their own: astral's sun() also works out dawn
+        # and dusk, and fails where the sun rises but twilight lasts all night
+        s = {
+            "sunrise": astral_sun.sunrise(loc.observer, date=day, tzinfo=tz),
+            "sunset": astral_sun.sunset(loc.observer, date=day, tzinfo=tz),
+        }
     except ValueError:
         # Polar day or night: the sun never crosses the horizon, so there is
         # no sunrise to report. Fixed and duration schedules do not need one;
