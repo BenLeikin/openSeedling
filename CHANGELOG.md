@@ -34,8 +34,31 @@ the 4-17 baseline. The installer commits each one with the heading below.
 - A canopy analysis that crashes or is killed is logged; it used to fail without a trace.
 - Settings in a hand-edited `config.json` are checked at start-up; an invalid one falls back to its default with an error in the log. NaN and infinity are refused wherever a number is expected.
 - `setup.sh` runs without a terminal where sudo needs no password, and a change to `requirements-dev.txt` no longer triggers it on the Pi.
+- On a rig with a dim pin of its own, the MOSFET panel no longer goes to full for a moment at every service start and when the light backend is switched.
+- Dimming below the fixture's minimum by cycling delivers the share that was asked for; a 25% target used to come out near a third.
+- A smart plug that has dropped off the network no longer holds up every light write for up to 25 s. The plug is switched from a thread of its own, and shutdown waits for it once, for at most 5 s.
+- Sunrise and sunset are right between about 61 and 66 degrees north in summer, where the sun sets but the sky never gets dark; the schedule used to fall back to 06:00 and 18:00.
+- The heat mat's controller no longer adds a step to its integral each time Auto is switched on, and keeps its feed-forward when the air sensor drops out instead of jumping to a fixed guess.
+- With two soil probes, unplugging one no longer renames the other from `temp:soil_<serial>` to `temp:soil`.
+- One alert check that fails no longer silences every other alert.
+- A photo whose rotation fails is not kept, and a capture cut short by a power loss leaves no half-written photo: the frame takes its `.jpg` name only when it is finished. A photo that cannot be read is no longer retried for a thumbnail every 15 s.
+- A thumbnail rebuild asked for while one is running runs afterwards instead of being dropped, and no longer deletes the thumbnails of photos taken while it ran.
+- Rendering the timelapse flattens frames at the video's width instead of full size, checks for free space before it starts, and allows a long run more than an hour to encode.
+- Photo and video times are sent with their time zone, so a browser in another zone shows the right photo age.
+- Arming auto-watering for one tray no longer re-arms another that a failed fill had just disarmed.
+- A password set with `set_password.py` while the app is running is no longer overwritten by the app's next save.
+- Two pages editing the same tray no longer overwrite each other's cells: a save writes only the cells that page changed.
+- In metric units, saving Settings no longer shifts the temperatures nobody touched (80 to 85 F became 81 to 84 F).
+- The charts follow dark mode; the schedule curve was dark on a dark card.
+- The schedule chart, its times and the clock show the controller's time from a browser in any time zone, and an edge being dragged stays put when a status arrives.
+- A chart range of more than two days is sent as at most 1,200 averaged steps per sensor instead of every sample, and refreshed every ten minutes.
+- `update.sh` puts the previous files back when a step fails or it is interrupted after it has started copying.
+- `setup.sh` no longer shows the stored plug password as the prompt's default, writes the boot config in one move, and says when it adds a line to `~/.bashrc`.
+- `kiosk.sh remove` takes back the group memberships and the PAM file that install added.
+- `usbcheck.sh` no longer stops when `python3` fails while reading a setting.
 
 ### Changed
+- Under systemd each log line carries its journal priority, so `journalctl -u growlight -p warning` shows only warnings and errors.
 - One thing at a time has the light: the schedule, a photo, a focus sweep, the camera alignment, a calibration sweep or the lightning effect. A scheduled photo now waits for a sweep or the lightning effect to finish instead of changing the light under it, a sweep or effect will not start during a photo, and a holder that hangs loses the light when its time limit runs out. A photo gives the light back as soon as the frame is on disk, before it is rotated and thumbnailed.
 - The modules no longer import each other in loops. The control loop has its own module (`control.py`), with `events.py`, `readings.py`, `units.py` and `auth.py` split out of the modules that shared them, and the four route modules are Flask blueprints. The lint rule for import order is back on.
 - Alerts remind once a day while a problem lasts, instead of every six hours (Settings, Alerts; an install keeps the interval it has saved). Alert state survives a restart, so restarting the service no longer announces every standing problem again.
