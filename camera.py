@@ -210,16 +210,16 @@ def _usb_capture_view(cfg, out_path, width, height, warmup=None):
     if not st:
         ok, err = _usb_capture(cfg, out_path, width, height, warmup=warmup)
         if ok:
-            _rotate_file(out_path, turns[0])
-        return ok, err
+            err = _rotate_file(out_path, turns[0])
+        return not err, err
     # not *.jpg: everything that lists the timelapse folder takes a .jpg for a photo
     parts = [Path(f"{out_path}.cam{i}.tmp") for i in (1, 2)]
     try:
         for i, (dev, part) in enumerate(zip(st["devices"], parts), 1):
             ok, err = _usb_capture(cfg, part, width, height, warmup=warmup, dev=dev)
-            if not ok:
+            err = err if not ok else _rotate_file(part, turns[i - 1])
+            if err:
                 return False, f"camera {i}: {err}"
-            _rotate_file(part, turns[i - 1])
         r = tools.imgtool(
             [
                 "stitch",
@@ -306,11 +306,11 @@ def align_cameras():
         turns = cam_turns(cfg)
         for i, (dev, part) in enumerate(zip(devs, parts), 1):
             ok, err = _usb_capture(cfg, part, w, h, warmup=4, dev=dev)
-            if not ok:
-                return {"ok": False, "error": f"camera {i}: {err}"}
             # each turned the right way up first, so the two are matched as
             # they will be shown
-            _rotate_file(part, turns[i - 1])
+            err = err if not ok else _rotate_file(part, turns[i - 1])
+            if err:
+                return {"ok": False, "error": f"camera {i}: {err}"}
         r = tools.imgtool(
             ["align", parts[0], parts[1], "--matches", ALIGN_MATCHES], "aligning", timeout=180
         )
@@ -374,23 +374,21 @@ def unstitch(settings):
     return True
 
 
-def _postprocess_file(path, cfg):
-    """Rotate a just-captured JPEG in place by cam_rotate.
+def _rotate_file(path, degrees):
+    """Rotate a JPEG in place by 90, 180 or 270 degrees; anything else leaves
+    it alone. Returns an error message, or None.
 
     Rotation is baked into the stored file; flattening is applied when the
     image is served, so the grid corners can be re-dragged against the real
-    scene. On failure the frame is kept as captured and the reason is logged."""
-    degrees = int(cfg.get("cam_rotate", 0) or 0)
+    scene."""
+    try:
+        degrees = int(degrees or 0)
+    except (TypeError, ValueError):
+        degrees = 0
     if degrees not in (90, 180, 270):
-        return
+        return None
     r = tools.imgtool(["rotate", path, degrees, "--q", 90], "rotating the photo")
-    if not r.ok:
-        log.error(f"post-process failed ({r.error}); keeping the frame as captured")
-
-
-# Rotate by a given angle: each camera of a pair has its own.
-def _rotate_file(path, degrees):
-    _postprocess_file(path, {"cam_rotate": degrees})
+    return None if r.ok else (r.error or "rotating the photo failed")
 
 
 def light_for_photo(cfg):
@@ -409,6 +407,8 @@ def _rpicam_capture(cfg, out_path):
     cmd = [
         "rpicam-still",
         "-n",
+        "--encoding",
+        "jpg",  # stated: the file is not named *.jpg while it is being written
         "-o",
         str(out_path),
         "-t",
@@ -427,7 +427,12 @@ def take_photo(cfg, now, manual=False):
     The light is held only until the frame is on disk, then goes back to the
     schedule while the photo is rotated and thumbnailed. `manual` tags the
     filename with an _m suffix so the daily AI report can prefer scheduled
-    frames: a manual shot at midnight is a dark off-schedule photo."""
+    frames: a manual shot at midnight is a dark off-schedule photo.
+
+    The frame is captured and rotated under a .part name and takes its .jpg
+    name only when it is finished. A capture that fails or is cut short, or a
+    rotation that fails, leaves no photo: a frame lying on its side, or half
+    of one, never joins the timelapse."""
     global capturing
     if not light_mod.claim(HOLD_PHOTO, PHOTO_HOLD_S):
         log.info(f"photo skipped: the light is in use ({light_mod.holder()})")
@@ -435,6 +440,7 @@ def take_photo(cfg, now, manual=False):
     capturing = True
     usb = cfg.get("camera_backend", "rpicam") == "usb"
     fname = photos_mod.TIMELAPSE_DIR / f"{now:%Y%m%d_%H%M%S}{'_m' if manual else ''}.jpg"
+    part = Path(f"{fname}.part")
     try:
         try:
             # The capture brightness is a main-light setting: it applies only
@@ -445,19 +451,20 @@ def take_photo(cfg, now, manual=False):
             time.sleep(2)  # let light and auto-exposure settle
             if usb:  # comes back the right way up
                 ok, err = _usb_capture_view(
-                    cfg, fname, int(cfg.get("usb_width", 2048)), int(cfg.get("usb_height", 1536))
+                    cfg, part, int(cfg.get("usb_width", 2048)), int(cfg.get("usb_height", 1536))
                 )
                 err = None if ok else (err or "capture failed")
             else:
-                err = _rpicam_capture(cfg, fname)
+                err = _rpicam_capture(cfg, part)
         finally:
             light_mod.release(HOLD_PHOTO)
+        if not err and not usb:
+            err = _rotate_file(part, cfg.get("cam_rotate"))
         if err:
             log.error(f"capture failed: {err}")
             _camera_fail(err.splitlines()[-1])
             return None
-        if not usb:
-            _postprocess_file(fname, cfg)
+        os.replace(part, fname)
         photos_mod.make_thumb(fname, cfg)
         _camera_ok()
         return fname
@@ -466,6 +473,7 @@ def take_photo(cfg, now, manual=False):
         _camera_fail(str(e))
         return None
     finally:
+        part.unlink(missing_ok=True)
         capturing = False
 
 
@@ -570,6 +578,10 @@ def clear_capture_scratch(min_age_s=600):
     return removed
 
 
+# photos the backfill could not make a thumbnail for, until the next restart
+_no_thumb = set()
+
+
 def capture_loop():
     clear_capture_scratch()
     last_shot = None
@@ -596,6 +608,7 @@ def _capture_tick(last_shot):
                 p
                 for p in sorted(photos_mod.TIMELAPSE_DIR.glob("*.jpg"))
                 if not (photos_mod.THUMB_DIR / p.name).exists()
+                and p.name not in _no_thumb
                 and time.time() - p.stat().st_mtime > 10
             ),
             None,
@@ -603,6 +616,10 @@ def _capture_tick(last_shot):
     )
     if missing:
         photos_mod.make_thumb(missing)
+        if not (photos_mod.THUMB_DIR / missing.name).exists():
+            # an unreadable photo: tried once, not on every tick
+            _no_thumb.add(missing.name)
+            log.warning(f"no thumbnail could be made for {missing.name}; leaving it")
     with config.settings_lock:
         cfg = dict(config.settings)
     if cfg.get("camera_enabled") and cfg["capture_enabled"]:

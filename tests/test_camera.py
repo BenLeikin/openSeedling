@@ -1163,3 +1163,62 @@ def test_the_photo_list_is_read_again_only_when_the_folder_changes():
         assert "20260101_120000.jpg" not in c.get("/api/photos").get_json()["names"]
     finally:
         type(thumbs).glob = real_glob
+
+
+def test_a_photo_that_cannot_be_rotated_is_not_kept(monkeypatch):
+    """The frame is written and rotated under a .part name; when the rotation
+    fails nothing joins the timelapse, and the failure counts against the
+    camera."""
+    cam = camera_mod
+    monkeypatch.setattr(cam.time, "sleep", lambda s: None)
+    monkeypatch.setattr(photos_mod, "make_thumb", lambda *a, **k: None)
+    names_seen = []
+
+    def fake_rpicam(cfg, out_path):
+        names_seen.append(Path(out_path).name)
+        Path(out_path).write_bytes(b"\xff\xd8\xff\xd9")
+
+    monkeypatch.setattr(cam, "_rpicam_capture", fake_rpicam)
+    rotated = {"ok": False}
+    monkeypatch.setattr(
+        cam.tools,
+        "imgtool",
+        lambda args, what, **k: tools.Result(
+            0 if rotated["ok"] else -9, b"", b"", "" if rotated["ok"] else "killed: out of memory"
+        ),
+    )
+    cfg = dict(config.settings, camera_backend="rpicam", cam_rotate=90, capture_set_light=False)
+    now = datetime.now(ZoneInfo(cfg["timezone"]))
+    fails = cam.camera["fails"]
+    try:
+        lost = cam.take_photo(cfg, now)
+        left = sorted(p.name for p in photos_mod.TIMELAPSE_DIR.glob("*") if p.is_file())
+        failed = cam.camera["fails"] - fails
+        rotated["ok"] = True
+        kept = cam.take_photo(cfg, now)
+        after = sorted(p.name for p in photos_mod.TIMELAPSE_DIR.glob("*") if p.is_file())
+    finally:
+        cam.camera["fails"] = fails
+    assert lost is None and left == [] and failed == 1, (
+        f"a failed rotation leaves no photo and no scratch file ({left})"
+    )
+    assert kept is not None and after == [kept.name] and kept.suffix == ".jpg", after
+    assert all(n.endswith(".jpg.part") for n in names_seen), (
+        f"the camera writes under a name nothing lists as a photo ({names_seen})"
+    )
+
+
+def test_an_unreadable_photo_is_not_thumbnailed_on_every_tick(monkeypatch):
+    cam = camera_mod
+    bad = photos_mod.TIMELAPSE_DIR / "20200101_000000.jpg"
+    bad.write_bytes(b"\xff\xd8 cut short")
+    old = time.time() - 60
+    os.utime(bad, (old, old))
+    tries = []
+    monkeypatch.setattr(photos_mod, "make_thumb", lambda p, *a, **k: tries.append(p.name))
+    monkeypatch.setattr(cam, "_no_thumb", set())
+    with config.settings_lock:
+        config.settings.update(camera_enabled=False)
+    for _ in range(3):
+        cam._capture_tick(None)
+    assert tries == [bad.name], f"the backfill tries a photo once ({len(tries)} tries)"
