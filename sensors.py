@@ -33,6 +33,7 @@ import threading
 import time
 
 from applog import log
+import db
 
 # One lock for every I2C read. The sample loop, the calibration endpoints and
 # the light sweep touch these devices from different threads. Blinka locks per
@@ -545,6 +546,33 @@ def _lux_failed(addr, err):
 # --- soil temp (DS18B20) ---
 
 
+W1_PROBES = "/sys/bus/w1/devices/28-*"
+SOIL_BY_SERIAL_KEY = "soil_by_serial"  # kv: two probes have been seen together
+_soil_named_by_serial = None
+
+
+def _soil_by_serial(count):
+    """Whether soil probes are named by serial (temp:soil_xxxx) or plain
+    temp:soil.
+
+    A single probe is temp:soil. Once two have been on the bus together each
+    is named by its serial, so reordering never swaps them, and the rig stays
+    that way from then on: a probe that drops off the bus must not rename the
+    one that is left, which would split its history and lose the heat mat its
+    sensor. Adding a second probe does rename the first one's series.
+    """
+    global _soil_named_by_serial
+    if _soil_named_by_serial is None:
+        _soil_named_by_serial = bool(db.kv_get(SOIL_BY_SERIAL_KEY, False))
+    if count > 1 and not _soil_named_by_serial:
+        _soil_named_by_serial = True
+        try:
+            db.kv_set(SOIL_BY_SERIAL_KEY, True)
+        except Exception as e:
+            log.warning(f"could not record that soil probes are named by serial ({e})")
+    return _soil_named_by_serial
+
+
 def _read_soil_temps():
     """Every DS18B20 on the 1-Wire bus, in Celsius like the other temp: keys.
 
@@ -554,13 +582,11 @@ def _read_soil_temps():
     if not ENABLED["soil_temp"]:
         return {}
     out = {}
-    devs = sorted(glob.glob("/sys/bus/w1/devices/28-*"))
+    devs = sorted(glob.glob(W1_PROBES))
+    by_serial = _soil_by_serial(len(devs))
     for dev in devs:
         serial = os.path.basename(dev)
-        # A single probe reads as "soil"; with two or more, each gets a serial
-        # suffix, so reordering never swaps them. Adding a second probe does
-        # rename the first one's series (temp:soil -> temp:soil_xxxx).
-        key = "temp:soil" if len(devs) == 1 else f"temp:soil_{serial[-4:]}"
+        key = f"temp:soil_{serial[-4:]}" if by_serial else "temp:soil"
         try:
             with open(f"{dev}/w1_slave") as f:
                 lines = f.readlines()
