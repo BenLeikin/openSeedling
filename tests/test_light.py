@@ -450,3 +450,30 @@ def test_dither_keeps_its_share_when_set_again():
     on, left = lm._dither_phase(0.25, 3 * lm.DITHER_PERIOD_S + 12)
     assert not on and abs(left - (lm.DITHER_PERIOD_S - 12)) < 1e-6
     assert lm._dither_phase(1.0, 5.0)[0] and not lm._dither_phase(0.0, 5.0)[0]
+
+
+def test_an_unreachable_plug_does_not_hold_up_the_light(monkeypatch):
+    lm = light_mod
+    asked, let_go = [], threading.Event()
+
+    def slow_plug(on, retries=1, timeout=12):
+        asked.append(on)
+        let_go.wait(5)
+        lm.kasa_state.update(on=on, ok=True)
+        return True
+
+    monkeypatch.setattr(lm, "kasa_apply", slow_plug)
+    monkeypatch.setitem(lm.kasa_state, "on", False)
+    monkeypatch.setitem(lm.kasa_state, "ok", True)
+    with config.settings_lock:
+        config.settings.update(light_backend="kasa", kasa_host="192.0.2.50", plug_use="light")
+    t0 = time.monotonic()
+    lm.set_brightness_raw(100)
+    took = time.monotonic() - t0
+    deadline = time.monotonic() + 2
+    while not asked and time.monotonic() < deadline:
+        time.sleep(0.01)
+    let_go.set()
+    assert took < 0.5 and asked == [True], (
+        f"a light write returns without waiting for the plug ({took:.2f}s), and the plug follows"
+    )

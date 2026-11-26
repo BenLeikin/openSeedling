@@ -158,8 +158,8 @@ async def _kasa_set(on):
     return bool(dev.is_on)
 
 
-def kasa_apply(on, retries=1):
-    """Drive the plug to `on`. Returns True on success.
+def kasa_apply(on, retries=1, timeout=12):
+    """Drive the plug to `on`, waiting for it. Returns True on success.
 
     Retries once by default, since a single dropped packet over wifi is
     routine. A failure of every attempt is recorded in kasa_state for the
@@ -173,7 +173,7 @@ def kasa_apply(on, retries=1):
     last = ""
     for attempt in range(retries + 1):
         try:
-            actual = _kasa_run(_kasa_set(on))
+            actual = _kasa_run(_kasa_set(on), timeout=timeout)
             with _kasa_lock:
                 kasa_state.update(on=actual, ok=True, error="", fails=0, last_ok=time.time())
             return True
@@ -631,14 +631,52 @@ def build_linear_table(points):
     return table, info
 
 
+# The light's plug is switched by a thread of its own. A plug that has dropped
+# off the network takes many seconds to fail, and a light write must not wait
+# for it: the PWM fixtures are set in the same call.
+PLUG_RETRY_S = 15.0
+PLUG_SHUTDOWN_WAIT_S = 5.0
+_plug_want = {"on": None, "final": False}
+_plug_wake = threading.Event()
+
+
 def set_plug(percent):
-    """Switch the smart plug on or off to match a brightness."""
+    """Have the smart plug switched on or off to match a brightness.
+
+    Returns at once; the plug follows. The exception is shutdown, the last
+    chance to switch it off: that waits for the plug, briefly and only once.
+    """
     want = percent > KASA_ON_AT
     with _kasa_lock:
-        believed = kasa_state["on"]
-    if believed is want and kasa_state["ok"]:
+        there = kasa_state["on"] is want and kasa_state["ok"]
+        _plug_want["on"] = want
+        stopping = hardware.SHUTTING_DOWN.is_set()
+        final = stopping and not _plug_want["final"]
+        _plug_want["final"] = stopping
+    if there:
         return  # already there; don't poll the plug
-    kasa_apply(want)
+    if final:
+        kasa_apply(False, retries=0, timeout=PLUG_SHUTDOWN_WAIT_S)
+    elif not stopping:
+        _plug_wake.set()
+
+
+def _plug_loop():
+    while True:
+        _plug_wake.wait()
+        _plug_wake.clear()
+        with _kasa_lock:
+            want = _plug_want["on"]
+            there = kasa_state["on"] is want and kasa_state["ok"]
+        if want is None or there or hardware.SHUTTING_DOWN.is_set():
+            continue
+        # after a failure, leave the plug alone for a while; the control
+        # loop's next pass asks again
+        if not kasa_apply(want):
+            time.sleep(PLUG_RETRY_S)
+
+
+threading.Thread(target=_plug_loop, daemon=True, name="plug").start()
 
 
 def _stop_pwm(channel, mode):
