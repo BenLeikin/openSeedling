@@ -13,6 +13,8 @@ hash when editing config.json by hand.
 An empty password removes the login, making the dashboard open again.
 Restart the service afterwards so the running app picks up the change:
     sudo systemctl restart growlight
+Until then the old password still works. The running app does not write the
+old one back: it takes the hash from the file the next time it saves.
 """
 
 import getpass

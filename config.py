@@ -349,6 +349,20 @@ def _load_json(path):
     return saved
 
 
+def _stamp(path):
+    """What identifies one version of a file on disk; None when it is absent."""
+    try:
+        st = Path(path).stat()
+    except OSError:
+        return None
+    return st.st_mtime_ns, st.st_size, st.st_ino
+
+
+# config.json as this process last read or wrote it. A different stamp at the
+# next save means something else wrote the file in between.
+_config_stamp = _stamp(CONFIG_PATH)
+
+
 if CONFIG_PATH.exists():
     _saved, _why = None, ""
     for _p in (CONFIG_PATH, CONFIG_BAK):
@@ -397,14 +411,25 @@ def save_config():
     if config_broken:
         log.error("not saving settings: config.json was unreadable at start")
         return
-    data = {k: v for k, v in settings.items() if not k.startswith("_")}
+    global _config_stamp
+    on_disk = None
     if CONFIG_PATH.exists():
         try:
-            _load_json(CONFIG_PATH)  # only a good file becomes the backup
+            on_disk = _load_json(CONFIG_PATH)  # only a good file becomes the backup
             atomic_write_text(CONFIG_BAK, CONFIG_PATH.read_text())
         except Exception:
             pass
+    if on_disk is not None and _stamp(CONFIG_PATH) != _config_stamp:
+        # The password is set by scripts/set_password.py writing the file, and
+        # never by the app. Written while the app runs, its hash is taken up
+        # here; saving the one in memory would put the old password back.
+        theirs = on_disk.get("password_hash", "")
+        if theirs != settings.get("password_hash", ""):
+            settings["password_hash"] = theirs
+            log.info("config.json was changed on disk: its dashboard password is now in use")
+    data = {k: v for k, v in settings.items() if not k.startswith("_")}
     atomic_write_text(CONFIG_PATH, json.dumps(data, indent=2))
+    _config_stamp = _stamp(CONFIG_PATH)
 
 
 # Migration: a saved tray laid out 4 wide x 3 deep (A1..D3) becomes 3 wide x

@@ -448,3 +448,33 @@ def test_version():
     assert ver and top and ver.group(1) == top.group(1), (
         f"pyproject.toml and CHANGELOG.md agree on the version ({ver and ver.group(1)})"
     )
+
+
+def test_a_password_set_while_the_app_runs_survives_the_next_save():
+    """scripts/set_password.py writes the hash into config.json. The running
+    app saves its settings from memory, and must not put the old hash back."""
+    path = config.CONFIG_PATH
+    before = path.read_text() if path.exists() else None
+    with config.settings_lock:
+        was = config.settings.get("password_hash", "")
+        config.save_config()
+        on_disk = json.loads(path.read_text())
+        on_disk["password_hash"] = "scrypt:new-hash"
+        on_disk["max_bright"] = 1  # the script's copy of everything else is stale
+        path.write_text(json.dumps(on_disk))
+        bright = config.settings["max_bright"]
+        try:
+            config.save_config()
+            saved = json.loads(path.read_text())
+            in_use = config.settings["password_hash"]
+        finally:
+            config.settings["password_hash"] = was
+            if before is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.write_text(before)
+            config._config_stamp = config._stamp(path)
+    assert saved["password_hash"] == "scrypt:new-hash" == in_use, (
+        "the hash written to the file is kept, and taken up by the running app"
+    )
+    assert saved["max_bright"] == bright, "every other setting is the app's own"
