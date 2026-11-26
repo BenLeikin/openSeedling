@@ -1252,3 +1252,46 @@ def test_flattened_video_frames_are_no_wider_than_the_video(tmp_path):
     assert r.ok, r.error
     w, h = photos_mod.jpeg_size(dest / "000000.jpg")
     assert w == 1280 and h < 1280, f"{w}x{h}"
+
+
+def _wait_for_thumbs():
+    deadline = time.time() + 10
+    time.sleep(0.05)
+    while photos_mod._thumbs_lock.locked() and time.time() < deadline:
+        time.sleep(0.02)
+
+
+def test_thumbnail_rebuild_keeps_up_with_what_changes(monkeypatch):
+    """A rebuild asked for while one is running is run afterwards with the
+    settings as they are then, and a photo taken meanwhile keeps its thumbnail."""
+    tl, th = photos_mod.TIMELAPSE_DIR, photos_mod.THUMB_DIR
+    th.mkdir(parents=True, exist_ok=True)
+    for i in range(3):
+        (tl / f"2026092{i}_120000.jpg").write_bytes(b"photo")
+    (th / "20200101_000000.jpg").write_text("its photo is gone")
+    new = "20260930_120000.jpg"
+
+    def fake_thumb(ph, cfg=None, dst_dir=None):
+        time.sleep(0.05)
+        if not (tl / new).exists():  # a photo arrives, thumbnail and all, mid-rebuild
+            (tl / new).write_bytes(b"photo")
+            (th / new).write_text("new")
+        ((dst_dir or th) / ph.name).write_text(
+            "flat" if (cfg or {}).get("timelapse_flatten", True) else "raw"
+        )
+
+    monkeypatch.setattr(photos_mod, "make_thumb", fake_thumb)
+    with config.settings_lock:
+        config.settings["timelapse_flatten"] = True
+    photos_mod.rebuild_thumbs_async()
+    time.sleep(0.07)
+    with config.settings_lock:
+        config.settings["timelapse_flatten"] = False
+    photos_mod.rebuild_thumbs_async()  # while the first is still running
+    _wait_for_thumbs()
+    kinds = {p.name: p.read_text() for p in th.glob("*.jpg")}
+    assert "20200101_000000.jpg" not in kinds, "a thumbnail goes when its photo has gone"
+    assert new in kinds, "a photo taken during the rebuild keeps its thumbnail"
+    assert set(kinds.values()) == {"raw"}, (
+        f"the second request is not dropped: every thumbnail matches the newest settings ({kinds})"
+    )

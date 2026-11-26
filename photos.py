@@ -292,44 +292,56 @@ def jpeg_size(path):
 
 
 _thumbs_lock = threading.Lock()
+_thumbs_again = threading.Event()  # a rebuild was asked for while one was running
 
 
 def rebuild_thumbs_async():
-    """Regenerate every thumbnail in the background, one rebuild at a time."""
+    """Regenerate every thumbnail in the background, one rebuild at a time.
+
+    Asked for while one is running (the settings changed again), it runs once
+    more when that one ends, with the settings as they are then."""
 
     def work():
         if not _thumbs_lock.acquire(blocking=False):
-            return  # one already running; it reads settings fresh
+            _thumbs_again.set()
+            return
         try:
-            with config.settings_lock:
-                cfg = dict(config.settings)
-            photos = [p for p in sorted(TIMELAPSE_DIR.glob("*.jpg")) if not p.name.startswith("_")]
-            # Build each new thumbnail beside the old ones and swap it in, so
-            # the scrubber's frame list never empties while this runs.
-            tmp = THUMB_DIR / "_rebuild"
-            shutil.rmtree(tmp, ignore_errors=True)
-            tmp.mkdir(parents=True, exist_ok=True)
-            keep = set()
-            for ph in photos:
-                make_thumb(ph, cfg, dst_dir=tmp)
-                if (tmp / ph.name).exists():
-                    os.replace(tmp / ph.name, THUMB_DIR / ph.name)
-                    keep.add(ph.name)
-            for old in THUMB_DIR.glob("*.jpg"):
-                if old.name not in keep:
-                    old.unlink(missing_ok=True)  # its photo is gone
-            shutil.rmtree(tmp, ignore_errors=True)
-            # thumbnails are cached by browsers for a year under their name;
-            # a new version in the URL is what makes them fetch the new ones
-            db.kv_set("thumbs_version", int(time.time()))
-            log.info(
-                f"rebuilt {len(photos)} thumbnails "
-                f"({'flattened' if cfg.get('timelapse_flatten', True) else 'raw'})"
-            )
+            _rebuild_thumbs()
+            while _thumbs_again.is_set():
+                _thumbs_again.clear()
+                _rebuild_thumbs()
         finally:
             _thumbs_lock.release()
 
     threading.Thread(target=work, daemon=True, name="thumbs").start()
+
+
+def _rebuild_thumbs():
+    with config.settings_lock:
+        cfg = dict(config.settings)
+    photos = [p for p in sorted(TIMELAPSE_DIR.glob("*.jpg")) if not p.name.startswith("_")]
+    # Build each new thumbnail beside the old ones and swap it in, so the
+    # scrubber's frame list never empties while this runs.
+    tmp = THUMB_DIR / "_rebuild"
+    shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir(parents=True, exist_ok=True)
+    for ph in photos:
+        make_thumb(ph, cfg, dst_dir=tmp)
+        if (tmp / ph.name).exists():
+            os.replace(tmp / ph.name, THUMB_DIR / ph.name)
+    # A thumbnail goes when its photo has gone. Judged by the photo itself and
+    # not by the list above: a photo taken since then has a thumbnail too.
+    for old in THUMB_DIR.glob("*.jpg"):
+        if not (TIMELAPSE_DIR / old.name).exists():
+            old.unlink(missing_ok=True)
+    shutil.rmtree(tmp, ignore_errors=True)
+    # thumbnails are cached by browsers for a year under their name; a new
+    # version in the URL is what makes them fetch the new ones
+    db.kv_set("thumbs_version", int(time.time()))
+    log.info(
+        f"rebuilt {len(photos)} thumbnails "
+        f"({'flattened' if cfg.get('timelapse_flatten', True) else 'raw'})"
+    )
 
 
 _rect_cache = {"key": None, "bytes": None}
