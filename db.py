@@ -188,18 +188,27 @@ def log_event(etype, detail="", ts=None):
 
 
 @_locked
-def series(sensor, hours=168):
+def series(sensor, hours=168, max_points=None):
     """[(ts, value), ...] for a sensor over the last `hours`: hourly averages
-    for the part older than the raw retention, raw samples for the rest."""
+    for the part older than the raw retention, raw samples for the rest.
+
+    With max_points, the span is cut into that many equal steps and each step
+    holds the average of its samples: a month at one sample every five minutes
+    is some 8,600 points a sensor, far more than a chart has pixels for."""
     since = int(time.time()) - hours * 3600
+    step = (hours * 3600) // max_points if max_points else 0
     c = _c()
-    raw = c.execute(
-        "SELECT ts, value FROM readings WHERE sensor=? AND ts>=? ORDER BY ts", (sensor, since)
-    ).fetchall()
-    hourly = c.execute(
-        "SELECT ts, value FROM readings_hourly WHERE sensor=? AND ts>=? ORDER BY ts",
-        (sensor, since),
-    ).fetchall()
+    if step > 1:
+        pick = (
+            "SELECT (ts / ?) * ? AS ts, AVG(value) AS value FROM {} "
+            "WHERE sensor=? AND ts>=? GROUP BY ts / ? ORDER BY ts"
+        )
+        args = (step, step, sensor, since, step)
+    else:
+        pick = "SELECT ts, value FROM {} WHERE sensor=? AND ts>=? ORDER BY ts"
+        args = (sensor, since)
+    raw = c.execute(pick.format("readings"), args).fetchall()
+    hourly = c.execute(pick.format("readings_hourly"), args).fetchall()
     merged = {r["ts"]: r["value"] for r in hourly}
     merged.update({r["ts"]: r["value"] for r in raw})  # raw wins where overlapping
     return sorted(merged.items())

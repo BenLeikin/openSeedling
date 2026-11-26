@@ -185,6 +185,11 @@ def series():
     return jsonify(sensor=sensor, hours=hours, points=db.series(sensor, hours))
 
 
+# Most points a chart of more than two days is sent per sensor. Up to two
+# days every sample is sent as logged.
+CHART_POINTS = 1200
+
+
 @bp.route("/api/series_all")
 @auth.public
 def series_all():
@@ -205,6 +210,7 @@ def series_all():
     with config.settings_lock:
         camera_on = bool(config.settings.get("camera_enabled"))
         _cam_t = set(setups_mod.camera_trays(dict(config.settings)))
+    soil_at = None  # the soil temperature history, read once if a probe needs it
     for k in snap.keys():
         if only and not k.startswith(only):
             continue
@@ -216,11 +222,11 @@ def series_all():
             continue  # old per-cell camera series, not charted
         if not camera_on and k.startswith("canopy:"):
             continue  # camera disabled: hide its series
-        pts = db.series(k, hours)
+        pts = db.series(k, hours, max_points=CHART_POINTS if hours > 48 else None)
         if k.startswith("probe:"):
             cal = pcal.get(k[6:]) or {}
             if (cal.get("temp_comp") or {}).get("coeff"):
-                soil_at = monitor._soil_f_lookup(snap, hours)
+                soil_at = soil_at or monitor._soil_f_lookup(snap, hours)
                 pts = [[ts, water.compensated_volts(v, cal, soil_at(ts, stf))] for ts, v in pts]
         out[k] = pts
     k = setups_mod.lux_k()

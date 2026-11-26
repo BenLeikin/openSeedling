@@ -475,3 +475,23 @@ def test_a_stale_page_saves_only_the_cells_it_changed():
     c.post("/api/trays", json={"tray": tray, "cells": {"A2": cell("chive")}})
     with config.settings_lock:
         assert set(config.settings["trays"][tray]["cells"]) == {"A2"}
+
+
+def test_a_long_chart_range_is_sent_as_averaged_steps():
+    """A month of readings is far more points than a chart can draw; past two
+    days each series is averaged into a bounded number of steps."""
+    import db
+    import routes_data
+
+    now = int(time.time())
+    rows = [(now - i * 300, "humidity", 40.0 + (i % 2) * 20) for i in range(12 * 24 * 20)]
+    with db._lock:
+        db._c().executemany("INSERT INTO readings(ts, sensor, value) VALUES (?,?,?)", rows)
+        db._c().commit()
+    day = c.get("/api/series_all?hours=24").get_json()["series"]["humidity"]
+    month = c.get("/api/series_all?hours=720").get_json()["series"]["humidity"]
+    assert 280 <= len(day) <= 289, f"a day is sent as logged ({len(day)} points)"
+    assert len(month) <= routes_data.CHART_POINTS and len(month) > 400, len(month)
+    mid = [v for _, v in month[5:-5]]
+    assert all(45 <= v <= 55 for v in mid), "each step is the average of its samples"
+    assert month == sorted(month) and month[-1][0] > now - 3600

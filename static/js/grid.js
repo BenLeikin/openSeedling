@@ -18,6 +18,7 @@ import {
   stopAlign
 } from './photos.js';
 import {
+  chartHours,
   lastChartLoad,
   lastHostLoad,
   loadChart,
@@ -374,7 +375,8 @@ export function applyStatus(j) {
       set_lastHostLoad(Date.now());
       loadHost();
     }
-    if (Date.now() - lastChartLoad > 120000) loadChart(); // history every ~2 min
+    // history every ~2 min; a view of weeks moves too slowly to need that
+    if (Date.now() - lastChartLoad > (chartHours > 48 ? 600000 : 120000)) loadChart();
     renderWater(j);
     render();
   } catch (e) {
