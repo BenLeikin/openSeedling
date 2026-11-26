@@ -323,6 +323,9 @@ export function readField(f, k, spec) {
     case 'tempF': {
       // typed in the units the field shows; stored in F
       if (raw === '') return spec.zero_off ? 0 : undefined;
+      // Left as it was filled: the stored value itself. Read back from the
+      // rounded Celsius on screen, 80 F would come out as 81.
+      if (raw === el.dataset.shown && el.dataset.stored !== undefined) return +el.dataset.stored;
       const v = parseFloat(raw);
       if (spec.zero_off && !v) return 0;
       const fv = tToF(v);
@@ -349,6 +352,8 @@ export function fillField(f, k, spec, cfg) {
         : spec.round === 1
           ? Math.round(tFromF(fv))
           : Math.round(tFromF(fv) * 10) / 10;
+    el.dataset.shown = String(el.value);
+    el.dataset.stored = String(fv);
     return;
   }
   el.value = v == null ? '' : v;

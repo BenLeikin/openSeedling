@@ -387,9 +387,15 @@ def metric_temperature(page, base, app):
     )
     page.locator("#cfgform button[type=submit]").click()
     page.wait_for_timeout(2000)
+    # 80 and 85 F show as 27 and 29 C, which read back as 81 and 84 F
+    page.evaluate(
+        "()=>fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},"
+        "body:JSON.stringify({soil_temp_low_f:80,soil_temp_high_f:85})})"
+    )
     page.goto(base + "/")
     page.wait_for_timeout(2500)
     open_all(page)
+    band = [saved(app).get(k) for k in ("soil_temp_low_f", "soil_temp_high_f")]
     page.evaluate(
         "()=>{const t=document.querySelector('#cfgform [name=heat_target_f]');t.value='30';"
         "t.dispatchEvent(new Event('input',{bubbles:true}))}"
@@ -400,6 +406,11 @@ def metric_temperature(page, base, app):
     check(
         got is not None and abs(float(got) - 86.0) < 0.06,
         f"with metric units a 30 C heat mat target is stored as 86 F ({got})",
+    )
+    after = [saved(app).get(k) for k in ("soil_temp_low_f", "soil_temp_high_f")]
+    check(
+        after == band,
+        f"saving in metric leaves the temperatures nobody touched as stored ({band} -> {after})",
     )
     page.evaluate(
         "()=>{const u=document.querySelector('#cfgform [name=units]');u.value='imperial';"
