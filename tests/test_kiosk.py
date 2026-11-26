@@ -495,3 +495,59 @@ def test_external_display():
     except ValueError:
         ok = True
     assert ok, "a display mode must look like 1024x600 or 1024x600@60, or be blank"
+
+
+def _run_kiosk(tmp_path, *args):
+    """Run scripts/kiosk.sh with sudo replaced by a logger and every system
+    path pointed into tmp_path. Returns (output, the sudo calls)."""
+    fake = tmp_path / "bin"
+    fake.mkdir(exist_ok=True)
+    log = tmp_path / "sudo.log"
+    sudo = fake / "sudo"
+    sudo.write_text(f'#!/bin/sh\necho "$@" >> {log}\n')
+    sudo.chmod(0o755)
+    env = dict(
+        os.environ,
+        PATH=f"{fake}:{os.environ['PATH']}",
+        UNIT_PATH=str(tmp_path / "kiosk.service"),
+        PAM_PATH=str(tmp_path / "pam-cage"),
+        TOUCH_RULE=str(tmp_path / "touch.rules"),
+        CURSOR_DIR=str(tmp_path / "cursor"),
+        ADDED_LIST=str(tmp_path / "added"),
+    )
+    r = subprocess.run(
+        ["bash", str(APP / "scripts" / "kiosk.sh"), *args],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    calls = log.read_text().splitlines() if log.exists() else []
+    log.unlink(missing_ok=True)
+    return r.stdout + r.stderr, calls
+
+
+def test_kiosk_remove_undoes_only_what_install_added(tmp_path):
+    """Removing the kiosk takes the user out of the groups install put them
+    in, and deletes the PAM file install wrote; nothing it found in place."""
+    env_file = APP / ".env"
+    had_env = env_file.read_text() if env_file.exists() else None
+    try:
+        pam = tmp_path / "pam-cage"
+        (tmp_path / "added").write_text(f"group render\npam {pam}\n")
+        out, calls = _run_kiosk(tmp_path, "remove")
+        dropped = [c for c in calls if c.startswith("gpasswd -d")]
+        assert len(dropped) == 1 and dropped[0].endswith(" render"), (
+            f"only the group install added is dropped ({dropped})"
+        )
+        assert f"rm -f {pam}" in calls and not (tmp_path / "added").exists(), calls
+
+        out, calls = _run_kiosk(tmp_path, "remove")  # an install with no record
+        assert not [c for c in calls if c.startswith("gpasswd")] and "Left in place" in out, (
+            "with no record of what was added, groups and the PAM file are left alone"
+        )
+    finally:
+        if had_env is None:
+            env_file.unlink(missing_ok=True)
+        else:
+            env_file.write_text(had_env)

@@ -27,6 +27,8 @@ main() {
   : "${TOUCH_RULE:=/etc/udev/rules.d/99-openseedling-touch.rules}"
   : "${CURSOR_DIR:=$HOME/.local/share/openseedling-cursor}"
   : "${DROPIN_DIR:=${UNIT_PATH}.d}"
+  # what install added to the system outside its own files, for remove to undo
+  : "${ADDED_LIST:=$APP_DIR/.kiosk-added}"
   case "$cmd" in
     install)      install_kiosk "$@" ;;
     touch-rotate) touch_rotate "${1:?touch-rotate needs 0, 90, 180 or 270, or one of those with -flip}" ;;
@@ -54,6 +56,10 @@ render_unit() {     # render_unit ROTATION: the unit with this box's paths fille
     -e "s|@CURSOR_DIR@|$CURSOR_DIR|g" "$APP_DIR/deploy/growlight-kiosk.service"
 }
 
+added() {           # added "group video" | "pam PATH": note it once in the list
+  grep -qxF "$1" "$ADDED_LIST" 2>/dev/null || echo "$1" >> "$ADDED_LIST"
+}
+
 install_kiosk() {
   local rot=90
   while [[ $# -gt 0 ]]; do
@@ -75,7 +81,11 @@ install_kiosk() {
   echo "==> groups for $RUN_USER (display, GPU and touch devices)"
   local g
   for g in video render input; do
-    getent group "$g" > /dev/null && sudo usermod -aG "$g" "$RUN_USER"
+    getent group "$g" > /dev/null || continue
+    if ! id -nG "$RUN_USER" | tr ' ' '\n' | grep -qx "$g"; then
+      sudo usermod -aG "$g" "$RUN_USER"
+      added "group $g"
+    fi
   done
 
   echo "==> login session for the screen ($PAM_PATH)"
@@ -84,6 +94,7 @@ install_kiosk() {
                   "account  required pam_unix.so" \
                   "session  required pam_unix.so" \
                   "session  required pam_systemd.so" | sudo tee "$PAM_PATH" > /dev/null
+    added "pam $PAM_PATH"
   fi
 
   echo "==> the screen may change settings without signing in (GROWLIGHT_TRUST_LOCALHOST)"
@@ -166,6 +177,21 @@ remove_kiosk() {
   sudo systemctl daemon-reload
   sudo systemctl start getty@tty1.service 2>/dev/null || true
   set_trust 0
+  # Only what install recorded adding: the user may have been in these groups
+  # already (the camera needs video), and another program may own the PAM file.
+  if [[ -f "$ADDED_LIST" ]]; then
+    local kind what
+    while read -r kind what; do
+      case "$kind" in
+        group) sudo gpasswd -d "$RUN_USER" "$what" > /dev/null 2>&1 || true ;;
+        pam)   sudo rm -f "$what" ;;
+      esac
+    done < "$ADDED_LIST"
+    rm -f "$ADDED_LIST"
+  else
+    echo "Left in place, as this install has no record of adding them: $PAM_PATH and"
+    echo "$RUN_USER's membership of the video, render and input groups."
+  fi
   echo "Removed. The packages (cage, cog, wlr-randr) stay; remove them with apt if you like."
 }
 

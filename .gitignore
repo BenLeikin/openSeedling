@@ -33,3 +33,6 @@ config.json.bak
 
 # development tools (npm install), never deployed
 node_modules/
+
+# what kiosk.sh install added to the system, for its remove to undo
+.kiosk-added
