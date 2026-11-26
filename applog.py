@@ -54,6 +54,18 @@ class _JournalFormatter(logging.Formatter):
         return "\n".join(prefix + line for line in text.split("\n"))
 
 
+def _stderr_is_journal():
+    """Whether stderr goes straight to the journal. systemd names the stream
+    it connected in JOURNAL_STREAM as device:inode; a shell started from a
+    systemd session inherits the variable, with its own stderr elsewhere."""
+    try:
+        dev, ino = os.environ["JOURNAL_STREAM"].split(":")
+        st = os.fstat(sys.stderr.fileno())
+        return (st.st_dev, st.st_ino) == (int(dev), int(ino))
+    except (KeyError, ValueError, OSError):
+        return False
+
+
 def setup(level=None, logfile=None, force=False):
     """Configure logging once. Safe to call from any module, in any order."""
     global _configured
@@ -69,7 +81,7 @@ def setup(level=None, logfile=None, force=False):
     # the journal records the time of every line itself
     under_systemd = bool(os.environ.get("JOURNAL_STREAM") or os.environ.get("INVOCATION_ID"))
     stream = logging.StreamHandler(sys.stderr)
-    stream.setFormatter(_JournalFormatter(not under_systemd, journal=under_systemd))
+    stream.setFormatter(_JournalFormatter(not under_systemd, journal=_stderr_is_journal()))
     logger.addHandler(stream)
 
     path = logfile or os.environ.get("GROWLIGHT_LOG_FILE")
