@@ -10,6 +10,10 @@ export let trays = {},
   trayDirty = {},
   trayTimer = null,
   trayPending = 0;
+// Each tray's cells as last drawn from, or saved to, the server. A save sends
+// them along, and the server writes only the cells this page changed: a page
+// left open does not put back what another has changed since.
+const trayBase = {};
 export function daysSince(iso) {
   if (!iso) return null;
   const d = new Date(iso + 'T00:00:00'),
@@ -149,6 +153,7 @@ export function renderTrays(j) {
     h += '</div></div></div>'; // .tgrid, .tscroll, .tray
   }
   wrap.innerHTML = h;
+  for (const id of Object.keys(trays).filter(trayInSetup)) trayBase[id] = collectTray(id);
   {
     const filled = Object.values(trays).reduce((n, t) => n + Object.keys(t.cells || {}).length, 0);
     const hint = document.getElementById('trayhint');
@@ -207,12 +212,14 @@ export async function saveTray(id) {
   const info = document.getElementById('trayinfo');
   trayPending++;
   try {
+    const cells = collectTray(id);
     const r = await request('/api/trays', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tray: id, cells: collectTray(id) })
+      body: JSON.stringify({ tray: id, cells, base: trayBase[id] })
     });
     const j = await r.json().catch(() => ({}));
+    if (r.ok && j.ok) trayBase[id] = cells;
     if (r.status === 401) {
       if (info) info.textContent = 'log in to edit the map';
       return;
@@ -468,6 +475,7 @@ export function initTrays() {
       }
       // empty it locally and on screen without waiting on the round trip
       if (trays[tr] && trays[tr].cells) delete trays[tr].cells[cid];
+      if (trayBase[tr]) delete trayBase[tr][cid];
       clearCellUI(cell);
       const wrapEl = document.getElementById('trayswrap');
       if (wrapEl) wrapEl.dataset.sig = JSON.stringify(trays);

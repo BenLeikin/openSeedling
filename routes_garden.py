@@ -209,23 +209,12 @@ def api_planting_restore():
     return jsonify(ok=True, tray=tray, cell=cell)
 
 
-@bp.route("/api/trays", methods=["POST"])
-def api_trays():
-    """Save what's planted in each cell. Body: {"tray": "1"|"2", "cells":
-    {"A1": {"seed": str, "equipment": str, "planted": "YYYY-MM-DD",
-            "sprouted": "YYYY-MM-DD", "archived": "YYYY-MM-DD"}, ...}}.
-    `sprouted` records emergence (so days-to-germinate is measurable) and
-    `archived` marks a cell transplanted out. Empty cells are dropped."""
-    data = request.get_json(silent=True) or {}
-    tray = str(data.get("tray", ""))
-    cells = data.get("cells")
-    label = data.get("label")
-    with config.settings_lock:
-        known = set(config.settings.get("trays") or {})
-    if tray not in known:
-        return jsonify(ok=False, error=f"no such tray: {tray}"), 200
-    if not isinstance(cells, dict):
-        return jsonify(ok=False, error="cells must be an object"), 200
+CELL_FIELDS = ("seed", "equipment", "planted", "sprouted", "source", "count", "notes")
+
+
+def _clean_cells(cells):
+    """The cells of a tray as they are stored, from what a page sent: unknown
+    cell names and empty cells dropped, every field trimmed to its limit."""
     clean = {}
     for cid, v in cells.items():
         if not isinstance(v, dict) or not re.fullmatch(r"[A-Z]\d{1,2}", str(cid)):
@@ -246,14 +235,13 @@ def api_trays():
             count = 0
         # which fields this cell shows; display-only, so an empty equipment
         # row can be hidden on the cells that will never have one
-        _fields = ("seed", "equipment", "planted", "sprouted", "source", "count", "notes")
         hide = [
             f
             for f in (v.get("hide") or [])
-            if f in _fields or (f.startswith("!") and f[1:] in _fields)
+            if f in CELL_FIELDS or (f.startswith("!") and f[1:] in CELL_FIELDS)
         ][:14]
         if seed or equip or planted or sprouted or archived or hide or source or notes or count:
-            clean[cid] = {
+            clean[str(cid)] = {
                 "seed": seed,
                 "equipment": equip,
                 "planted": planted,
@@ -264,9 +252,48 @@ def api_trays():
                 "notes": notes,
                 "hide": hide,
             }
+    return clean
+
+
+@bp.route("/api/trays", methods=["POST"])
+def api_trays():
+    """Save what's planted in each cell. Body: {"tray": "1"|"2", "cells":
+    {"A1": {"seed": str, "equipment": str, "planted": "YYYY-MM-DD",
+            "sprouted": "YYYY-MM-DD", "archived": "YYYY-MM-DD"}, ...},
+    "base": {...}}.
+    `sprouted` records emergence (so days-to-germinate is measurable) and
+    `archived` marks a cell transplanted out. Empty cells are dropped.
+
+    `base` is the tray as the page had it before its edits. With it, only the
+    cells the page changed are written, so a page that has been open a while
+    does not put back what another has changed since. Without it the tray
+    becomes exactly `cells`."""
+    data = request.get_json(silent=True) or {}
+    tray = str(data.get("tray", ""))
+    cells = data.get("cells")
+    base = data.get("base")
+    label = data.get("label")
+    with config.settings_lock:
+        known = set(config.settings.get("trays") or {})
+    if tray not in known:
+        return jsonify(ok=False, error=f"no such tray: {tray}"), 200
+    if not isinstance(cells, dict):
+        return jsonify(ok=False, error="cells must be an object"), 200
+    clean = _clean_cells(cells)
+    before = _clean_cells(base) if isinstance(base, dict) else None
     with config.settings_lock:
         trays = config.settings.setdefault("trays", {})
         t = trays.setdefault(tray, {"label": f"Tray {tray}", "rows": 4, "cols": 3, "cells": {}})
+        if before is not None:
+            merged = dict(t.get("cells") or {})
+            for cid in set(clean) | set(before):
+                if clean.get(cid) == before.get(cid):
+                    continue  # not this page's change
+                if cid in clean:
+                    merged[cid] = clean[cid]
+                else:
+                    merged.pop(cid, None)
+            clean = merged
         t["cells"] = clean
         if label is not None:
             t["label"] = str(label).strip()[:40] or f"Tray {tray}"

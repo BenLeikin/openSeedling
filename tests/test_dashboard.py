@@ -439,3 +439,39 @@ def test_memory_and_status():
         == {"units", "probe_cal", "trays", "little_buddy", "buddy_model"}
         and "fetch('/api/status?lite=1'" in sjs
     ), f"the touchscreen fetches a lite status ({len(lit)} bytes against {len(full)})"
+
+
+def test_a_stale_page_saves_only_the_cells_it_changed():
+    """Two pages have the same tray open. Each save carries the tray as the
+    page had it, and only the cells that page changed are written."""
+
+    def cell(seed):
+        return {"seed": seed, "equipment": "", "planted": "2026-11-01"}
+
+    with config.settings_lock:
+        tray = next(iter(config.settings["trays"]))
+    start = {"A1": cell("basil"), "B1": cell("thyme")}
+    c.post("/api/trays", json={"tray": tray, "cells": start})
+
+    # the first page changes A1, the second (still showing the start) changes B1
+    c.post("/api/trays", json={"tray": tray, "base": start, "cells": {**start, "A1": cell("dill")}})
+    c.post("/api/trays", json={"tray": tray, "base": start, "cells": {**start, "B1": cell("sage")}})
+    with config.settings_lock:
+        cells = dict(config.settings["trays"][tray]["cells"])
+    assert (cells["A1"]["seed"], cells["B1"]["seed"]) == ("dill", "sage"), (
+        f"the second page's save does not put the first page's cell back ({cells})"
+    )
+
+    # emptying a cell is a change like any other, and so is filling a new one
+    r = c.post(
+        "/api/trays",
+        json={"tray": tray, "base": start, "cells": {"A1": start["A1"], "C1": cell("mint")}},
+    ).get_json()
+    with config.settings_lock:
+        cells = dict(config.settings["trays"][tray]["cells"])
+    assert r["ok"] and set(cells) == {"A1", "C1"} and cells["A1"]["seed"] == "dill", cells
+
+    # without a base the tray becomes exactly what was sent
+    c.post("/api/trays", json={"tray": tray, "cells": {"A2": cell("chive")}})
+    with config.settings_lock:
+        assert set(config.settings["trays"][tray]["cells"]) == {"A2"}
