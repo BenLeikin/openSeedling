@@ -7,7 +7,7 @@ import os
 import shutil
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from applog import log
 import db
@@ -203,11 +203,12 @@ def frame_etag(photo_path, cfg):
 
 
 def photo_inventory():
+    """(how many photos, the newest one's path, when it was taken, in UTC)."""
     # leading underscore marks render scratch, which is not a captured photo
     photos = sorted(p for p in TIMELAPSE_DIR.glob("*.jpg") if not p.name.startswith("_"))
     for latest in reversed(photos):
         try:
-            return len(photos), latest, datetime.fromtimestamp(latest.stat().st_mtime)
+            return len(photos), latest, datetime.fromtimestamp(latest.stat().st_mtime, timezone.utc)
         except FileNotFoundError:
             continue  # removed since the listing (a reset, or pruning for space)
     return 0, None, None

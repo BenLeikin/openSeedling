@@ -1295,3 +1295,12 @@ def test_thumbnail_rebuild_keeps_up_with_what_changes(monkeypatch):
     assert set(kinds.values()) == {"raw"}, (
         f"the second request is not dropped: every thumbnail matches the newest settings ({kinds})"
     )
+
+
+def test_photo_and_video_times_carry_their_time_zone():
+    (photos_mod.TIMELAPSE_DIR / "20260920_120000.jpg").write_bytes(b"photo")
+    j = c.get("/api/status").get_json()
+    stamp = j["latest_photo_time"]
+    assert stamp and re.search(r"[+-]\d\d:\d\d$", stamp), (
+        f"a browser in another time zone can still tell how old the photo is ({stamp})"
+    )

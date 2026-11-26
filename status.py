@@ -324,7 +324,7 @@ def status_payload(authed=None):
         freq=hardware.PWM_FREQ,
         loop=control.LOOP_SECONDS,
         photo_count=count,
-        latest_photo_time=latest_time.isoformat() if latest_time else None,
+        latest_photo_time=latest_time.astimezone(tz).isoformat() if latest_time else None,
         thumbs_version=db.kv_get("thumbs_version") or 0,
         report={"ts": _report_mtime(), "generating": monitor.report_state["generating"]},
         camera={
@@ -364,7 +364,7 @@ def status_payload(authed=None):
         render=dict(video_mod.render),
         video_fps=db.kv_get("video_fps_rendered"),
         video_time=(
-            datetime.fromtimestamp(video_mod.VIDEO_PATH.stat().st_mtime).isoformat()
+            datetime.fromtimestamp(video_mod.VIDEO_PATH.stat().st_mtime, tz).isoformat()
             if video_mod.VIDEO_PATH.exists()
             else None
         ),
