@@ -541,7 +541,7 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         demo = {
             "date": "today",
-            "location": "Thousand Oaks, CA",
+            "location": "Los Angeles, CA",
             "canopy": {"Tray 1": 12.5, "Tray 2": 9.1},
             "float": "not full",
             "notes": "peat/vermiculite/perlite; mixed germination",

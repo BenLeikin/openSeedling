@@ -5,7 +5,7 @@ editable from the dashboard Settings panel; the rest are edited in the file.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `latitude` / `longitude` / `timezone` | Thousand Oaks, CA | Location for sun times |
+| `latitude` / `longitude` / `timezone` | Downtown Los Angeles | Location for sun times |
 | `max_bright` | 100 | Peak brightness (%) |
 | `ramp_min` | 30 | Fade-in/out length (minutes) |
 | `sunrise_offset_min` / `sunset_offset_min` | 0 | Shift the on/off times (solar mode) |

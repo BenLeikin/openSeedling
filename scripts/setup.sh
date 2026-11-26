@@ -632,7 +632,7 @@ open(path, "w").write(json.dumps(cfg, indent=2))
 PY
   echo "    saved to config.json"
   if [[ -z "$lat" ]]; then
-    note "no coordinates given; the defaults are Thousand Oaks, CA until you set Location in Settings"
+    note "no coordinates given; the defaults are downtown Los Angeles until you set Location in Settings"
   fi
 }
 

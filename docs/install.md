@@ -71,7 +71,7 @@ when something has drifted. Any box-level change goes into `deploy/` or
 After the reboot:
 
 1. Open `http://<pi>:5000`. If you skipped the location prompt, set Location in
-   Settings first: the defaults are the author's (Thousand Oaks, CA), and sun
+   Settings first: the defaults are downtown Los Angeles, and sun
    times, the schedule and the DLI day all follow them.
 2. Pick the light backend in Settings, Light, and run Calibrate on the light
    response card if the fixture dims.
