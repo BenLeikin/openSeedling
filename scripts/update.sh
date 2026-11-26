@@ -14,8 +14,9 @@
 #   4. run scripts/setup.sh --defaults if deploy/ or the requirements changed
 #   5. restart growlight and wait for it to answer with no tracebacks
 #   6. if ~/growlight is a git checkout, commit the result there
-# If 3 or 5 fails, every file goes back to how it was and the old version is
-# restarted. Changes setup.sh made to the box (packages, boot config) stay.
+# If 3 or 5 fails, or the update is interrupted between them, every file goes
+# back to how it was and the old version is restarted. Changes setup.sh made
+# to the box (packages, boot config) stay.
 #
 # Options:
 #   --dir PATH   app directory (default ~/growlight)
@@ -85,6 +86,10 @@ rollback() {
 
 cleanup() { [[ -n "$STAGE" ]] && rm -rf "$STAGE"; return 0; }
 trap cleanup EXIT
+
+# From the first file copied until the new version is seen running, a step
+# that fails or a Ctrl-C puts the previous files back.
+abort() { trap - ERR INT TERM; rollback "$1"; }
 
 # ---- arguments ------------------------------------------------------------
 while [[ $# -gt 0 ]]; do
@@ -186,6 +191,8 @@ ls -1d "$HOME"/growlight-backups/*/ 2>/dev/null | sort | head -n -"$KEEP_BACKUPS
 # ---- 3. install and compile -----------------------------------------------
 step "Installing"
 APPLIED=1
+trap 'abort "stopped at line $LINENO"' ERR
+trap 'abort "interrupted"' INT TERM
 for f in "${CHANGED[@]}" "${ADDED[@]}"; do
   mkdir -p "$(dirname "$APP/$f")"
   cp -- "$SRC/$f" "$APP/$f"
@@ -251,6 +258,7 @@ if [[ -n "$tb" ]]; then
   rollback "the new version is logging tracebacks"
 fi
 ok "running and answering on port $PORT"
+trap - ERR INT TERM
 
 # ---- 6. record it in git --------------------------------------------------
 commit_msg() {   # "openSeedling 39: Formatting and project hygiene", from pyproject + CHANGELOG
