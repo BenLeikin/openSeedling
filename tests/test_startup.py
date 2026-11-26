@@ -125,3 +125,26 @@ def test_patched_names_live_in_one_module():
     assert len(patched) >= 10 and not copies and not unowned, (
         f"every name the tests patch ({len(patched)}) lives in one module only {copies + unowned}"
     )
+
+
+def test_journal_lines_carry_their_level():
+    """Under systemd every line starts with its syslog priority, tracebacks
+    included, so `journalctl -p warning` filters; elsewhere the text is plain."""
+    import logging
+
+    import applog
+
+    def record(level, exc_info=None):
+        return logging.LogRecord("growlight", level, __file__, 1, "plug gone", None, exc_info)
+
+    journal = applog._JournalFormatter(False, journal=True)
+    assert journal.format(record(logging.WARNING)).startswith("<4>WARNING")
+    assert journal.format(record(logging.INFO)).startswith("<6>INFO")
+    try:
+        raise OSError("no route")
+    except OSError:
+        import sys
+
+        lines = journal.format(record(logging.ERROR, sys.exc_info())).split("\n")
+    assert len(lines) > 2 and all(line.startswith("<3>") for line in lines)
+    assert applog._JournalFormatter(False).format(record(logging.ERROR)).startswith("ERROR")

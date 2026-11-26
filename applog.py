@@ -7,9 +7,10 @@ A warning means something is wrong but the controller carried on; an error
 means an operation failed and did not happen.
 
 Lines go to stderr as plain text that starts with the level name. Under systemd
-the journal captures them, all at one journal priority, so filter on the level
-name in the text. GROWLIGHT_LOG_LEVEL sets the level (default info);
-GROWLIGHT_LOG_FILE also writes a rotating file, for running outside systemd.
+each line also carries the journal's priority prefix, so `journalctl -u
+growlight -p warning` shows warnings and errors only. GROWLIGHT_LOG_LEVEL sets
+the level (default info); GROWLIGHT_LOG_FILE also writes a rotating file, for
+running outside systemd.
 """
 
 import logging
@@ -21,16 +22,36 @@ LOG_NAME = "growlight"
 _configured = False
 
 
-class _JournalFormatter(logging.Formatter):
-    """Level, logger name and message, with a leading timestamp if with_time is set."""
+# syslog priorities, as systemd reads them from a "<N>" at the start of a line
+_PRIORITY = {
+    logging.CRITICAL: 2,
+    logging.ERROR: 3,
+    logging.WARNING: 4,
+    logging.INFO: 6,
+    logging.DEBUG: 7,
+}
 
-    def __init__(self, with_time):
+
+class _JournalFormatter(logging.Formatter):
+    """Level, logger name and message, with a leading timestamp if with_time
+    is set. With `journal`, every line starts with its priority prefix: the
+    journal takes a traceback line by line, and each needs its own."""
+
+    def __init__(self, with_time, journal=False):
         fmt = (
             "%(asctime)s %(levelname)-8s %(name)s: %(message)s"
             if with_time
             else "%(levelname)-8s %(name)s: %(message)s"
         )
         super().__init__(fmt, datefmt="%Y-%m-%d %H:%M:%S")
+        self.journal = journal
+
+    def format(self, record):
+        text = super().format(record)
+        if not self.journal:
+            return text
+        prefix = f"<{_PRIORITY.get(record.levelno, 6)}>"
+        return "\n".join(prefix + line for line in text.split("\n"))
 
 
 def setup(level=None, logfile=None, force=False):
@@ -48,7 +69,7 @@ def setup(level=None, logfile=None, force=False):
     # the journal records the time of every line itself
     under_systemd = bool(os.environ.get("JOURNAL_STREAM") or os.environ.get("INVOCATION_ID"))
     stream = logging.StreamHandler(sys.stderr)
-    stream.setFormatter(_JournalFormatter(not under_systemd))
+    stream.setFormatter(_JournalFormatter(not under_systemd, journal=under_systemd))
     logger.addHandler(stream)
 
     path = logfile or os.environ.get("GROWLIGHT_LOG_FILE")
@@ -63,15 +84,6 @@ def setup(level=None, logfile=None, force=False):
 
     _configured = True
     return logger
-
-
-def get(module=None):
-    """A logger for one module: applog.get(__name__) -> growlight.sensors."""
-    setup()
-    if not module:
-        return logging.getLogger(LOG_NAME)
-    short = module.rsplit(".", 1)[-1]
-    return logging.getLogger(f"{LOG_NAME}.{short}")
 
 
 log = setup()
