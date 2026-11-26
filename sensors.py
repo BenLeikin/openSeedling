@@ -607,12 +607,10 @@ def _read_soil_temps():
 
 # --- public ---
 
-# Everything except the 1-Wire soil probes, which need a 750 ms conversion
-# each and change too slowly to be worth that every few seconds.
-FAST_READS = (read_probes, read_floats, read_reservoirs, _read_air, _read_lux)
-ALL_READS = FAST_READS + (_read_soil_temps,)
-# What the dashboard's live refresh shows. Separate from FAST_READS so the
-# every-few-seconds loop does not run 16 ADS1115 conversions it discards.
+ALL_READS = (read_probes, read_floats, read_reservoirs, _read_air, _read_lux, _read_soil_temps)
+# What the dashboard's live refresh shows: the quick ones worth pushing every
+# few seconds. Not the probes (16 ADS1115 conversions) nor the 1-Wire soil
+# probes (a 750 ms conversion each).
 LIVE_READS = (_read_air, _read_lux)
 
 
@@ -630,11 +628,6 @@ def _read_set(fns):
 def read_all():
     """Every wired sensor. Failures and unwired types are absent."""
     return _read_set(ALL_READS)
-
-
-def read_fast():
-    """The quick sensors only (everything but 1-Wire)."""
-    return _read_set(FAST_READS)
 
 
 def read_live():

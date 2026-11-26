@@ -716,23 +716,6 @@ def apply_floor(percent, cfg=None):
     return floor + percent * (100.0 - floor) / 100.0
 
 
-def pwm_duty_for(percent, cfg=None):
-    """Convert a brightness percent into the duty cycle the wiring needs.
-
-    A MOSFET driving a 5V panel takes duty straight through: more duty, more
-    light. An optocoupler on an AC driver's 0-10V dim input works the other
-    way round. The driver supplies its own ~10.8V and the optocoupler sinks
-    it, so the light is at full when the optocoupler is off and dark when it
-    conducts hardest: 0% duty is full brightness, 100% duty is dark.
-    """
-    if cfg is None:
-        with config.settings_lock:
-            cfg = dict(config.settings)
-    if light_backend(cfg) != "dim":
-        return percent
-    return 100.0 - percent
-
-
 def _clock(day, tz, hhmm, fallback="06:00"):
     """'HH:MM' on `day` as an aware datetime."""
     try:
@@ -873,10 +856,6 @@ def lightning_available(cfg=None):
         with config.settings_lock:
             cfg = dict(config.settings)
     return light_backend(cfg) == "dim"
-
-
-def _flash_prep():
-    _dither_stop()
 
 
 def _flash(level_pct):
