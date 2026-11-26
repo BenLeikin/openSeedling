@@ -36,7 +36,18 @@ try:
         GPIO_PIN2 = int(_p2)
 except ValueError:
     GPIO_PIN2 = None
+DIM_PIN_SET = bool(GPIO_PIN2 and GPIO_PIN2 != GPIO_PIN)
 PWM_FREQ = 1000
+
+
+def main_pin_is_dim(cfg):
+    """Whether the main pin carries the dim-line fixture, where dark is duty
+    100: the dim wiring is selected and has no pin of its own. With a dim pin
+    configured, the main pin is always the MOSFET panel."""
+    backend = cfg.get("light_backend")
+    dim = backend == "dim" or (backend != "kasa" and bool(cfg.get("light_invert")))
+    return dim and not DIM_PIN_SET
+
 
 # Fan and pumps go through gpiozero. A pin that cannot be claimed (off the Pi,
 # or unwired) disables that actuator and the controller carries on.
@@ -111,13 +122,8 @@ pump_lock = threading.Lock()  # also serializes the two pumps: one at a time
 
 try:
     pwm = HardwarePWM(pwm_channel=(1 if GPIO_PIN == 19 else 0), hz=PWM_FREQ, chip=0)
-    # Start dark. On inverted wiring that is duty 100: duty 0 there is full
-    # brightness, and the control loop's first pass has not run yet.
-    pwm.start(
-        100.0
-        if (config.settings.get("light_backend") == "dim" or config.settings.get("light_invert"))
-        else 0.0
-    )
+    # Start dark: the control loop's first pass has not run yet.
+    pwm.start(100.0 if main_pin_is_dim(config.settings) else 0.0)
 except Exception as e:
     sys.exit(
         f"Hardware PWM unavailable ({e}). Check that "

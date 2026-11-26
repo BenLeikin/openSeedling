@@ -398,3 +398,41 @@ def test_lux_range():
         "a calibration the sensor capped is flagged on the dashboard (left in use, since "
         "dropping it would take the light straight to full power)"
     )
+
+
+class _Channel:
+    """A PWM channel that remembers the last duty written to it."""
+
+    def __init__(self):
+        self.duty = None
+
+    def change_duty_cycle(self, d):
+        self.duty = d
+
+
+def test_two_channel_rig_keeps_the_panel_dark(monkeypatch):
+    """With a dim pin of its own, the main pin is the MOSFET panel whatever
+    backend is selected: dark there is duty 0, never 100."""
+    lm, hw = light_mod, light_mod.hardware
+    dim_cfg = {"light_backend": "dim"}
+    assert hw.main_pin_is_dim(dim_cfg), "one channel: the dim fixture is on the main pin"
+    assert not hw.main_pin_is_dim({"light_backend": "pwm"})
+
+    panel, dimline = _Channel(), _Channel()
+    monkeypatch.setattr(hw, "DIM_PIN_SET", True)
+    monkeypatch.setattr(hw, "pwm", panel)
+    monkeypatch.setattr(hw, "pwm2", dimline)
+    assert not hw.main_pin_is_dim(dim_cfg), "two channels: the panel starts at duty 0"
+
+    with config.settings_lock:
+        config.settings.update(light_backend="dim", light2_on=False)
+    lm.set_brightness_raw(40)
+    assert (panel.duty, dimline.duty) == (0.0, 60.0), "the dim fixture is driven on its own pin"
+
+    panel.duty = dimline.duty = None
+    lm.release_backend("dim")
+    assert (panel.duty, dimline.duty) == (None, 100.0), (
+        "switching away from the dim line darkens the dim pin and leaves the panel alone"
+    )
+    lm.release_backend("pwm")
+    assert panel.duty == 0.0

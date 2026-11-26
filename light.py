@@ -201,11 +201,12 @@ def release_backend(old):
                 plug_is_light = config.settings.get("plug_use", "light") == "light"
             if plug_is_light:
                 kasa_apply(False)
-        else:
-            # The dark duty is the old backend's. Settings already hold the
-            # new one when this runs, so pwm_duty_for would answer for the
-            # wrong wiring.
-            hardware.pwm.change_duty_cycle(100.0 if old == "dim" else 0.0)
+        elif old == "dim" and hardware.pwm2 is not None:
+            hardware.pwm2.change_duty_cycle(100.0)
+        elif old == "dim" and not hardware.DIM_PIN_SET:
+            hardware.pwm.change_duty_cycle(100.0)  # the dim fixture is on the main pin
+        elif old == "pwm":
+            hardware.pwm.change_duty_cycle(0.0)
         log.info(f"light backend released: {old} set to off")
     except Exception as e:
         log.error(f"could not release the {old} light backend: {e}")
@@ -351,8 +352,7 @@ def set_brightness_raw(percent):
     if hardware.SHUTTING_DOWN.is_set():
         l2_level = 0.0
 
-    if mode == "dim" and hardware.pwm2 is None:
-        # Only one channel configured: the dim fixture is on the main pin.
+    if hardware.main_pin_is_dim(cfg):
         hardware.pwm.change_duty_cycle(100.0 - percent)
     else:
         panel = percent if mode == "pwm" else (l2_level if l2 == "pwm" else 0.0)
@@ -1037,7 +1037,8 @@ def _park_channels():
     at its dark duty: released, it floats high and the fixture goes to full.
     The main pin carries the dim fixture when no separate dim pin is set.
     """
-    main_is_dim = hardware.pwm2 is None and light_backend() == "dim"
+    with config.settings_lock:
+        main_is_dim = hardware.main_pin_is_dim(config.settings)
     _stop_pwm(hardware.pwm, "dim" if main_is_dim else "pwm")
     if hardware.pwm2 is not None:
         _stop_pwm(hardware.pwm2, "dim")
