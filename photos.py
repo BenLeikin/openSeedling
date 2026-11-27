@@ -43,21 +43,27 @@ def crop_filter(roi):
     return f"crop=trunc(iw*{w:.4f}/2)*2:trunc(ih*{h:.4f}/2)*2:trunc(iw*{x:.4f}):trunc(ih*{y:.4f})"
 
 
-_names = {"stamp": None, "names": []}
+_names = {"stamp": None, "names": [], "settled": False, "rev": 0}
+# A folder's modification time moves in clock ticks (a few milliseconds, two
+# seconds on FAT), so a listing made in the same tick as a change can miss the
+# next one. A listing is kept only once the folder has been still this long.
+SETTLE_NS = 3_000_000_000
 
 
 def thumb_names():
-    """(file names of the thumbnails in order, a stamp that changes with them).
+    """(file names of the thumbnails in order, a tag that changes with them).
 
     The folder is listed again only when it has changed: its modification
     time moves whenever an entry is added, removed or renamed. A long run has
     thousands of thumbnails, and the dashboard asks for the list on every
     page load."""
     stamp = THUMB_DIR.stat().st_mtime_ns  # read first: a change during the listing shows next time
-    if _names["stamp"] != stamp:
+    if _names["stamp"] != stamp or not _names["settled"]:
         names = sorted(p.name for p in THUMB_DIR.glob("*.jpg"))
-        _names.update(stamp=stamp, names=names)
-    return _names["names"], stamp
+        if names != _names["names"]:
+            _names["rev"] += 1
+        _names.update(stamp=stamp, names=names, settled=time.time_ns() - stamp > SETTLE_NS)
+    return _names["names"], f"{stamp:x}.{_names['rev']}"
 
 
 _thumb_lock = threading.Lock()

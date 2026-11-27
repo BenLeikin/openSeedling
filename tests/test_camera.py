@@ -1133,10 +1133,12 @@ def test_capture_scratch():
         (photos_mod.THUMB_DIR / out.name).unlink(missing_ok=True)
 
 
-def test_the_photo_list_is_read_again_only_when_the_folder_changes():
+def test_the_photo_list_is_read_again_only_when_the_folder_changes(monkeypatch):
     thumbs = photos_mod.THUMB_DIR
     for name in ("20260101_120000.jpg", "20260101_120500.jpg"):
         (thumbs / name).write_bytes(b"x")
+    # as when the folder has been still for a while: its listing is kept
+    monkeypatch.setattr(photos_mod, "SETTLE_NS", -1)
     first = c.get("/api/photos")
     assert first.get_json()["names"] == ["20260101_120000.jpg", "20260101_120500.jpg"]
 
@@ -1163,6 +1165,19 @@ def test_the_photo_list_is_read_again_only_when_the_folder_changes():
         assert "20260101_120000.jpg" not in c.get("/api/photos").get_json()["names"]
     finally:
         type(thumbs).glob = real_glob
+
+    # A change in the same clock tick as a listing leaves the folder's time as
+    # it was. A folder that changed moments ago is therefore listed again.
+    monkeypatch.setattr(photos_mod, "SETTLE_NS", 3_000_000_000)
+    (thumbs / "20260101_121500.jpg").write_bytes(b"x")
+    before = c.get("/api/photos")
+    tick = thumbs.stat()
+    (thumbs / "20260101_122000.jpg").write_bytes(b"x")
+    os.utime(thumbs, ns=(tick.st_atime_ns, tick.st_mtime_ns))  # as if in the same tick
+    after = c.get("/api/photos", headers={"If-None-Match": before.headers["ETag"]})
+    assert after.status_code == 200 and "20260101_122000.jpg" in after.get_json()["names"], (
+        "a thumbnail added in the same clock tick as the last listing is not missed"
+    )
 
 
 def test_a_photo_that_cannot_be_rotated_is_not_kept(monkeypatch):

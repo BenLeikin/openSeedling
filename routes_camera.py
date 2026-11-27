@@ -48,10 +48,10 @@ def photo_list():
         v = db.kv_get("thumbs_version") or 0
     except Exception:
         v = 0
-    names, stamp = photos_mod.thumb_names()
+    names, tag = photos_mod.thumb_names()
     resp = jsonify(names=names, v=v)
     # the list runs to hundreds of kB: a browser that has it is told so (304)
-    resp.set_etag(f"{stamp:x}-{v}")
+    resp.set_etag(f"{tag}-{v}")
     resp.headers["Cache-Control"] = "no-cache"
     return resp.make_conditional(request)
 

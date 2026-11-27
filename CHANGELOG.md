@@ -22,7 +22,7 @@ the 4-17 baseline. The installer commits each one with the heading below.
 - A change the controller refuses (the fan, the heat mat, a pump run, the report settings) is said in a notice on the page; several of these failed silently, or showed an error that the next redraw wiped.
 - Right after the light's mode was changed, a status could still report the old mode until the control loop's next pass, and the buttons flicked back. The status reports the mode that was asked for.
 - The dashboard fetches the photo list and the AI report when a status says they changed, not on every status. Picking a chart range twice quickly no longer shows the wrong range's data.
-- The photo list (`/api/photos`) is listed from disk only when the thumbnail folder changes, and a browser that already has it gets a 304. A run of 7,500 photos used to be listed, sorted and sent in full on every page load.
+- The photo list (`/api/photos`) is listed from disk only when the thumbnail folder changes, and a browser that already has it gets a 304. A run of 7,500 photos used to be listed, sorted and sent in full on every page load. A folder that changed moments ago is listed again, so a thumbnail added in the same clock tick as the last listing is not missed.
 - `update.sh` and `deploy.sh` find tracebacks in a long log and check the port set in `.env`.
 - A pump run is put on record before the pump starts, so a restart part way through still counts it against the daily limit and the cooldown.
 - Failed fills are kept per tray: a good fill on one tray no longer clears another tray's alert.
