@@ -527,6 +527,7 @@ def _run_kiosk(tmp_path, *args):
     return r.stdout + r.stderr, calls
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="kiosk.sh refuses to run as root")
 def test_kiosk_remove_undoes_only_what_install_added(tmp_path):
     """Removing the kiosk takes the user out of the groups install put them
     in, and deletes the PAM file install wrote; nothing it found in place."""
